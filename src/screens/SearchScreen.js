@@ -13,6 +13,7 @@ import {
   Platform,
   Keyboard,
   TouchableWithoutFeedback,
+  RefreshControl,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -20,9 +21,7 @@ import { Search as SearchIcon, Plus, X, Flame, LineChart } from 'lucide-react-na
 import { supabase } from '../lib/supabase';
 import {
   searchAssets,
-  HOT_ASSETS,
-  fetchTWStockPrice,
-  fetchUSStockPrice,
+  fetchTrendingAssets,
 } from '../services/api';
 import { useTheme } from '../lib/ThemeContext';
 
@@ -42,10 +41,6 @@ const CATEGORIES = [
 ];
 
 const MARKET_TYPE_LABELS = { TW: '台股', US: '美股', Crypto: '虛幣' };
-
-const CRYPTO_ID_MAP = {
-  BTC: 'bitcoin', ETH: 'ethereum', SOL: 'solana', BNB: 'binancecoin',
-};
 
 const getTVSymbol = (asset) => {
   if (asset.market_type === 'TW') return `TWSE:${asset.symbol}`;
@@ -69,9 +64,11 @@ export default function SearchScreen() {
   const [shares, setShares] = useState('');
   const [price, setPrice] = useState('');
   const [adding, setAdding] = useState(false);
+  const [hotAssetList, setHotAssetList] = useState([]);
   const [hotPrices, setHotPrices] = useState({});
   const [hotUpdatedAt, setHotUpdatedAt] = useState(null);
-  const [sortBy, setSortBy] = useState('change');
+  const [hotLoading, setHotLoading] = useState(true);
+  const [sortBy, setSortBy] = useState('change_desc');
   const [chartVisible, setChartVisible] = useState(false);
   const [chartAsset, setChartAsset] = useState(null);
   const debounceRef = useRef(null);
@@ -82,57 +79,17 @@ export default function SearchScreen() {
   }, []);
 
   const loadHotPrices = async () => {
-    const prices = {};
-
-    // TW stocks via FinMind
-    const twAssets = HOT_ASSETS.filter(a => a.market_type === 'TW');
-    const twResults = await Promise.allSettled(
-      twAssets.map(async (asset) => {
-        const data = await fetchTWStockPrice(asset.symbol);
-        return { symbol: asset.symbol, data };
-      })
-    );
-    twResults.forEach(r => {
-      if (r.status === 'fulfilled' && r.value.data) prices[r.value.symbol] = r.value.data;
-    });
-
-    // US stocks via Yahoo Finance
-    const usAssets = HOT_ASSETS.filter(a => a.market_type === 'US');
-    const usResults = await Promise.allSettled(
-      usAssets.map(async (asset) => {
-        const data = await fetchUSStockPrice(asset.symbol);
-        return { symbol: asset.symbol, data };
-      })
-    );
-    usResults.forEach(r => {
-      if (r.status === 'fulfilled' && r.value.data) prices[r.value.symbol] = r.value.data;
-    });
-
-    // Crypto via CoinGecko batch
+    setHotLoading(true);
     try {
-      const cryptoAssets = HOT_ASSETS.filter(a => a.market_type === 'Crypto');
-      const coinIds = cryptoAssets.map(a => CRYPTO_ID_MAP[a.symbol] || a.symbol.toLowerCase()).join(',');
-      const resp = await fetch(
-        `https://api.coingecko.com/api/v3/simple/price?ids=${coinIds}&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true`
-      );
-      const cryptoData = await resp.json();
-      cryptoAssets.forEach(asset => {
-        const coinId = CRYPTO_ID_MAP[asset.symbol] || asset.symbol.toLowerCase();
-        if (cryptoData[coinId]) {
-          prices[asset.symbol] = {
-            price: cryptoData[coinId].usd,
-            change_percent: cryptoData[coinId].usd_24h_change || 0,
-            volume: cryptoData[coinId].usd_24h_vol || 0,
-            market_type: 'Crypto',
-          };
-        }
-      });
+      const { assets, prices } = await fetchTrendingAssets();
+      setHotAssetList(assets);
+      setHotPrices(prices);
+      setHotUpdatedAt(new Date());
     } catch (e) {
-      console.warn('Crypto batch fetch failed:', e.message);
+      console.warn('loadHotPrices error:', e.message);
+    } finally {
+      setHotLoading(false);
     }
-
-    setHotPrices(prices);
-    setHotUpdatedAt(new Date());
   };
 
   // Debounced search
@@ -157,8 +114,8 @@ export default function SearchScreen() {
 
   const hotAssets = useMemo(() => {
     const base = activeTab === 'all'
-      ? HOT_ASSETS
-      : HOT_ASSETS.filter(a => a.market_type === activeTab);
+      ? hotAssetList
+      : hotAssetList.filter(a => a.market_type === activeTab);
     if (Object.keys(hotPrices).length === 0) return base;
     return [...base].sort((a, b) => {
       const pa = hotPrices[a.symbol];
@@ -166,8 +123,10 @@ export default function SearchScreen() {
       if (!pa && !pb) return 0;
       if (!pa) return 1;
       if (!pb) return -1;
-      if (sortBy === 'volume') return (pb.volume || 0) - (pa.volume || 0);
-      return (pb.change_percent || 0) - (pa.change_percent || 0);
+      if (sortBy === 'volume')      return (pb.volume || 0) - (pa.volume || 0);
+      if (sortBy === 'market_cap')  return (pb.market_cap || 0) - (pa.market_cap || 0);
+      if (sortBy === 'change_asc')  return (pa.change_percent || 0) - (pb.change_percent || 0);
+      return (pb.change_percent || 0) - (pa.change_percent || 0); // change_desc
     });
   }, [activeTab, hotPrices, sortBy]);
 
@@ -254,11 +213,25 @@ export default function SearchScreen() {
     return p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
+  const formatMarketCap = (cap) => {
+    if (!cap) return null;
+    if (cap >= 1e12) return `${(cap / 1e12).toFixed(2)}T`;
+    if (cap >= 1e9)  return `${(cap / 1e9).toFixed(2)}B`;
+    if (cap >= 1e6)  return `${(cap / 1e6).toFixed(2)}M`;
+    return cap.toLocaleString();
+  };
+
   const renderAssetCard = (asset, keyPrefix, index) => {
     const priceData = hotPrices[asset.symbol];
     const changePct = priceData?.change_percent;
     const isUp = changePct != null && changePct >= 0;
     const priceStr = formatPrice(asset, priceData);
+    const mcap = priceData?.market_cap ? formatMarketCap(priceData.market_cap) : null;
+    const high24 = priceData?.high_24h;
+    const low24  = priceData?.low_24h;
+    const amplitude = (high24 && low24 && low24 > 0)
+      ? `${(((high24 - low24) / low24) * 100).toFixed(1)}%`
+      : null;
 
     return (
       <TouchableOpacity
@@ -268,9 +241,13 @@ export default function SearchScreen() {
       >
         <View style={styles.resultInfo}>
           <Text style={[styles.resultName, { color: colors.text }]}>{asset.name}</Text>
-          <Text style={[styles.resultSymbol, { color: colors.textMuted }]}>
-            {asset.symbol} · {MARKET_TYPE_LABELS[asset.market_type] ?? asset.market_type}
-          </Text>
+          <View style={styles.metaRow}>
+            <Text style={[styles.resultSymbol, { color: colors.textMuted }]}>
+              {asset.symbol} · {MARKET_TYPE_LABELS[asset.market_type] ?? asset.market_type}
+            </Text>
+            {mcap && <Text style={[styles.mcapText, { color: colors.textMuted }]}>市值 {mcap}</Text>}
+            {amplitude && <Text style={[styles.amplitudeText, { color: colors.textMuted }]}>振幅 {amplitude}</Text>}
+          </View>
         </View>
         <View style={styles.resultRight}>
           <View style={styles.priceBlock}>
@@ -343,6 +320,15 @@ export default function SearchScreen() {
         style={styles.resultsContainer}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
+        refreshControl={
+          query.length === 0 ? (
+            <RefreshControl
+              refreshing={hotLoading}
+              onRefresh={loadHotPrices}
+              tintColor="#f59e0b"
+            />
+          ) : undefined
+        }
       >
         {loading ? (
           <View style={styles.loadingContainer}>
@@ -366,20 +352,34 @@ export default function SearchScreen() {
               </View>
               <View style={styles.sortBtns}>
                 <TouchableOpacity
-                  style={[styles.sortBtn, sortBy === 'change' && styles.sortBtnActive]}
-                  onPress={() => setSortBy('change')}
+                  style={[styles.sortBtn, (sortBy === 'change_desc' || sortBy === 'change_asc') && styles.sortBtnActive]}
+                  onPress={() => setSortBy(sortBy === 'change_desc' ? 'change_asc' : 'change_desc')}
                 >
-                  <Text style={[styles.sortBtnText, sortBy === 'change' && styles.sortBtnTextActive]}>漲跌幅</Text>
+                  <Text style={[styles.sortBtnText, (sortBy === 'change_desc' || sortBy === 'change_asc') && styles.sortBtnTextActive]}>
+                    {'漲跌幅 ' + (sortBy === 'change_asc' ? '↑' : '↓')}
+                  </Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.sortBtn, sortBy === 'volume' && styles.sortBtnActive]}
-                  onPress={() => setSortBy('volume')}
-                >
-                  <Text style={[styles.sortBtnText, sortBy === 'volume' && styles.sortBtnTextActive]}>交易量</Text>
-                </TouchableOpacity>
+                {[
+                  { key: 'volume',     label: '交易量' },
+                  { key: 'market_cap', label: '市值' },
+                ].map(opt => (
+                  <TouchableOpacity
+                    key={opt.key}
+                    style={[styles.sortBtn, sortBy === opt.key && styles.sortBtnActive]}
+                    onPress={() => setSortBy(opt.key)}
+                  >
+                    <Text style={[styles.sortBtnText, sortBy === opt.key && styles.sortBtnTextActive]}>{opt.label}</Text>
+                  </TouchableOpacity>
+                ))}
               </View>
             </View>
-            {hotAssets.map((asset, i) => renderAssetCard(asset, 'hot', i))}
+            {hotLoading ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="#f59e0b" />
+              </View>
+            ) : (
+              hotAssets.map((asset, i) => renderAssetCard(asset, 'hot', i))
+            )}
           </>
         )}
       </ScrollView>
@@ -527,7 +527,10 @@ const styles = StyleSheet.create({
   },
   resultInfo: { flex: 1 },
   resultName: { fontSize: 15, fontWeight: '600', marginBottom: 2 },
+  metaRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, alignItems: 'center' },
   resultSymbol: { fontSize: 12 },
+  mcapText: { fontSize: 11 },
+  amplitudeText: { fontSize: 11 },
   resultRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   priceBlock: { alignItems: 'flex-end' },
   priceText: { fontSize: 14, fontWeight: '600', marginBottom: 1 },

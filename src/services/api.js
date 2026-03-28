@@ -302,24 +302,177 @@ const searchCrypto = async (query) => {
 };
 
 // 熱門標的
-export const HOT_ASSETS = [
-  { symbol: '2330', name: '台積電', market_type: 'TW' },
-  { symbol: '2454', name: '聯發科', market_type: 'TW' },
-  { symbol: '2317', name: '鴻海', market_type: 'TW' },
-  { symbol: '2308', name: '台達電', market_type: 'TW' },
-  { symbol: '2382', name: '廣達', market_type: 'TW' },
-  { symbol: '2881', name: '富邦金', market_type: 'TW' },
-  { symbol: 'NVDA', name: 'NVIDIA Corporation', market_type: 'US' },
-  { symbol: 'AAPL', name: 'Apple Inc.', market_type: 'US' },
-  { symbol: 'MSFT', name: 'Microsoft Corporation', market_type: 'US' },
-  { symbol: 'TSLA', name: 'Tesla Inc.', market_type: 'US' },
-  { symbol: 'META', name: 'Meta Platforms Inc.', market_type: 'US' },
-  { symbol: 'TSM',  name: 'Taiwan Semiconductor (ADR)', market_type: 'US' },
-  { symbol: 'BTC',  name: 'Bitcoin', market_type: 'Crypto' },
-  { symbol: 'ETH',  name: 'Ethereum', market_type: 'Crypto' },
-  { symbol: 'SOL',  name: 'Solana', market_type: 'Crypto' },
-  { symbol: 'BNB',  name: 'BNB', market_type: 'Crypto' },
+// TW candidate pool — sorted by live volume when fetched, pick top 10
+const TW_CANDIDATES = [
+  { symbol: '2330', name: '台積電' },
+  { symbol: '2454', name: '聯發科' },
+  { symbol: '2317', name: '鴻海' },
+  { symbol: '2308', name: '台達電' },
+  { symbol: '2382', name: '廣達' },
+  { symbol: '2881', name: '富邦金' },
+  { symbol: '2303', name: '聯電' },
+  { symbol: '2412', name: '中華電' },
+  { symbol: '2886', name: '兆豐金' },
+  { symbol: '3711', name: '日月光投控' },
+  { symbol: '2891', name: '中信金' },
+  { symbol: '2884', name: '玉山金' },
+  { symbol: '2002', name: '中鋼' },
+  { symbol: '1301', name: '台塑' },
+  { symbol: '2357', name: '華碩' },
 ];
+
+/**
+ * Fetch trending assets dynamically:
+ *  - Crypto: CoinGecko top 10 by 24h volume (fallback to simple/price)
+ *  - US: Yahoo Finance trending top 10
+ *  - TW: TW_CANDIDATES sorted by live FinMind volume, top 10
+ *
+ * Returns { assets: [...], prices: { symbol: priceData } }
+ */
+export const fetchTrendingAssets = async () => {
+  const assets = [];
+  const prices = {};
+
+  // ── 1. Crypto — CoinGecko markets, fallback to simple/price ──
+  const CRYPTO_FALLBACK = [
+    { id: 'bitcoin',      symbol: 'BTC',  name: 'Bitcoin' },
+    { id: 'ethereum',     symbol: 'ETH',  name: 'Ethereum' },
+    { id: 'tether',       symbol: 'USDT', name: 'Tether' },
+    { id: 'binancecoin',  symbol: 'BNB',  name: 'BNB' },
+    { id: 'solana',       symbol: 'SOL',  name: 'Solana' },
+    { id: 'ripple',       symbol: 'XRP',  name: 'XRP' },
+    { id: 'usd-coin',     symbol: 'USDC', name: 'USD Coin' },
+    { id: 'dogecoin',     symbol: 'DOGE', name: 'Dogecoin' },
+    { id: 'cardano',      symbol: 'ADA',  name: 'Cardano' },
+    { id: 'avalanche-2',  symbol: 'AVAX', name: 'Avalanche' },
+  ];
+  try {
+    const res = await fetch(
+      `${COINGECKO_BASE_URL}/coins/markets?vs_currency=usd&order=volume_desc&per_page=10&page=1`
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!Array.isArray(data) || data.length === 0) {
+      // API may return error object e.g. { status: { error_code: 429 } }
+      const code = data?.status?.error_code;
+      throw new Error(code ? `CoinGecko error ${code}` : 'unexpected response');
+    }
+    data.forEach(coin => {
+      const sym = coin.symbol.toUpperCase();
+      const priceData = {
+        symbol: sym,
+        price: coin.current_price,
+        change_percent: coin.price_change_percentage_24h || 0,
+        volume: coin.total_volume || 0,
+        market_cap: coin.market_cap || 0,
+        high_24h: coin.high_24h || null,
+        low_24h: coin.low_24h || null,
+        market_type: 'Crypto',
+      };
+      assets.push({ symbol: sym, name: coin.name, market_type: 'Crypto', coinId: coin.id });
+      prices[sym] = priceData;
+      cachePrice(priceData); // fire-and-forget, no await needed
+    });
+  } catch (e) {
+    console.warn('CoinGecko markets failed, trying cache then fallback:', e.message);
+    // Try Supabase price_cache first (avoids hammering the API)
+    let filledFromCache = 0;
+    for (const { id, symbol, name } of CRYPTO_FALLBACK) {
+      const cached = await getCachedPrice(symbol, 'Crypto');
+      if (cached) {
+        assets.push({ symbol, name, market_type: 'Crypto', coinId: id });
+        prices[symbol] = cached;
+        filledFromCache++;
+      }
+    }
+    // Only call the API if cache missed everything
+    if (filledFromCache === 0) {
+      try {
+        const coinIds = CRYPTO_FALLBACK.map(c => c.id).join(',');
+        const res = await fetch(
+          `${COINGECKO_BASE_URL}/simple/price?ids=${coinIds}&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true`
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        for (const { id, symbol, name } of CRYPTO_FALLBACK) {
+          if (data[id]) {
+            const priceData = {
+              symbol,
+              price: data[id].usd,
+              change_percent: data[id].usd_24h_change || 0,
+              volume: data[id].usd_24h_vol || 0,
+              market_type: 'Crypto',
+            };
+            assets.push({ symbol, name, market_type: 'Crypto', coinId: id });
+            prices[symbol] = priceData;
+            await cachePrice(priceData);
+          }
+        }
+      } catch (e2) {
+        console.warn('fetchTrendingAssets crypto fallback error:', e2.message);
+      }
+    }
+    // Add any fallback coins not yet in assets
+    for (const { id, symbol, name } of CRYPTO_FALLBACK) {
+      if (!assets.find(a => a.symbol === symbol)) {
+        assets.push({ symbol, name, market_type: 'Crypto', coinId: id });
+      }
+    }
+  }
+
+  // ── 2. US trending ─────────────────────────────────────────
+  try {
+    const trendRes = await fetch(
+      'https://query1.finance.yahoo.com/v1/finance/trending/US?count=12'
+    );
+    const trendData = await trendRes.json();
+    const symbols = (trendData?.finance?.result?.[0]?.quotes || [])
+      .map(q => q.symbol)
+      .filter(s => !s.includes('^') && !s.includes('='))
+      .slice(0, 10);
+
+    const usResults = await Promise.allSettled(
+      symbols.map(async (sym) => {
+        const known = US_STOCKS.find(s => s.symbol === sym);
+        const priceData = await fetchUSStockPrice(sym);
+        return { sym, name: known?.name || sym, priceData };
+      })
+    );
+    usResults.forEach(r => {
+      if (r.status === 'fulfilled') {
+        const { sym, name, priceData } = r.value;
+        assets.push({ symbol: sym, name, market_type: 'US' });
+        if (priceData) prices[sym] = priceData;
+      }
+    });
+  } catch (e) {
+    console.warn('fetchTrendingAssets US error:', e.message);
+  }
+
+  // ── 3. TW — candidate pool sorted by live volume ───────────
+  try {
+    const twResults = await Promise.allSettled(
+      TW_CANDIDATES.map(async (c) => {
+        const priceData = await fetchTWStockPrice(c.symbol);
+        return { ...c, priceData };
+      })
+    );
+    const twWithPrices = twResults
+      .filter(r => r.status === 'fulfilled' && r.value.priceData)
+      .map(r => r.value)
+      .sort((a, b) => (b.priceData.volume || 0) - (a.priceData.volume || 0))
+      .slice(0, 10);
+
+    twWithPrices.forEach(({ symbol, name, priceData }) => {
+      assets.push({ symbol, name, market_type: 'TW' });
+      prices[symbol] = priceData;
+    });
+  } catch (e) {
+    console.warn('fetchTrendingAssets TW error:', e.message);
+  }
+
+  return { assets, prices };
+};
 
 /**
  * Fetch 30-day historical prices for chart
