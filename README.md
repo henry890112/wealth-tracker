@@ -1,50 +1,61 @@
-# 💰 WealthTracker - 個人資產管理系統
+# WealthTracker - 個人資產管理系統
 
-基於 SDD.md 規格開發的專業級個人資產管理應用程式，具備會計思維、多幣別支援、自動估價和趨勢分析功能。
+React Native (Expo) + Supabase 的個人資產管理 App，支援多幣別、即時報價、趨勢分析。
 
-## 📋 功能特色
+## 功能特色
 
-### ✅ 已實現功能
+### 已實現功能
 
-- **🔐 使用者認證**: Email/密碼註冊登入系統
-- **📊 會計分類 Dashboard**: 
-  - 流動資產、投資資產、固定資產、應收帳款、負債分類
-  - 自動計算淨資產 (資產 - 負債)
+- **使用者認證**: Email/密碼註冊登入，Session 自動管理
+- **深色/淺色/系統主題**: 全 App 一致的 ThemeContext，設定頁可切換
+- **液態玻璃導覽列**: BlurView 毛玻璃效果底部 Tab Bar
+- **資產總覽 (Dashboard)**:
+  - 流動資產、投資資產、固定資產、應收款項、負債 五大分類
+  - 無篩選時按類別分組；選投資資產時按台股/美股/虛幣分組
+  - 本月變化金額顯示
   - 多幣別統一換算為基準貨幣
-- **🔍 智慧搜尋與新增**:
-  - 支援台股、美股、虛擬貨幣搜尋
-  - 分類標籤選擇
-  - 自動記錄交易流水
-- **📈 趨勢分析**:
-  - 30天淨資產折線圖
-  - 最高/最低淨資產統計
-  - 每日快照自動記錄
-- **⚙️ 系統設定**:
-  - 基準貨幣切換 (TWD/USD/EUR/JPY/CNY)
-  - 漲跌顏色習慣設定
-  - 資料同步功能
+- **搜尋資產 (Search)**:
+  - 即時熱門標的（CoinGecko 前 10 虛幣、Yahoo Finance 趨勢美股、FinMind 台股成交量前 10）
+  - 支援漲跌幅/交易量/市值排序，漲跌幅可切換方向
+  - 顯示市值、24h 振幅
+  - TradingView K 線圖 Modal
+  - 新增資產 Modal：持有股數 × 成本 × 槓桿倍數自動計算現值
+- **新增資產 (AddAsset)**:
+  - 投資資產：股數 × 成本 × 槓桿（預設 1x）自動計算
+  - 其他類別：直接輸入金額
+- **趨勢分析 (Charts)**:
+  - 多時段折線圖（7d / 30d / 90d / 180d / 自定義）
+  - 互動式甜甜圈圖：點擊類別鑽取至台股/美股/虛幣細分
+  - 圖例含百分比進度條
+- **交易紀錄 (Records)**:
+  - 支援類型篩選（買入/賣出/調整）× 市場篩選（台股/美股/虛幣）
+- **資產詳情 (AssetDetail)**: 個別資產交易歷史，買入/賣出/調整操作
+- **系統設定 (Settings)**: 基準貨幣切換、主題偏好、登出
 
-### 🔌 API 整合
+### API 整合
 
-- **FinMind API**: 台股/美股即時報價
-- **CoinGecko API**: 虛擬貨幣價格
-- **ExchangeRate API**: 匯率轉換
+- **FinMind API**: 台股即時報價與搜尋
+- **Yahoo Finance**: 美股即時報價與趨勢標的
+- **CoinGecko API**: 虛擬貨幣價格、成交量排名（附 Supabase 快取 fallback）
+- **ExchangeRate API**: 匯率換算
 
-## 🛠️ 技術棧
+所有 API 結果快取於 Supabase（5 分鐘 TTL）。
 
-- **Frontend**: React Native (Expo)
+## 技術棧
+
+- **Frontend**: React Native (Expo 54)
 - **Backend**: Supabase (PostgreSQL + Auth)
-- **Icons**: Lucide React Native
-- **Charts**: React Native Chart Kit
-- **Navigation**: React Navigation
+- **UI**: Lucide React Native icons、expo-blur、react-native-svg
+- **Charts**: React Native Chart Kit（折線圖）、自製 SVG 甜甜圈圖
+- **Navigation**: React Navigation（底部 Tab + Stack）
+- **Theme**: 自製 ThemeContext + AsyncStorage 持久化
 
-## 📦 安裝步驟
+## 安裝步驟
 
 ### 前置需求
 
-- Node.js 18+ 
-- Docker Desktop (用於本地 Supabase)
-- Expo CLI
+- Node.js 18+
+- Docker Desktop（本地 Supabase）
 - Supabase CLI
 
 ### 1. 安裝依賴
@@ -57,214 +68,86 @@ npm install
 ### 2. 設定 Supabase 本地環境
 
 ```bash
-# 安裝 Supabase CLI (如果尚未安裝)
-npm install -g supabase
-
-# 初始化 Supabase (已完成，跳過此步驟)
-# supabase init
-
-# 啟動本地 Supabase Docker 容器
 supabase start
-```
-
-啟動後，你會看到類似以下的輸出：
-
-```
-API URL: http://localhost:54321
-GraphQL URL: http://localhost:54321/graphql/v1
-DB URL: postgresql://postgres:postgres@localhost:54322/postgres
-Studio URL: http://localhost:54323
-Inbucket URL: http://localhost:54324
-JWT secret: super-secret-jwt-token-with-at-least-32-characters-long
-anon key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-service_role key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-```
-
-### 3. 執行資料庫遷移
-
-```bash
-# 應用資料庫 schema
 supabase db reset
 ```
 
-### 4. 設定環境變數
-
-複製 `.env.example` 為 `.env`:
+### 3. 設定環境變數
 
 ```bash
 cp .env.example .env
+# 填入 supabase start 輸出的 anon key
 ```
-
-編輯 `.env` 檔案，填入 Supabase 本地連線資訊：
 
 ```env
 EXPO_PUBLIC_SUPABASE_URL=http://localhost:54321
-EXPO_PUBLIC_SUPABASE_ANON_KEY=<your-anon-key-from-supabase-start>
-
-# API Keys (選填，使用免費 API)
-EXPO_PUBLIC_FINMIND_API_KEY=
-EXPO_PUBLIC_COINGECKO_API_KEY=
-EXPO_PUBLIC_EXCHANGE_RATE_API_KEY=
+EXPO_PUBLIC_SUPABASE_ANON_KEY=<from supabase start output>
 ```
 
-### 5. 啟動應用程式
+### 4. 啟動
 
 ```bash
-# 啟動 Expo 開發伺服器
-npm start
-
-# 或直接在特定平台啟動
-npm run android  # Android
-npm run ios      # iOS
-npm run web      # Web
+npm start        # Expo dev server
+npm run ios      # iOS simulator
+npm run android  # Android emulator
 ```
 
-## 🗄️ 資料庫結構
+## 資料庫結構
 
-### 主要資料表
+| 表 | 用途 |
+|---|---|
+| `profiles` | 基準貨幣、主題偏好 |
+| `assets` | 資產（含 category、market_type、shares、cost） |
+| `transactions` | BUY / SELL / ADJUST 記錄 |
+| `daily_snapshots` | 每日淨資產快照（驅動趨勢圖） |
+| `price_cache` | 股票/虛幣價格快取 |
+| `exchange_rates` | 匯率快取 |
 
-- **profiles**: 使用者設定檔 (基準貨幣、主題、顏色習慣)
-- **assets**: 資產清單 (名稱、分類、幣別、金額、股數)
-- **transactions**: 交易記錄 (買入、賣出、調整)
-- **watchlist**: 自選清單
-- **daily_snapshots**: 每日快照 (用於趨勢圖)
-- **exchange_rates**: 匯率快取
-- **price_cache**: 價格快取
+**觸發器:**
+- `handle_new_user` — 新用戶自動建立 profile
+- `update_asset_after_transaction` — BUY/SELL 後更新股數與均價（ADJUST 略過）
 
-### 自動化觸發器
-
-- **update_asset_after_transaction**: 交易後自動更新資產金額和平均成本
-- **handle_new_user**: 新用戶註冊時自動建立 profile
-- **create_daily_snapshot**: 手動呼叫以建立每日快照
-
-## 🚀 部署到 Supabase Cloud
-
-### 1. 建立 Supabase 專案
-
-前往 [Supabase Dashboard](https://app.supabase.com) 建立新專案。
-
-### 2. 連結本地專案到雲端
-
-```bash
-# 登入 Supabase
-supabase login
-
-# 連結到雲端專案
-supabase link --project-ref <your-project-ref>
-```
-
-### 3. 推送資料庫 Schema
-
-```bash
-# 推送本地 migrations 到雲端
-supabase db push
-```
-
-### 4. 更新環境變數
-
-更新 `.env` 檔案使用雲端 Supabase 連線資訊：
-
-```env
-EXPO_PUBLIC_SUPABASE_URL=https://<your-project-ref>.supabase.co
-EXPO_PUBLIC_SUPABASE_ANON_KEY=<your-anon-key>
-```
-
-## 📱 使用說明
-
-### 首次使用
-
-1. **註冊帳號**: 使用 Email 和密碼註冊
-2. **設定基準貨幣**: 前往「設定」頁面選擇您的基準貨幣
-3. **新增資產**: 
-   - 點擊「搜尋資產」
-   - 搜尋股票代碼或名稱
-   - 選擇分類並輸入持有股數和成本
-4. **查看趨勢**: 系統會自動記錄每日快照，可在「趨勢分析」查看
-
-### 資產分類說明
-
-- **流動資產**: 現金、活存、定存等
-- **投資資產**: 股票、基金、債券等
-- **固定資產**: 房地產、車輛等
-- **應收帳款**: 借出款項
-- **負債**: 貸款、信用卡債等
-
-## 🔧 開發指令
-
-```bash
-# 啟動開發伺服器
-npm start
-
-# 重置 Supabase 資料庫
-supabase db reset
-
-# 查看 Supabase 狀態
-supabase status
-
-# 停止 Supabase
-supabase stop
-
-# 查看 Supabase Studio (資料庫管理介面)
-# 瀏覽器開啟 http://localhost:54323
-```
-
-## 📂 專案結構
+## 專案結構
 
 ```
 WealthTracker/
-├── App.js                          # 主應用程式入口
+├── App.js                        # 入口：ThemeProvider + GlassTabBar + Navigation
 ├── src/
 │   ├── lib/
-│   │   └── supabase.js            # Supabase 客戶端設定
+│   │   ├── supabase.js           # Supabase 客戶端
+│   │   └── ThemeContext.js       # 深色/淺色/系統主題 Context
 │   ├── services/
-│   │   └── api.js                 # 外部 API 整合
+│   │   └── api.js                # FinMind / Yahoo / CoinGecko / ExchangeRate
 │   └── screens/
-│       ├── AuthScreen.js          # 登入/註冊畫面
-│       ├── DashboardScreen.js     # 資產總覽
-│       ├── SearchScreen.js        # 搜尋與新增資產
-│       ├── TrendsScreen.js        # 趨勢分析
-│       └── SettingsScreen.js      # 系統設定
-├── supabase/
-│   ├── config.toml                # Supabase 設定
-│   └── migrations/
-│       └── 20240101000000_initial_schema.sql  # 資料庫 Schema
-├── package.json
-├── app.json
-└── README.md
+│       ├── AuthScreen.js
+│       ├── DashboardScreen.js
+│       ├── SearchScreen.js
+│       ├── TrendsScreen.js
+│       ├── RecordsScreen.js
+│       ├── SettingsScreen.js
+│       ├── AssetDetailScreen.js
+│       └── AddAssetScreen.js
+└── supabase/
+    └── migrations/               # 資料庫 Schema
 ```
 
-## 🐛 常見問題
+## 部署到 Supabase Cloud
 
-### Q: Supabase 無法啟動？
-A: 確認 Docker Desktop 正在運行，並檢查 54321-54324 端口是否被佔用。
+```bash
+supabase login
+supabase link --project-ref <ref>
+supabase db push
+```
 
-### Q: 無法連接到資料庫？
-A: 檢查 `.env` 檔案中的 `EXPO_PUBLIC_SUPABASE_URL` 和 `EXPO_PUBLIC_SUPABASE_ANON_KEY` 是否正確。
+更新 `.env` 為雲端 URL 和 anon key 後重啟。
 
-### Q: 搜尋功能無法使用？
-A: 免費 API 有請求限制，請稍後再試或註冊 API Key。
+## 常見問題
 
-### Q: 圖表無法顯示？
-A: 需要至少有一筆每日快照資料。新增資產後，系統會自動建立快照。
+**Q: 虛幣沒有顯示？**
+A: CoinGecko 免費 API 有 rate limit，App 會自動 fallback 至 Supabase 快取，5 分鐘後重試即可。
 
-## 📝 待實作功能
+**Q: 圖表無法顯示？**
+A: 需要至少兩天的每日快照。新增資產後系統會自動建立快照，隔天即可看到趨勢圖。
 
-- [ ] 交易歷史詳細頁面
-- [ ] 資產詳情頁面 (含 K 線圖)
-- [ ] 批次匯入/匯出功能
-- [ ] 推播通知 (價格警示)
-- [ ] 多帳戶支援
-- [ ] 資產配置餅圖
-- [ ] 報表匯出 (PDF/Excel)
-
-## 📄 授權
-
-MIT License
-
-## 👨‍💻 作者
-
-根據 SDD.md V7 規格開發
-
----
-
-**需要協助？** 請查看 [Supabase 文件](https://supabase.com/docs) 或 [Expo 文件](https://docs.expo.dev/)
+**Q: Supabase 無法啟動？**
+A: 確認 Docker Desktop 正在運行，且 54321-54324 埠未被占用。
