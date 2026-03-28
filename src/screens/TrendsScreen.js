@@ -1,409 +1,527 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
-  View,
-  Text,
-  ScrollView,
-  StyleSheet,
-  Dimensions,
-  ActivityIndicator,
+  View, Text, ScrollView, StyleSheet, Dimensions, ActivityIndicator,
+  TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Alert,
 } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
+import { BlurView } from 'expo-blur';
+import Svg, { Path } from 'react-native-svg';
+import { X, Calendar } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
+import { convertToBaseCurrency } from '../services/api';
 
-const screenWidth = Dimensions.get('window').width;
+const { width: screenWidth } = Dimensions.get('window');
+const PRIMARY = '#16a34a';
+
+const PERIODS = [
+  { label: '7d',   days: 7 },
+  { label: '30d',  days: 30 },
+  { label: '90d',  days: 90 },
+  { label: '180d', days: 180 },
+  { label: '自定義', days: null },
+];
+
+const CATEGORY_CONFIG = {
+  liquid:     { label: '流動資產', color: '#16a34a' },
+  investment: { label: '投資資產', color: '#f59e0b' },
+  fixed:      { label: '固定資產', color: '#94a3b8' },
+  receivable: { label: '應收款項', color: '#0d9488' },
+};
+
+const formatAmount = (amount, currency = 'TWD') => {
+  const prefix = currency === 'TWD' ? 'NT$' : currency;
+  if (Math.abs(amount) >= 10000) return `${prefix} ${(amount / 10000).toFixed(1)}萬`;
+  return `${prefix} ${Math.round(amount).toLocaleString('zh-TW')}`;
+};
+
+// Validates YYYY-MM-DD
+const isValidDate = (str) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) return false;
+  const d = new Date(str);
+  return !isNaN(d.getTime());
+};
+
+function DonutChart({ data, size = 160, strokeWidth = 30 }) {
+  const total = data.reduce((s, d) => s + d.value, 0);
+  if (total === 0) return null;
+  const radius = (size - strokeWidth) / 2;
+  const cx = size / 2;
+  const cy = size / 2;
+  let angle = -Math.PI / 2;
+  const arcs = data.map(item => {
+    const a = (item.value / total) * 2 * Math.PI * 0.99;
+    const x1 = cx + radius * Math.cos(angle);
+    const y1 = cy + radius * Math.sin(angle);
+    angle += a;
+    const x2 = cx + radius * Math.cos(angle);
+    const y2 = cy + radius * Math.sin(angle);
+    angle += 2 * Math.PI * 0.01;
+    return { d: `M ${x1} ${y1} A ${radius} ${radius} 0 ${a > Math.PI ? 1 : 0} 1 ${x2} ${y2}`, color: item.color };
+  });
+  return (
+    <Svg width={size} height={size}>
+      {arcs.map((arc, i) => (
+        <Path key={i} d={arc.d} fill="none" stroke={arc.color} strokeWidth={strokeWidth} strokeLinecap="round" />
+      ))}
+    </Svg>
+  );
+}
 
 export default function TrendsScreen() {
   const [loading, setLoading] = useState(true);
   const [snapshots, setSnapshots] = useState([]);
+  const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [profile, setProfile] = useState(null);
-  const [stats, setStats] = useState({
-    currentNetWorth: 0,
-    change: 0,
-    changePercent: 0,
-    highestNetWorth: 0,
-    lowestNetWorth: 0,
-  });
+  const [categoryTotals, setCategoryTotals] = useState([]);
+  const [userId, setUserId] = useState(null);
 
-  useEffect(() => {
-    loadData();
+  const [selectedPeriod, setSelectedPeriod] = useState(PERIODS[2]); // default 90d
+  const [customRange, setCustomRange] = useState(null); // { start, end } strings
+
+  // Custom date modal
+  const [customModalVisible, setCustomModalVisible] = useState(false);
+  const [inputStart, setInputStart] = useState('');
+  const [inputEnd, setInputEnd] = useState('');
+
+  useEffect(() => { loadData(); }, []);
+
+  const loadSnapshots = useCallback(async (uid, days, range) => {
+    setSnapshotLoading(true);
+    try {
+      let query = supabase
+        .from('daily_snapshots').select('*')
+        .eq('user_id', uid)
+        .order('snapshot_date', { ascending: true });
+
+      if (range) {
+        query = query.gte('snapshot_date', range.start).lte('snapshot_date', range.end);
+      } else {
+        const since = new Date();
+        since.setDate(since.getDate() - days);
+        query = query.gte('snapshot_date', since.toISOString().split('T')[0]);
+      }
+
+      const { data } = await query;
+      setSnapshots(data || []);
+    } finally {
+      setSnapshotLoading(false);
+    }
   }, []);
 
   const loadData = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+      setUserId(user.id);
 
-      // Get profile
       const { data: profileData } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single();
-
+        .from('profiles').select('*').eq('id', user.id).single();
       setProfile(profileData);
 
-      // Get snapshots for the last 30 days
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      await loadSnapshots(user.id, PERIODS[2].days, null);
 
-      const { data: snapshotsData, error } = await supabase
-        .from('daily_snapshots')
-        .select('*')
-        .eq('user_id', user.id)
-        .gte('snapshot_date', thirtyDaysAgo.toISOString().split('T')[0])
-        .order('snapshot_date', { ascending: true });
+      const { data: assetsData } = await supabase
+        .from('assets').select('category, current_amount, currency')
+        .eq('user_id', user.id);
 
-      if (error) throw error;
-
-      setSnapshots(snapshotsData || []);
-
-      // Calculate statistics
-      if (snapshotsData && snapshotsData.length > 0) {
-        const current = parseFloat(snapshotsData[snapshotsData.length - 1].net_worth_base);
-        const first = parseFloat(snapshotsData[0].net_worth_base);
-        const change = current - first;
-        const changePercent = first !== 0 ? (change / first) * 100 : 0;
-
-        const netWorths = snapshotsData.map(s => parseFloat(s.net_worth_base));
-        const highest = Math.max(...netWorths);
-        const lowest = Math.min(...netWorths);
-
-        setStats({
-          currentNetWorth: current,
-          change,
-          changePercent,
-          highestNetWorth: highest,
-          lowestNetWorth: lowest,
-        });
+      if (assetsData) {
+        const baseCurrency = profileData?.base_currency || 'TWD';
+        const catSums = {};
+        await Promise.all(
+          assetsData.filter(a => a.category !== 'liability').map(async (a) => {
+            const amt = await convertToBaseCurrency(parseFloat(a.current_amount), a.currency, baseCurrency);
+            catSums[a.category] = (catSums[a.category] || 0) + amt;
+          })
+        );
+        setCategoryTotals(
+          Object.entries(catSums)
+            .filter(([, v]) => v > 0)
+            .map(([cat, value]) => ({
+              label: CATEGORY_CONFIG[cat]?.label || cat,
+              value,
+              color: CATEGORY_CONFIG[cat]?.color || '#888',
+            }))
+        );
       }
-    } catch (error) {
-      console.error('Error loading trends:', error);
+    } catch (e) {
+      console.error('Error loading charts:', e);
     } finally {
       setLoading(false);
     }
   };
 
-  const formatCurrency = (amount) => {
-    const currency = profile?.base_currency || 'TWD';
-    return `${currency} ${amount.toLocaleString('zh-TW', {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    })}`;
+  const handlePeriodSelect = (period) => {
+    if (period.days === null) {
+      // Custom: pre-fill with last selection or sensible default
+      const today = new Date().toISOString().split('T')[0];
+      const prior = new Date();
+      prior.setDate(prior.getDate() - 30);
+      setInputStart(customRange?.start || prior.toISOString().split('T')[0]);
+      setInputEnd(customRange?.end || today);
+      setCustomModalVisible(true);
+      return;
+    }
+    setSelectedPeriod(period);
+    setCustomRange(null);
+    if (userId) loadSnapshots(userId, period.days, null);
   };
 
-  const getChartData = () => {
-    if (snapshots.length === 0) {
-      return {
-        labels: [''],
-        datasets: [{ data: [0] }],
-      };
+  const applyCustomRange = () => {
+    if (!isValidDate(inputStart) || !isValidDate(inputEnd)) {
+      Alert.alert('格式錯誤', '請輸入正確的日期格式 YYYY-MM-DD');
+      return;
     }
+    if (inputStart > inputEnd) {
+      Alert.alert('日期錯誤', '開始日期不能晚於結束日期');
+      return;
+    }
+    const range = { start: inputStart, end: inputEnd };
+    setCustomRange(range);
+    setSelectedPeriod(PERIODS[4]); // 自定義
+    setCustomModalVisible(false);
+    if (userId) loadSnapshots(userId, null, range);
+  };
 
-    // Show max 7 labels to avoid crowding
-    const step = Math.ceil(snapshots.length / 7);
+  const currency = profile?.base_currency || 'TWD';
+  const fmt = (v) => formatAmount(v, currency);
+
+  if (loading) {
+    return <View style={styles.loading}><ActivityIndicator size="large" color={PRIMARY} /></View>;
+  }
+
+  const hasData = snapshots.length > 0;
+
+  const getChartData = () => {
+    if (!hasData) return { data: { labels: [''], datasets: [{ data: [0] }] }, baseline: 0 };
+    const values = snapshots.map(s => Math.round(parseFloat(s.net_worth_base)));
+    const minVal = Math.min(...values);
+    const maxVal = Math.max(...values);
+    const range = maxVal - minVal;
+    // Add 15% padding above and below so the line never touches the edges
+    const padding = range > 0 ? range * 0.15 : Math.abs(minVal) * 0.1 || 100;
+    const baseline = Math.max(0, minVal - padding);
+
+    const step = Math.max(1, Math.ceil(snapshots.length / 6));
     const labels = snapshots
-      .filter((_, index) => index % step === 0)
+      .filter((_, i) => i % step === 0 || i === snapshots.length - 1)
       .map(s => {
-        const date = new Date(s.snapshot_date);
-        return `${date.getMonth() + 1}/${date.getDate()}`;
+        const d = new Date(s.snapshot_date);
+        return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')}`;
       });
-
-    const data = snapshots.map(s => parseFloat(s.net_worth_base));
-
     return {
-      labels,
-      datasets: [
-        {
-          data,
-          color: (opacity = 1) => `rgba(37, 99, 235, ${opacity})`,
+      data: {
+        labels,
+        datasets: [{
+          data: values.map(v => v - baseline),
+          color: (opacity = 1) => `rgba(22, 163, 74, ${opacity})`,
           strokeWidth: 2,
-        },
-      ],
+        }],
+      },
+      baseline,
     };
   };
 
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#2563eb" />
-      </View>
-    );
+  const fmtYLabel = (val, baseline) => {
+    const abs = parseFloat(val) + baseline;
+    if (Math.abs(abs) >= 10000) return `${(abs / 10000).toFixed(1)}萬`;
+    return Math.round(abs).toLocaleString('zh-TW');
+  };
+
+  let changeText = null;
+  if (hasData && snapshots.length >= 2) {
+    const first = parseFloat(snapshots[0].net_worth_base);
+    const last = parseFloat(snapshots[snapshots.length - 1].net_worth_base);
+    const diff = last - first;
+    const pct = first !== 0 ? ((diff / Math.abs(first)) * 100).toFixed(1) : '0.0';
+    changeText = { diff, pct, positive: diff >= 0 };
   }
 
-  const chartData = getChartData();
-  const hasData = snapshots.length > 0;
+  const periodLabel = selectedPeriod.days === null && customRange
+    ? `${customRange.start} ~ ${customRange.end}`
+    : selectedPeriod.label;
+
+  const donutTotal = categoryTotals.reduce((s, d) => s + d.value, 0);
+  const { data: chartData, baseline: chartBaseline } = getChartData();
 
   return (
-    <ScrollView style={styles.container}>
-      {/* Stats Cards */}
-      <View style={styles.statsContainer}>
-        <View style={styles.statCard}>
-          <Text style={styles.statLabel}>當前淨資產</Text>
-          <Text style={styles.statValue}>
-            {formatCurrency(stats.currentNetWorth)}
-          </Text>
-          {stats.change !== 0 && (
-            <Text
-              style={[
-                styles.statChange,
-                stats.change >= 0 ? styles.statChangePositive : styles.statChangeNegative,
-              ]}
-            >
-              {stats.change >= 0 ? '+' : ''}
-              {formatCurrency(stats.change)} ({stats.changePercent.toFixed(2)}%)
+    <>
+      <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 40 }}>
+
+        {/* Trend chart card */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <Text style={styles.cardTitle}>淨資產趨勢</Text>
+            {changeText && (
+              <Text style={[styles.changeBadge, changeText.positive ? styles.pos : styles.neg]}>
+                {changeText.positive ? '+' : ''}{changeText.pct}%
+              </Text>
+            )}
+          </View>
+
+          {/* ── Liquid Glass period selector ── */}
+          <View style={styles.glassContainer}>
+            <BlurView intensity={30} tint="light" style={StyleSheet.absoluteFill} />
+            <View style={styles.periodRow}>
+              {PERIODS.map((p) => {
+                const isActive = p.days === selectedPeriod.days && !(p.days === null && selectedPeriod.days !== null);
+                const isCustomActive = p.days === null && selectedPeriod.days === null;
+                const active = isActive || isCustomActive;
+                return (
+                  <TouchableOpacity
+                    key={p.label}
+                    style={[styles.periodBtn, active && styles.periodBtnActive]}
+                    onPress={() => handlePeriodSelect(p)}
+                    activeOpacity={0.75}
+                  >
+                    {p.days === null && <Calendar size={10} color={active ? 'white' : PRIMARY} style={{ marginRight: 3 }} />}
+                    <Text style={[styles.periodLabel, active && styles.periodLabelActive]}>
+                      {p.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+
+          {/* Chart */}
+          {snapshotLoading ? (
+            <View style={styles.chartLoading}>
+              <ActivityIndicator size="small" color={PRIMARY} />
+            </View>
+          ) : hasData ? (
+            <LineChart
+              data={chartData}
+              width={screenWidth - 64}
+              height={200}
+              formatYLabel={(val) => fmtYLabel(val, chartBaseline)}
+              chartConfig={{
+                backgroundGradientFrom: '#fff',
+                backgroundGradientTo: '#fff',
+                decimalPlaces: 0,
+                color: (opacity = 1) => `rgba(22, 163, 74, ${opacity})`,
+                labelColor: (opacity = 1) => `rgba(148, 163, 184, ${opacity})`,
+                fillShadowGradient: '#16a34a',
+                fillShadowGradientOpacity: 0.12,
+                propsForDots: { r: '3', strokeWidth: '1.5', stroke: '#16a34a' },
+                propsForBackgroundLines: { stroke: '#f1f5f9' },
+              }}
+              withShadow
+              bezier
+              style={{ borderRadius: 8, marginLeft: -8, marginTop: 4 }}
+            />
+          ) : (
+            <Text style={styles.emptyText}>此區間尚無數據{'\n'}系統每日自動記錄您的資產狀況</Text>
+          )}
+
+          {changeText && (
+            <Text style={[styles.changeDetail, changeText.positive ? styles.posText : styles.negText]}>
+              {periodLabel}變化：{changeText.positive ? '+' : ''}{fmt(changeText.diff)}
             </Text>
           )}
         </View>
-      </View>
 
-      {/* Chart */}
-      {hasData ? (
-        <View style={styles.chartContainer}>
-          <Text style={styles.chartTitle}>30 天淨資產趨勢</Text>
-          <LineChart
-            data={chartData}
-            width={screenWidth - 32}
-            height={220}
-            chartConfig={{
-              backgroundColor: '#ffffff',
-              backgroundGradientFrom: '#ffffff',
-              backgroundGradientTo: '#ffffff',
-              decimalPlaces: 0,
-              color: (opacity = 1) => `rgba(37, 99, 235, ${opacity})`,
-              labelColor: (opacity = 1) => `rgba(100, 116, 139, ${opacity})`,
-              style: {
-                borderRadius: 16,
-              },
-              propsForDots: {
-                r: '4',
-                strokeWidth: '2',
-                stroke: '#2563eb',
-              },
-            }}
-            bezier
-            style={styles.chart}
-          />
-        </View>
-      ) : (
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyStateText}>尚無趨勢數據</Text>
-          <Text style={styles.emptyStateSubtext}>
-            系統會每日自動記錄您的資產狀況
-          </Text>
-        </View>
-      )}
-
-      {/* Additional Stats */}
-      {hasData && (
-        <View style={styles.additionalStats}>
-          <View style={styles.additionalStatCard}>
-            <Text style={styles.additionalStatLabel}>最高淨資產</Text>
-            <Text style={styles.additionalStatValue}>
-              {formatCurrency(stats.highestNetWorth)}
-            </Text>
-          </View>
-
-          <View style={styles.additionalStatCard}>
-            <Text style={styles.additionalStatLabel}>最低淨資產</Text>
-            <Text style={styles.additionalStatValue}>
-              {formatCurrency(stats.lowestNetWorth)}
-            </Text>
-          </View>
-        </View>
-      )}
-
-      {/* Recent Snapshots */}
-      {hasData && (
-        <View style={styles.snapshotsContainer}>
-          <Text style={styles.snapshotsTitle}>最近記錄</Text>
-          {snapshots.slice(-10).reverse().map((snapshot) => (
-            <View key={snapshot.id} style={styles.snapshotCard}>
-              <View style={styles.snapshotDate}>
-                <Text style={styles.snapshotDateText}>
-                  {new Date(snapshot.snapshot_date).toLocaleDateString('zh-TW')}
-                </Text>
-              </View>
-              <View style={styles.snapshotValues}>
-                <Text style={styles.snapshotNetWorth}>
-                  {formatCurrency(parseFloat(snapshot.net_worth_base))}
-                </Text>
-                <View style={styles.snapshotDetails}>
-                  <Text style={styles.snapshotDetailText}>
-                    資產: {formatCurrency(parseFloat(snapshot.total_assets))}
-                  </Text>
-                  <Text style={styles.snapshotDetailText}>
-                    負債: {formatCurrency(parseFloat(snapshot.total_liabilities))}
-                  </Text>
-                </View>
+        {/* Asset allocation */}
+        {categoryTotals.length > 0 && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>資產配置</Text>
+            <View style={styles.donutRow}>
+              <DonutChart data={categoryTotals} size={160} strokeWidth={30} />
+              <View style={styles.legend}>
+                {categoryTotals.map((item, i) => (
+                  <View key={i} style={styles.legendItem}>
+                    <View style={[styles.legendDot, { backgroundColor: item.color }]} />
+                    <View>
+                      <Text style={styles.legendLabel}>{item.label}</Text>
+                      <Text style={styles.legendValue}>{fmt(item.value)}</Text>
+                      <Text style={styles.legendPct}>
+                        {donutTotal > 0 ? ((item.value / donutTotal) * 100).toFixed(1) : 0}%
+                      </Text>
+                    </View>
+                  </View>
+                ))}
               </View>
             </View>
-          ))}
-        </View>
-      )}
-    </ScrollView>
+          </View>
+        )}
+      </ScrollView>
+
+      {/* Custom date range modal */}
+      <Modal
+        visible={customModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setCustomModalVisible(false)}
+      >
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={styles.modalSheet}>
+            {/* Frosted glass background */}
+            <BlurView intensity={60} tint="light" style={StyleSheet.absoluteFill} />
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>自定義區間</Text>
+                <TouchableOpacity onPress={() => setCustomModalVisible(false)}>
+                  <X size={20} color="#64748b" />
+                </TouchableOpacity>
+              </View>
+
+              <Text style={styles.inputLabel}>開始日期</Text>
+              <TextInput
+                style={styles.dateInput}
+                value={inputStart}
+                onChangeText={setInputStart}
+                placeholder="YYYY-MM-DD"
+                placeholderTextColor="#cbd5e1"
+                keyboardType="numbers-and-punctuation"
+                maxLength={10}
+              />
+
+              <Text style={styles.inputLabel}>結束日期</Text>
+              <TextInput
+                style={styles.dateInput}
+                value={inputEnd}
+                onChangeText={setInputEnd}
+                placeholder="YYYY-MM-DD"
+                placeholderTextColor="#cbd5e1"
+                keyboardType="numbers-and-punctuation"
+                maxLength={10}
+              />
+
+              <TouchableOpacity style={styles.applyBtn} onPress={applyCustomRange}>
+                <Text style={styles.applyBtnText}>套用</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f8fafc',
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#f8fafc',
-  },
-  statsContainer: {
-    padding: 16,
-  },
-  statCard: {
+  container: { flex: 1, backgroundColor: '#f1f5f9' },
+  loading: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f1f5f9' },
+  chartLoading: { height: 200, justifyContent: 'center', alignItems: 'center' },
+
+  card: {
     backgroundColor: 'white',
-    padding: 24,
-    borderRadius: 12,
+    margin: 16, marginBottom: 0, padding: 20,
+    borderRadius: 20,
     shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.07, shadowRadius: 12, elevation: 4,
+  },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
+  cardTitle: { fontSize: 16, fontWeight: '600', color: '#1e293b' },
+  changeBadge: { fontSize: 13, fontWeight: '600', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12 },
+  pos: { color: PRIMARY, backgroundColor: '#dcfce7' },
+  neg: { color: '#ef4444', backgroundColor: '#fee2e2' },
+
+  // ── Liquid Glass ──
+  glassContainer: {
+    borderRadius: 14,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(22, 163, 74, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(22, 163, 74, 0.15)',
+    marginBottom: 14,
+    // subtle inner shadow illusion
+    shadowColor: PRIMARY,
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  statLabel: {
-    fontSize: 14,
-    color: '#64748b',
-    marginBottom: 8,
-  },
-  statValue: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#1e293b',
-    marginBottom: 8,
-  },
-  statChange: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  statChangePositive: {
-    color: '#10b981',
-  },
-  statChangeNegative: {
-    color: '#ef4444',
-  },
-  chartContainer: {
-    backgroundColor: 'white',
-    marginHorizontal: 16,
-    marginBottom: 16,
-    padding: 16,
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  chartTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1e293b',
-    marginBottom: 16,
-  },
-  chart: {
-    marginVertical: 8,
-    borderRadius: 16,
-  },
-  emptyState: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 48,
-    backgroundColor: 'white',
-    marginHorizontal: 16,
-    borderRadius: 12,
-  },
-  emptyStateText: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#64748b',
-    marginBottom: 8,
-  },
-  emptyStateSubtext: {
-    fontSize: 14,
-    color: '#94a3b8',
-    textAlign: 'center',
-  },
-  additionalStats: {
-    flexDirection: 'row',
-    paddingHorizontal: 16,
-    gap: 12,
-    marginBottom: 16,
-  },
-  additionalStatCard: {
-    flex: 1,
-    backgroundColor: 'white',
-    padding: 16,
-    borderRadius: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
     elevation: 2,
   },
-  additionalStatLabel: {
-    fontSize: 12,
-    color: '#64748b',
-    marginBottom: 8,
-  },
-  additionalStatValue: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1e293b',
-  },
-  snapshotsContainer: {
-    backgroundColor: 'white',
-    marginHorizontal: 16,
-    marginBottom: 16,
-    borderRadius: 12,
-    padding: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  snapshotsTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1e293b',
-    marginBottom: 16,
-  },
-  snapshotCard: {
+  periodRow: {
     flexDirection: 'row',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
+    padding: 5,
+    gap: 4,
   },
-  snapshotDate: {
-    width: 100,
-    justifyContent: 'center',
-  },
-  snapshotDateText: {
-    fontSize: 12,
-    color: '#64748b',
-  },
-  snapshotValues: {
+  periodBtn: {
     flex: 1,
-  },
-  snapshotNetWorth: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1e293b',
-    marginBottom: 4,
-  },
-  snapshotDetails: {
     flexDirection: 'row',
-    gap: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 7,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.45)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.7)',
   },
-  snapshotDetailText: {
-    fontSize: 11,
-    color: '#94a3b8',
+  periodBtnActive: {
+    backgroundColor: PRIMARY,
+    borderColor: 'rgba(255,255,255,0.3)',
+    shadowColor: PRIMARY,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 5,
+    elevation: 4,
   },
+  periodLabel: { fontSize: 12, color: PRIMARY, fontWeight: '600' },
+  periodLabelActive: { color: 'white', fontWeight: '700' },
+
+  emptyText: { textAlign: 'center', color: '#94a3b8', lineHeight: 22, paddingVertical: 32 },
+  changeDetail: { fontSize: 13, fontWeight: '500', marginTop: 12, textAlign: 'right' },
+  posText: { color: PRIMARY },
+  negText: { color: '#ef4444' },
+
+  donutRow: { flexDirection: 'row', alignItems: 'center', gap: 20, marginTop: 8 },
+  legend: { flex: 1, gap: 12 },
+  legendItem: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  legendDot: { width: 10, height: 10, borderRadius: 5, marginTop: 3 },
+  legendLabel: { fontSize: 12, color: '#64748b' },
+  legendValue: { fontSize: 14, fontWeight: '700', color: '#1e293b' },
+  legendPct: { fontSize: 11, color: '#94a3b8' },
+
+  // ── Custom date modal ──
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.3)',
+  },
+  modalSheet: {
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.7)',
+  },
+  modalContent: {
+    padding: 28,
+    paddingBottom: 40,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  modalTitle: { fontSize: 18, fontWeight: '700', color: '#1e293b' },
+  inputLabel: { fontSize: 13, color: '#64748b', marginBottom: 6, fontWeight: '500' },
+  dateInput: {
+    backgroundColor: 'rgba(255,255,255,0.8)',
+    borderWidth: 1,
+    borderColor: 'rgba(22,163,74,0.25)',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#1e293b',
+    marginBottom: 18,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  applyBtn: {
+    backgroundColor: PRIMARY,
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 4,
+    shadowColor: PRIMARY,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  applyBtnText: { color: 'white', fontSize: 16, fontWeight: '700' },
 });
