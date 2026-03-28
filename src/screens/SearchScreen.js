@@ -154,7 +154,7 @@ export default function SearchScreen() {
       const sharesNum = parseFloat(shares);
       const priceNum = parseFloat(price);
       const leverageNum = parseFloat(leverage) || 1;
-      const totalAmount = sharesNum * priceNum * leverageNum;
+      const totalAmount = sharesNum * priceNum / leverageNum;
 
       let currency = 'TWD';
       if (selectedAsset.market_type === 'US') currency = 'USD';
@@ -172,6 +172,7 @@ export default function SearchScreen() {
           current_shares: sharesNum,
           average_cost: priceNum,
           market_type: selectedAsset.market_type || null,
+          leverage: leverageNum,
         })
         .select()
         .single();
@@ -460,8 +461,8 @@ export default function SearchScreen() {
                 />
                 {shares && price && (
                   <Text style={styles.totalText}>
-                    現值：{(parseFloat(shares) * parseFloat(price) * (parseFloat(leverage) || 1)).toFixed(2)}
-                    {leverage && parseFloat(leverage) !== 1 ? `  （${parseFloat(leverage)}x 槓桿）` : ''}
+                    保證金：{(parseFloat(shares) * parseFloat(price) / (parseFloat(leverage) || 1)).toFixed(2)}
+                    {parseFloat(leverage) > 1 ? `　合約價值：${(parseFloat(shares) * parseFloat(price)).toFixed(2)}` : ''}
                   </Text>
                 )}
                 <TouchableOpacity style={[styles.addButton, adding && styles.addButtonDisabled]} onPress={handleAddAsset} disabled={adding}>

@@ -237,7 +237,7 @@ export default function SettingsScreen() {
 
               const { data: assets } = await supabase
                 .from('assets')
-                .select('id, symbol, market_type, current_shares, currency')
+                .select('id, symbol, market_type, current_shares, currency, leverage, average_cost')
                 .eq('user_id', user.id)
                 .not('symbol', 'is', null);
 
@@ -255,7 +255,9 @@ export default function SettingsScreen() {
                   }
 
                   if (priceData?.price) {
-                    const newAmount = priceData.price * asset.current_shares;
+                    const lev = asset.leverage || 1;
+                    const borrowed = asset.current_shares * (asset.average_cost || 0) * (lev - 1) / lev;
+                    const newAmount = priceData.price * asset.current_shares - borrowed;
                     await supabase
                       .from('assets')
                       .update({ current_amount: newAmount, updated_at: new Date().toISOString() })

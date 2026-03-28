@@ -1,0 +1,1 @@
+ALTER TABLE assets ADD COLUMN IF NOT EXISTS leverage NUMERIC DEFAULT 1 CHECK (leverage >= 1);

@@ -96,7 +96,10 @@ export const fetchCryptoPrice = async (coinId) => {
     const response = await fetch(
       `${COINGECKO_BASE_URL}/simple/price?ids=${coinId}&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true`
     );
-    const data = await response.json();
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const text = await response.text();
+    let data;
+    try { data = JSON.parse(text); } catch { throw new Error('Invalid JSON from CoinGecko'); }
 
     if (data[coinId]) {
       const priceData = {
@@ -282,7 +285,10 @@ const searchUSStocks = async (query) => {
 const searchCrypto = async (query) => {
   try {
     const response = await fetch(`${COINGECKO_BASE_URL}/search?query=${query}`);
-    const data = await response.json();
+    if (!response.ok) return [];
+    const text = await response.text();
+    let data;
+    try { data = JSON.parse(text); } catch { return []; }
 
     if (data.coins) {
       return data.coins

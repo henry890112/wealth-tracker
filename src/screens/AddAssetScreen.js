@@ -61,7 +61,7 @@ export default function AddAssetScreen() {
         Alert.alert('請輸入平均成本');
         return;
       }
-      parsedAmount = parsedShares * parsedAvgCost * parsedLeverage;
+      parsedAmount = parsedShares * parsedAvgCost / parsedLeverage;
     } else {
       parsedAmount = parseFloat(amount.replace(/,/g, ''));
       if (isNaN(parsedAmount) || parsedAmount < 0) {
@@ -84,6 +84,7 @@ export default function AddAssetScreen() {
         current_amount: parsedAmount,
         current_shares: isInvestment && shares ? parseFloat(shares) : 0,
         average_cost: isInvestment && avgCost ? parseFloat(avgCost) : 0,
+        leverage: isInvestment ? (parseFloat(leverage) || 1) : 1,
       };
 
       const { data: asset, error } = await supabase.from('assets').insert(payload).select().single();
@@ -239,7 +240,7 @@ export default function AddAssetScreen() {
           {isInvestment && (
             <>
               <View style={[styles.divider, { backgroundColor: colors.borderLight }]} />
-              <Text style={[styles.investHint, { color: colors.textMuted }]}>現值金額將由「股數 × 成本 × 槓桿」自動計算</Text>
+              <Text style={[styles.investHint, { color: colors.textMuted }]}>保證金（現值）＝ 股數 × 成本 ÷ 槓桿</Text>
               <View style={styles.row2}>
                 <View style={[styles.field, { flex: 1 }]}>
                   <Text style={[styles.fieldLabel, { color: colors.textSub }]}>持有股數/數量 *</Text>

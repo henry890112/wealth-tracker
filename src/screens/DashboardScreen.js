@@ -4,9 +4,9 @@ import {
   RefreshControl, ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Wallet, TrendingUp, Home, DollarSign, CreditCard, Plus, RefreshCw } from 'lucide-react-native';
+import { Wallet, TrendingUp, Home, DollarSign, CreditCard, Plus, RefreshCw, Eye, EyeOff } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
-import { convertToBaseCurrency } from '../services/api';
+import { convertToBaseCurrency, fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice } from '../services/api';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../lib/ThemeContext';
 
@@ -46,6 +46,7 @@ export default function DashboardScreen() {
   const [monthlyChange, setMonthlyChange] = useState(null);
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [hidden, setHidden] = useState(false);
 
   const categoryTotals = useMemo(() => {
     const totals = {};
@@ -65,6 +66,53 @@ export default function DashboardScreen() {
   }, [assets, selectedCategory]);
 
   useFocusEffect(useCallback(() => { loadData(); }, []));
+
+  const refreshLivePrices = async (assetsData, baseCurrency) => {
+    const investmentAssets = (assetsData || []).filter(
+      a => a.symbol && a.category === 'investment' && a.current_shares > 0
+    );
+    if (investmentAssets.length === 0) return;
+
+    const updates = await Promise.allSettled(
+      investmentAssets.map(async (asset) => {
+        let priceData = null;
+        if (asset.market_type === 'TW') priceData = await fetchTWStockPrice(asset.symbol);
+        else if (asset.market_type === 'US') priceData = await fetchUSStockPrice(asset.symbol);
+        else if (asset.market_type === 'Crypto') priceData = await fetchCryptoPrice(asset.symbol);
+        if (!priceData?.price) return null;
+
+        const lev = asset.leverage || 1;
+        const borrowed = asset.current_shares * (asset.average_cost || 0) * (lev - 1) / lev;
+        const newAmount = priceData.price * asset.current_shares - borrowed;
+
+        await supabase.from('assets')
+          .update({ current_amount: newAmount, updated_at: new Date().toISOString() })
+          .eq('id', asset.id);
+
+        const convertedAmount = await convertToBaseCurrency(newAmount, asset.currency, baseCurrency);
+        const costBasis = asset.current_shares * (asset.average_cost || 0) / lev;
+        const convertedCost = await convertToBaseCurrency(costBasis, asset.currency, baseCurrency);
+        const pnl = convertedAmount - convertedCost;
+        const pnl_pct = convertedCost > 0 ? (pnl / convertedCost) * 100 : 0;
+        return { id: asset.id, current_amount: newAmount, converted_amount: convertedAmount, pnl, pnl_pct };
+      })
+    );
+
+    const changed = updates
+      .filter(r => r.status === 'fulfilled' && r.value)
+      .map(r => r.value);
+
+    if (changed.length === 0) return;
+
+    const map = Object.fromEntries(changed.map(c => [c.id, c]));
+    setAssets(prev => {
+      const next = prev.map(a => map[a.id] ? { ...a, ...map[a.id] } : a);
+      const total = next.filter(a => a.category !== 'liability').reduce((s, a) => s + a.converted_amount, 0);
+      const liab  = next.filter(a => a.category === 'liability').reduce((s, a) => s + a.converted_amount, 0);
+      setNetWorth(total - liab);
+      return next;
+    });
+  };
 
   const loadData = async () => {
     try {
@@ -86,10 +134,22 @@ export default function DashboardScreen() {
           const convertedAmount = await convertToBaseCurrency(
             parseFloat(asset.current_amount), asset.currency, baseCurrency
           );
-          return { ...asset, converted_amount: convertedAmount };
+          let pnl = null;
+          let pnl_pct = null;
+          if (asset.category === 'investment' && asset.current_shares > 0 && asset.average_cost > 0) {
+            const lev = asset.leverage || 1;
+            const costBasis = asset.current_shares * asset.average_cost / lev;
+            const convertedCost = await convertToBaseCurrency(costBasis, asset.currency, baseCurrency);
+            pnl = convertedAmount - convertedCost;
+            pnl_pct = convertedCost > 0 ? (pnl / convertedCost) * 100 : 0;
+          }
+          return { ...asset, converted_amount: convertedAmount, pnl, pnl_pct };
         })
       );
       setAssets(converted);
+
+      // Background: fetch live prices for investment assets with symbols
+      refreshLivePrices(assetsData, profileData?.base_currency || 'TWD');
 
       const assetsTotal = converted
         .filter(a => a.category !== 'liability')
@@ -131,6 +191,7 @@ export default function DashboardScreen() {
 
   const currency = profile?.base_currency || 'TWD';
   const fmt = (v) => formatAmount(v);
+  const mask = (v) => hidden ? '****' : fmt(v);
 
   if (loading) {
     return (
@@ -152,7 +213,15 @@ export default function DashboardScreen() {
         {/* Hero */}
         <View style={[styles.hero, { backgroundColor: colors.card }]}>
           <View style={styles.heroHeader}>
-            <Text style={[styles.heroLabel, { color: colors.textMuted }]}>淨資產總覽（{currency}）</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={[styles.heroLabel, { color: colors.textMuted }]}>淨資產總覽（{currency}）</Text>
+              <TouchableOpacity onPress={() => setHidden(h => !h)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                {hidden
+                  ? <EyeOff size={16} color={colors.textMuted} />
+                  : <Eye size={16} color={colors.textMuted} />
+                }
+              </TouchableOpacity>
+            </View>
             <TouchableOpacity
               style={styles.addBtn}
               onPress={() => navigation.navigate('AddAsset')}
@@ -162,11 +231,11 @@ export default function DashboardScreen() {
             </TouchableOpacity>
           </View>
           <Text style={[styles.heroAmount, netWorth < 0 && { color: '#ef4444' }]}>
-            {fmt(netWorth)}
+            {mask(netWorth)}
           </Text>
           {monthlyChange !== null && (
             <Text style={[styles.heroChange, monthlyChange >= 0 ? styles.posText : styles.negText]}>
-              {monthlyChange >= 0 ? '▲' : '▼'} {fmt(Math.abs(monthlyChange))} 本月
+              {monthlyChange >= 0 ? '▲' : '▼'} {hidden ? '****' : fmt(Math.abs(monthlyChange))} 本月
             </Text>
           )}
         </View>
@@ -194,7 +263,7 @@ export default function DashboardScreen() {
                     <Text style={[styles.cardCount, { color: colors.textMuted }]}>{d.count} 項</Text>
                   </View>
                   <Text style={[styles.cardLabel, { color: colors.textMuted }]}>{cfg.label}</Text>
-                  <Text style={[styles.cardAmount, { color: colors.text }]} numberOfLines={1}>{fmt(d.total)}</Text>
+                  <Text style={[styles.cardAmount, { color: colors.text }]} numberOfLines={1}>{mask(d.total)}</Text>
                 </TouchableOpacity>
               );
             })}
@@ -220,7 +289,7 @@ export default function DashboardScreen() {
                   <Text style={[styles.cardLabel, { color: colors.textMuted }]}>{cfg.label}</Text>
                   <Text style={[styles.cardCount, { color: colors.textMuted }]}>{d.count} 項</Text>
                 </View>
-                <Text style={[styles.cardAmount, { color: d.total > 0 ? '#ef4444' : colors.textMuted }]}>{fmt(d.total)}</Text>
+                <Text style={[styles.cardAmount, { color: d.total > 0 ? '#ef4444' : colors.textMuted }]}>{mask(d.total)}</Text>
               </TouchableOpacity>
             );
           })()}
@@ -261,7 +330,19 @@ export default function DashboardScreen() {
                   <Text style={[styles.assetMeta, { color: colors.textMuted }]}>{asset.currency}</Text>
                 </View>
                 <View style={{ alignItems: 'flex-end' }}>
-                  <Text style={[styles.assetAmount, { color: colors.text }]}>{fmt(asset.converted_amount)}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    {asset.leverage > 1 && (
+                      <Text style={{ fontSize: 11, color: '#f59e0b', fontWeight: '700', backgroundColor: '#fef3c7', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 }}>
+                        {asset.leverage}x
+                      </Text>
+                    )}
+                    <Text style={[styles.assetAmount, { color: colors.text }]}>{mask(asset.converted_amount)}</Text>
+                  </View>
+                  {asset.pnl !== null && (
+                    <Text style={{ fontSize: 11, fontWeight: '600', color: asset.pnl >= 0 ? '#16a34a' : '#ef4444' }}>
+                      {hidden ? '****' : `${asset.pnl >= 0 ? '+' : ''}${fmt(asset.pnl)}  (${asset.pnl >= 0 ? '+' : ''}${asset.pnl_pct.toFixed(1)}%)`}
+                    </Text>
+                  )}
                   {asset.current_shares > 0 && (
                     <Text style={[styles.assetShares, { color: colors.textMuted }]}>{asset.current_shares.toLocaleString()} 股</Text>
                   )}
@@ -276,7 +357,7 @@ export default function DashboardScreen() {
                   <View style={[styles.groupHeader, { backgroundColor: colors.card }]}>
                     <View style={[styles.groupDot, { backgroundColor: color }]} />
                     <Text style={[styles.groupLabel, { color }]}>{label}</Text>
-                    <Text style={[styles.groupTotal, { color: colors.textSub }]}>{fmt(total)}</Text>
+                    <Text style={[styles.groupTotal, { color: colors.textSub }]}>{mask(total)}</Text>
                   </View>
                   <View style={[styles.assetList, { backgroundColor: colors.card }]}>
                     {renderAssetRows(list)}
