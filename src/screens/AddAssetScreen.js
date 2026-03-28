@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView,
   KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
+  TouchableWithoutFeedback, Keyboard,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
@@ -37,6 +38,7 @@ export default function AddAssetScreen() {
   const [amount, setAmount] = useState('');
   const [shares, setShares] = useState('');
   const [avgCost, setAvgCost] = useState('');
+  const [leverage, setLeverage] = useState('');
   const [saving, setSaving] = useState(false);
 
   const isInvestment = selectedCategory === 'investment';
@@ -46,10 +48,26 @@ export default function AddAssetScreen() {
       Alert.alert('請填寫名稱');
       return;
     }
-    const parsedAmount = parseFloat(amount.replace(/,/g, ''));
-    if (isNaN(parsedAmount) || parsedAmount < 0) {
-      Alert.alert('請輸入正確的金額');
-      return;
+    let parsedAmount;
+    if (isInvestment) {
+      const parsedShares = parseFloat(shares);
+      const parsedAvgCost = parseFloat(avgCost);
+      const parsedLeverage = parseFloat(leverage) || 1;
+      if (!shares || isNaN(parsedShares) || parsedShares <= 0) {
+        Alert.alert('請輸入持有股數');
+        return;
+      }
+      if (!avgCost || isNaN(parsedAvgCost) || parsedAvgCost <= 0) {
+        Alert.alert('請輸入平均成本');
+        return;
+      }
+      parsedAmount = parsedShares * parsedAvgCost * parsedLeverage;
+    } else {
+      parsedAmount = parseFloat(amount.replace(/,/g, ''));
+      if (isNaN(parsedAmount) || parsedAmount < 0) {
+        Alert.alert('請輸入正確的金額');
+        return;
+      }
     }
 
     setSaving(true);
@@ -99,6 +117,7 @@ export default function AddAssetScreen() {
   const cat = CATEGORIES.find(c => c.key === selectedCategory);
 
   return (
+    <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: colors.bg }}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -196,32 +215,34 @@ export default function AddAssetScreen() {
             </View>
           </View>
 
-          {/* Amount */}
-          <View style={styles.field}>
-            <Text style={[styles.fieldLabel, { color: colors.textSub }]}>
-              {isInvestment ? '現值金額' : selectedCategory === 'liability' ? '負債金額' : '資產金額'} *
-            </Text>
-            <View style={styles.inputRow}>
-              <Text style={[styles.currencyPrefix, { color: colors.textSub }]}>{currency}</Text>
-              <TextInput
-                style={[styles.input, { flex: 1, marginBottom: 0, backgroundColor: colors.input, borderColor: colors.inputBorder, color: colors.text }]}
-                value={amount}
-                onChangeText={setAmount}
-                placeholder="0"
-                placeholderTextColor="#cbd5e1"
-                keyboardType="decimal-pad"
-              />
+          {/* Amount — only for non-investment */}
+          {!isInvestment && (
+            <View style={styles.field}>
+              <Text style={[styles.fieldLabel, { color: colors.textSub }]}>
+                {selectedCategory === 'liability' ? '負債金額' : '資產金額'} *
+              </Text>
+              <View style={styles.inputRow}>
+                <Text style={[styles.currencyPrefix, { color: colors.textSub }]}>{currency}</Text>
+                <TextInput
+                  style={[styles.input, { flex: 1, marginBottom: 0, backgroundColor: colors.input, borderColor: colors.inputBorder, color: colors.text }]}
+                  value={amount}
+                  onChangeText={setAmount}
+                  placeholder="0"
+                  placeholderTextColor="#cbd5e1"
+                  keyboardType="decimal-pad"
+                />
+              </View>
             </View>
-          </View>
+          )}
 
           {/* Investment-only fields */}
           {isInvestment && (
             <>
               <View style={[styles.divider, { backgroundColor: colors.borderLight }]} />
-              <Text style={[styles.investHint, { color: colors.textMuted }]}>投資詳細（選填，用於計算損益）</Text>
+              <Text style={[styles.investHint, { color: colors.textMuted }]}>現值金額將由「股數 × 成本 × 槓桿」自動計算</Text>
               <View style={styles.row2}>
                 <View style={[styles.field, { flex: 1 }]}>
-                  <Text style={[styles.fieldLabel, { color: colors.textSub }]}>持有股數/數量</Text>
+                  <Text style={[styles.fieldLabel, { color: colors.textSub }]}>持有股數/數量 *</Text>
                   <TextInput
                     style={[styles.input, { backgroundColor: colors.input, borderColor: colors.inputBorder, color: colors.text }]}
                     value={shares}
@@ -233,7 +254,7 @@ export default function AddAssetScreen() {
                 </View>
                 <View style={{ width: 12 }} />
                 <View style={[styles.field, { flex: 1 }]}>
-                  <Text style={[styles.fieldLabel, { color: colors.textSub }]}>平均成本</Text>
+                  <Text style={[styles.fieldLabel, { color: colors.textSub }]}>平均成本 *</Text>
                   <TextInput
                     style={[styles.input, { backgroundColor: colors.input, borderColor: colors.inputBorder, color: colors.text }]}
                     value={avgCost}
@@ -243,6 +264,17 @@ export default function AddAssetScreen() {
                     keyboardType="decimal-pad"
                   />
                 </View>
+              </View>
+              <View style={styles.field}>
+                <Text style={[styles.fieldLabel, { color: colors.textSub }]}>槓桿倍數（預設 1x）</Text>
+                <TextInput
+                  style={[styles.input, { backgroundColor: colors.input, borderColor: colors.inputBorder, color: colors.text }]}
+                  value={leverage}
+                  onChangeText={setLeverage}
+                  placeholder="1"
+                  placeholderTextColor="#cbd5e1"
+                  keyboardType="decimal-pad"
+                />
               </View>
             </>
           )}
@@ -262,6 +294,7 @@ export default function AddAssetScreen() {
         </TouchableOpacity>
       </ScrollView>
     </KeyboardAvoidingView>
+    </TouchableWithoutFeedback>
   );
 }
 
@@ -286,9 +319,9 @@ const styles = StyleSheet.create({
 
   sectionLabel: { fontSize: 13, fontWeight: '600', marginHorizontal: 16, marginTop: 16, marginBottom: 8 },
 
-  catGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 12, gap: 8, marginBottom: 4 },
+  catGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', paddingHorizontal: 12, rowGap: 8, marginBottom: 4 },
   catCard: {
-    width: '46%', borderRadius: 12, padding: 12,
+    width: '48.5%', borderRadius: 12, padding: 12,
     borderWidth: 2, borderColor: 'transparent',
     shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 1,
   },

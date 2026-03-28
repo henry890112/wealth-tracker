@@ -316,9 +316,9 @@ const styles = StyleSheet.create({
   negText: { color: '#ef4444' },
 
   gridWrap: { marginHorizontal: 16, marginBottom: 4 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 10 },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 10, marginBottom: 10 },
   card: {
-    width: '47.5%',
+    width: '48.5%',
     borderRadius: 12,
     padding: 14,
     shadowColor: '#000',

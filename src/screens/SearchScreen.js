@@ -11,6 +11,8 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  Keyboard,
+  TouchableWithoutFeedback,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -73,6 +75,7 @@ export default function SearchScreen() {
   const [chartVisible, setChartVisible] = useState(false);
   const [chartAsset, setChartAsset] = useState(null);
   const debounceRef = useRef(null);
+  const priceInputRef = useRef(null);
 
   useEffect(() => {
     loadHotPrices();
@@ -291,6 +294,7 @@ export default function SearchScreen() {
   };
 
   return (
+    <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
     <KeyboardAvoidingView
       style={[styles.container, { backgroundColor: colors.bg }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -382,7 +386,11 @@ export default function SearchScreen() {
 
       {/* Add Asset Modal */}
       <Modal visible={modalVisible} animationType="slide" transparent onRequestClose={() => setModalVisible(false)}>
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
           <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
             <View style={styles.modalHeader}>
               <Text style={[styles.modalTitle, { color: colors.text }]}>新增資產</Text>
@@ -418,15 +426,21 @@ export default function SearchScreen() {
                   value={shares}
                   onChangeText={setShares}
                   keyboardType="decimal-pad"
+                  returnKeyType="next"
+                  onSubmitEditing={() => priceInputRef.current?.focus()}
+                  blurOnSubmit={false}
                 />
                 <Text style={[styles.label, { color: colors.text }]}>價格</Text>
                 <TextInput
+                  ref={priceInputRef}
                   style={[styles.input, { backgroundColor: colors.input, borderColor: colors.inputBorder, color: colors.text }]}
                   placeholder="輸入價格"
                   placeholderTextColor={colors.textMuted}
                   value={price}
                   onChangeText={setPrice}
                   keyboardType="decimal-pad"
+                  returnKeyType="done"
+                  onSubmitEditing={Keyboard.dismiss}
                 />
                 {shares && price && (
                   <Text style={styles.totalText}>
@@ -440,7 +454,8 @@ export default function SearchScreen() {
               </>
             )}
           </View>
-        </View>
+          </TouchableWithoutFeedback>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Chart Modal */}
@@ -474,6 +489,7 @@ export default function SearchScreen() {
         </View>
       </Modal>
     </KeyboardAvoidingView>
+    </TouchableWithoutFeedback>
   );
 }
 
