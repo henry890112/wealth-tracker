@@ -11,7 +11,7 @@ import {
   Platform,
 } from 'react-native';
 import { LogOut, Globe, RefreshCw, Sun, Moon, Smartphone, Download, Upload, CloudUpload } from 'lucide-react-native';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
 import { supabase } from '../lib/supabase';
@@ -95,10 +95,11 @@ export default function SettingsScreen() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const [{ data: assets }, { data: transactions }] = await Promise.all([
-        supabase.from('assets').select('*').eq('user_id', user.id).order('created_at'),
-        supabase.from('transactions').select('*, assets(name, symbol)').eq('user_id', user.id).order('trans_date', { ascending: false }),
-      ]);
+      const { data: assets } = await supabase.from('assets').select('*').eq('user_id', user.id).order('created_at');
+      const { data: transactions } = await supabase
+        .from('transactions').select('*, assets(name, symbol, currency)')
+        .in('asset_id', (assets || []).map(a => a.id))
+        .order('trans_date', { ascending: false });
 
       const assetCsv = [
         '名稱,代碼,類別,市場,持有股數,均價,現值,幣別,建立日期',
@@ -134,11 +135,15 @@ export default function SettingsScreen() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const [{ data: assets }, { data: transactions }, { data: snapshots }] = await Promise.all([
+      const [{ data: assets }, { data: snapshots }] = await Promise.all([
         supabase.from('assets').select('*').eq('user_id', user.id),
-        supabase.from('transactions').select('*').eq('user_id', user.id),
         supabase.from('daily_snapshots').select('*').eq('user_id', user.id).order('snapshot_date', { ascending: false }).limit(180),
       ]);
+      // transactions 沒有 user_id，透過 asset_id 間接查詢
+      const assetIds = (assets || []).map(a => a.id);
+      const { data: transactions } = assetIds.length
+        ? await supabase.from('transactions').select('*').in('asset_id', assetIds)
+        : { data: [] };
 
       const backup = { version: 1, exported_at: new Date().toISOString(), assets, transactions, snapshots };
       const filename = `WealthTracker_backup_${new Date().toISOString().slice(0, 10)}.json`;
@@ -175,9 +180,8 @@ export default function SettingsScreen() {
               const { data: { user } } = await supabase.auth.getUser();
               if (!user) return;
 
-              // Delete existing data then restore
+              // Delete existing data (assets 刪除會 cascade 刪 transactions)
               await supabase.from('daily_snapshots').delete().eq('user_id', user.id);
-              await supabase.from('transactions').delete().eq('user_id', user.id);
               await supabase.from('assets').delete().eq('user_id', user.id);
 
               if (backup.assets?.length) {
@@ -185,7 +189,8 @@ export default function SettingsScreen() {
                 await supabase.from('assets').insert(toInsert);
               }
               if (backup.transactions?.length) {
-                const toInsert = backup.transactions.map(t => ({ ...t, user_id: user.id }));
+                // transactions 沒有 user_id 欄位，只有 asset_id
+                const toInsert = backup.transactions.map(({ user_id: _drop, ...t }) => t);
                 await supabase.from('transactions').insert(toInsert);
               }
               if (backup.snapshots?.length) {
