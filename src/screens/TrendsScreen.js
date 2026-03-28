@@ -1,12 +1,13 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, Dimensions, ActivityIndicator,
   TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Alert,
 } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
 import { BlurView } from 'expo-blur';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { Path, Circle, Text as SvgText } from 'react-native-svg';
 import { X, Calendar } from 'lucide-react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../lib/supabase';
 import { convertToBaseCurrency } from '../services/api';
 import { useTheme } from '../lib/ThemeContext';
@@ -29,6 +30,15 @@ const CATEGORY_CONFIG = {
   receivable: { label: '應收款項', color: '#0d9488' },
 };
 
+const MARKET_TYPE_CONFIG = {
+  TW:     { label: '台股', color: '#e11d48' },
+  US:     { label: '美股', color: '#2563eb' },
+  Crypto: { label: '虛幣', color: '#f59e0b' },
+  other:  { label: '其他', color: '#94a3b8' },
+};
+
+const DRILL_PALETTE = ['#6366f1', '#ec4899', '#14b8a6', '#f97316', '#8b5cf6', '#06b6d4'];
+
 const formatAmount = (amount) => {
   return Math.round(amount).toLocaleString('zh-TW');
 };
@@ -40,28 +50,91 @@ const isValidDate = (str) => {
   return !isNaN(d.getTime());
 };
 
-function DonutChart({ data, size = 160, strokeWidth = 30 }) {
+function DonutChart({ data, size = 180, strokeWidth = 28, selectedIndex, onSelect }) {
   const total = data.reduce((s, d) => s + d.value, 0);
   if (total === 0) return null;
-  const radius = (size - strokeWidth) / 2;
+  const SELECTED_EXTRA = 6;
+  const radius = (size - strokeWidth - SELECTED_EXTRA) / 2;
   const cx = size / 2;
   const cy = size / 2;
+  const sel = selectedIndex != null ? data[selectedIndex] : null;
+
+  // Single item: draw a full circle instead of an arc
+  if (data.length === 1) {
+    const isSelected = selectedIndex === 0;
+    const sw = isSelected ? strokeWidth + SELECTED_EXTRA : strokeWidth;
+    return (
+      <Svg width={size} height={size}>
+        <Circle
+          cx={cx} cy={cy} r={radius}
+          fill="none"
+          stroke={data[0].color}
+          strokeWidth={sw}
+          onPress={() => onSelect(isSelected ? null : 0)}
+        />
+        {sel ? (
+          <>
+            <SvgText x={cx} y={cy - 6} textAnchor="middle" fill={sel.color} fontSize="18" fontWeight="bold">100%</SvgText>
+            <SvgText x={cx} y={cy + 12} textAnchor="middle" fill="#94a3b8" fontSize="10">{sel.label}</SvgText>
+          </>
+        ) : (
+          <SvgText x={cx} y={cy + 5} textAnchor="middle" fill="#94a3b8" fontSize="12">資產配置</SvgText>
+        )}
+      </Svg>
+    );
+  }
+
+  const GAP = 0.03;
   let angle = -Math.PI / 2;
-  const arcs = data.map(item => {
-    const a = (item.value / total) * 2 * Math.PI * 0.99;
+
+  const arcs = data.map((item) => {
+    const fraction = item.value / total;
+    const sweep = fraction * 2 * Math.PI - GAP;
     const x1 = cx + radius * Math.cos(angle);
     const y1 = cy + radius * Math.sin(angle);
-    angle += a;
+    angle += sweep;
     const x2 = cx + radius * Math.cos(angle);
     const y2 = cy + radius * Math.sin(angle);
-    angle += 2 * Math.PI * 0.01;
-    return { d: `M ${x1} ${y1} A ${radius} ${radius} 0 ${a > Math.PI ? 1 : 0} 1 ${x2} ${y2}`, color: item.color };
+    angle += GAP;
+    return {
+      d: `M ${x1} ${y1} A ${radius} ${radius} 0 ${sweep > Math.PI ? 1 : 0} 1 ${x2} ${y2}`,
+      color: item.color,
+      pct: (fraction * 100).toFixed(1),
+    };
   });
+
   return (
     <Svg width={size} height={size}>
-      {arcs.map((arc, i) => (
-        <Path key={i} d={arc.d} fill="none" stroke={arc.color} strokeWidth={strokeWidth} strokeLinecap="round" />
-      ))}
+      {arcs.map((arc, i) => {
+        const isSelected = selectedIndex === i;
+        const dimmed = selectedIndex != null && !isSelected;
+        return (
+          <Path
+            key={i}
+            d={arc.d}
+            fill="none"
+            stroke={arc.color}
+            strokeWidth={isSelected ? strokeWidth + SELECTED_EXTRA : strokeWidth}
+            strokeLinecap="butt"
+            opacity={dimmed ? 0.25 : 1}
+            onPress={() => onSelect(isSelected ? null : i)}
+          />
+        );
+      })}
+      {sel ? (
+        <>
+          <SvgText x={cx} y={cy - 6} textAnchor="middle" fill={sel.color} fontSize="18" fontWeight="bold">
+            {arcs[selectedIndex].pct}%
+          </SvgText>
+          <SvgText x={cx} y={cy + 12} textAnchor="middle" fill="#94a3b8" fontSize="10">
+            {sel.label}
+          </SvgText>
+        </>
+      ) : (
+        <SvgText x={cx} y={cy + 5} textAnchor="middle" fill="#94a3b8" fontSize="12">
+          資產配置
+        </SvgText>
+      )}
     </Svg>
   );
 }
@@ -74,6 +147,9 @@ export default function TrendsScreen() {
   const [profile, setProfile] = useState(null);
   const [categoryTotals, setCategoryTotals] = useState([]);
   const [userId, setUserId] = useState(null);
+  const [selectedDonutIndex, setSelectedDonutIndex] = useState(null);
+  const [drilldownCategory, setDrilldownCategory] = useState(null);
+  const [detailedAssets, setDetailedAssets] = useState([]);
 
   const [selectedPeriod, setSelectedPeriod] = useState(PERIODS[2]); // default 90d
   const [customRange, setCustomRange] = useState(null); // { start, end } strings
@@ -83,7 +159,7 @@ export default function TrendsScreen() {
   const [inputStart, setInputStart] = useState('');
   const [inputEnd, setInputEnd] = useState('');
 
-  useEffect(() => { loadData(); }, []);
+  useFocusEffect(useCallback(() => { loadData(); }, []));
 
   const loadSnapshots = useCallback(async (uid, days, range) => {
     setSnapshotLoading(true);
@@ -121,22 +197,28 @@ export default function TrendsScreen() {
       await loadSnapshots(user.id, PERIODS[2].days, null);
 
       const { data: assetsData } = await supabase
-        .from('assets').select('category, current_amount, currency')
+        .from('assets').select('id, name, category, current_amount, currency, market_type')
         .eq('user_id', user.id);
 
       if (assetsData) {
         const baseCurrency = profileData?.base_currency || 'TWD';
-        const catSums = {};
-        await Promise.all(
+        const converted = await Promise.all(
           assetsData.filter(a => a.category !== 'liability').map(async (a) => {
-            const amt = await convertToBaseCurrency(parseFloat(a.current_amount), a.currency, baseCurrency);
-            catSums[a.category] = (catSums[a.category] || 0) + amt;
+            const converted_amount = await convertToBaseCurrency(parseFloat(a.current_amount), a.currency, baseCurrency);
+            return { ...a, converted_amount };
           })
         );
+        setDetailedAssets(converted);
+
+        const catSums = {};
+        converted.forEach(a => {
+          catSums[a.category] = (catSums[a.category] || 0) + a.converted_amount;
+        });
         setCategoryTotals(
           Object.entries(catSums)
             .filter(([, v]) => v > 0)
             .map(([cat, value]) => ({
+              key: cat,
               label: CATEGORY_CONFIG[cat]?.label || cat,
               value,
               color: CATEGORY_CONFIG[cat]?.color || '#888',
@@ -239,7 +321,39 @@ export default function TrendsScreen() {
     ? `${customRange.start} ~ ${customRange.end}`
     : selectedPeriod.label;
 
-  const donutTotal = categoryTotals.reduce((s, d) => s + d.value, 0);
+  const getDrilldownData = (category) => {
+    const catAssets = detailedAssets.filter(a => a.category === category);
+    if (category === 'investment') {
+      const groups = {};
+      catAssets.forEach(a => {
+        const mt = a.market_type || 'other';
+        groups[mt] = (groups[mt] || 0) + a.converted_amount;
+      });
+      return Object.entries(groups)
+        .filter(([, v]) => v > 0)
+        .map(([mt, value]) => ({
+          key: mt,
+          label: MARKET_TYPE_CONFIG[mt]?.label || mt,
+          value,
+          color: MARKET_TYPE_CONFIG[mt]?.color || '#94a3b8',
+        }));
+    }
+    return catAssets
+      .filter(a => a.converted_amount > 0)
+      .sort((a, b) => b.converted_amount - a.converted_amount)
+      .slice(0, 6)
+      .map((a, i) => ({
+        key: a.id,
+        label: a.name,
+        value: a.converted_amount,
+        color: DRILL_PALETTE[i % DRILL_PALETTE.length],
+      }));
+  };
+
+  const currentDonutData = drilldownCategory
+    ? getDrilldownData(drilldownCategory)
+    : categoryTotals;
+  const donutTotal = currentDonutData.reduce((s, d) => s + d.value, 0);
   const { data: chartData, baseline: chartBaseline } = getChartData();
 
   return (
@@ -325,23 +439,68 @@ export default function TrendsScreen() {
         {/* Asset allocation */}
         {categoryTotals.length > 0 && (
           <View style={[styles.card, { backgroundColor: colors.card }]}>
-            <Text style={[styles.cardTitle, { color: colors.text }]}>資產配置</Text>
-            <View style={styles.donutRow}>
-              <DonutChart data={categoryTotals} size={120} strokeWidth={22} />
-              <View style={styles.legend}>
-                {categoryTotals.map((item, i) => (
-                  <View key={i} style={styles.legendItem}>
+            <View style={styles.cardHeader}>
+              <Text style={[styles.cardTitle, { color: colors.text }]}>
+                {drilldownCategory ? CATEGORY_CONFIG[drilldownCategory]?.label : '資產配置'}
+              </Text>
+              {drilldownCategory && (
+                <TouchableOpacity
+                  onPress={() => { setDrilldownCategory(null); setSelectedDonutIndex(null); }}
+                  style={[styles.backBtn, { backgroundColor: colors.bg }]}
+                >
+                  <Text style={[styles.backBtnText, { color: colors.textSub }]}>← 返回</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            <View style={styles.donutCenter}>
+              <DonutChart
+                data={currentDonutData}
+                size={180}
+                strokeWidth={28}
+                selectedIndex={selectedDonutIndex}
+                onSelect={(i) => {
+                  if (!drilldownCategory && i != null) {
+                    // drill into category
+                    setDrilldownCategory(currentDonutData[i].key);
+                    setSelectedDonutIndex(null);
+                  } else {
+                    setSelectedDonutIndex(i);
+                  }
+                }}
+              />
+            </View>
+            <View style={styles.legend}>
+              {currentDonutData.map((item, i) => {
+                const pct = donutTotal > 0 ? (item.value / donutTotal) * 100 : 0;
+                const isSelected = selectedDonutIndex === i;
+                return (
+                  <TouchableOpacity
+                    key={item.key ?? i}
+                    onPress={() => {
+                      if (!drilldownCategory) {
+                        setDrilldownCategory(item.key);
+                        setSelectedDonutIndex(null);
+                      } else {
+                        setSelectedDonutIndex(isSelected ? null : i);
+                      }
+                    }}
+                    activeOpacity={0.7}
+                    style={[styles.legendItem, { backgroundColor: colors.bg }, isSelected && { backgroundColor: `${item.color}14` }]}
+                  >
                     <View style={[styles.legendDot, { backgroundColor: item.color }]} />
-                    <View>
-                      <Text style={[styles.legendLabel, { color: colors.textSub }]}>{item.label}</Text>
+                    <View style={{ flex: 1 }}>
+                      <View style={styles.legendTopRow}>
+                        <Text style={[styles.legendLabel, { color: colors.textSub }]}>{item.label}</Text>
+                        <Text style={[styles.legendPct, { color: item.color, fontWeight: '700' }]}>{pct.toFixed(1)}%</Text>
+                      </View>
+                      <View style={[styles.barBg, { backgroundColor: colors.borderLight }]}>
+                        <View style={[styles.barFill, { width: `${pct}%`, backgroundColor: item.color }]} />
+                      </View>
                       <Text style={[styles.legendValue, { color: colors.text }]}>{fmt(item.value)}</Text>
-                      <Text style={[styles.legendPct, { color: colors.textMuted }]}>
-                        {donutTotal > 0 ? ((item.value / donutTotal) * 100).toFixed(1) : 0}%
-                      </Text>
                     </View>
-                  </View>
-                ))}
-              </View>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           </View>
         )}
@@ -468,13 +627,18 @@ const styles = StyleSheet.create({
   posText: { color: PRIMARY },
   negText: { color: '#ef4444' },
 
-  donutRow: { flexDirection: 'row', alignItems: 'center', gap: 20, marginTop: 8 },
-  legend: { flex: 1, gap: 12 },
-  legendItem: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  legendDot: { width: 10, height: 10, borderRadius: 5, marginTop: 3 },
-  legendLabel: { fontSize: 12 },
-  legendValue: { fontSize: 14, fontWeight: '700' },
-  legendPct: { fontSize: 11 },
+  backBtn: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
+  backBtnText: { fontSize: 13, fontWeight: '500' },
+  donutCenter: { alignItems: 'center', marginTop: 4, marginBottom: 16 },
+  legend: { gap: 8 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 12, padding: 10 },
+  legendDot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
+  legendTopRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 },
+  legendLabel: { fontSize: 13 },
+  legendPct: { fontSize: 13 },
+  legendValue: { fontSize: 13, fontWeight: '600', marginTop: 4 },
+  barBg: { height: 4, borderRadius: 2, overflow: 'hidden' },
+  barFill: { height: 4, borderRadius: 2 },
 
   // ── Custom date modal ──
   modalOverlay: {

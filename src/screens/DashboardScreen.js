@@ -22,6 +22,13 @@ const CATEGORY_CONFIG = {
 
 const ASSET_CATEGORIES = ['liquid', 'investment', 'fixed', 'receivable'];
 
+const MARKET_TYPE_CONFIG = {
+  TW:     { label: '台股', color: '#e11d48' },
+  US:     { label: '美股', color: '#2563eb' },
+  Crypto: { label: '虛幣', color: '#f59e0b' },
+  other:  { label: '其他', color: '#94a3b8' },
+};
+
 const formatAmount = (amount) => {
   return Math.round(amount).toLocaleString('zh-TW');
 };
@@ -241,35 +248,79 @@ export default function DashboardScreen() {
 
         {/* Asset list */}
         {filteredAssets.length > 0 ? (
-          <View style={[styles.assetList, { backgroundColor: colors.card }]}>
-            {filteredAssets.map((asset, idx) => (
+          (() => {
+            const renderAssetRows = (list) => list.map((asset, idx) => (
               <TouchableOpacity
                 key={asset.id}
-                style={[
-                  styles.assetRow,
-                  { borderBottomColor: colors.borderLight },
-                  idx === filteredAssets.length - 1 && { borderBottomWidth: 0 },
-                ]}
+                style={[styles.assetRow, { borderBottomColor: colors.borderLight }, idx === list.length - 1 && { borderBottomWidth: 0 }]}
                 onPress={() => navigation.navigate('AssetDetail', { assetId: asset.id })}
                 activeOpacity={0.7}
               >
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.assetName, { color: colors.text }]}>{asset.name}</Text>
-                  <Text style={[styles.assetMeta, { color: colors.textMuted }]}>
-                    {CATEGORY_CONFIG[asset.category]?.label} · {asset.currency}
-                  </Text>
+                  <Text style={[styles.assetMeta, { color: colors.textMuted }]}>{asset.currency}</Text>
                 </View>
                 <View style={{ alignItems: 'flex-end' }}>
                   <Text style={[styles.assetAmount, { color: colors.text }]}>{fmt(asset.converted_amount)}</Text>
                   {asset.current_shares > 0 && (
-                    <Text style={[styles.assetShares, { color: colors.textMuted }]}>
-                      {asset.current_shares.toLocaleString()} 股
-                    </Text>
+                    <Text style={[styles.assetShares, { color: colors.textMuted }]}>{asset.current_shares.toLocaleString()} 股</Text>
                   )}
                 </View>
               </TouchableOpacity>
-            ))}
-          </View>
+            ));
+
+            const renderGroup = (key, label, color, list) => {
+              const total = list.reduce((s, a) => s + a.converted_amount, 0);
+              return (
+                <View key={key} style={{ marginBottom: 8 }}>
+                  <View style={[styles.groupHeader, { backgroundColor: colors.card }]}>
+                    <View style={[styles.groupDot, { backgroundColor: color }]} />
+                    <Text style={[styles.groupLabel, { color }]}>{label}</Text>
+                    <Text style={[styles.groupTotal, { color: colors.textSub }]}>{fmt(total)}</Text>
+                  </View>
+                  <View style={[styles.assetList, { backgroundColor: colors.card }]}>
+                    {renderAssetRows(list)}
+                  </View>
+                </View>
+              );
+            };
+
+            // No filter: group by category
+            if (!selectedCategory) {
+              const CAT_ORDER = ['liquid', 'investment', 'fixed', 'receivable', 'liability'];
+              const groups = {};
+              filteredAssets.forEach(a => {
+                if (!groups[a.category]) groups[a.category] = [];
+                groups[a.category].push(a);
+              });
+              return CAT_ORDER.filter(c => groups[c]).map(cat => {
+                const cfg = CATEGORY_CONFIG[cat];
+                return renderGroup(cat, cfg.label, cfg.color, groups[cat]);
+              });
+            }
+
+            // Investment selected: group by market_type
+            if (selectedCategory === 'investment') {
+              const MT_ORDER = ['TW', 'US', 'Crypto', 'other'];
+              const groups = {};
+              filteredAssets.forEach(a => {
+                const mt = a.market_type || 'other';
+                if (!groups[mt]) groups[mt] = [];
+                groups[mt].push(a);
+              });
+              return MT_ORDER.filter(mt => groups[mt]).map(mt => {
+                const cfg = MARKET_TYPE_CONFIG[mt];
+                return renderGroup(mt, cfg.label, cfg.color, groups[mt]);
+              });
+            }
+
+            // Other single category: flat list
+            return (
+              <View style={[styles.assetList, { backgroundColor: colors.card }]}>
+                {renderAssetRows(filteredAssets)}
+              </View>
+            );
+          })()
         ) : (
           <View style={styles.empty}>
             <Text style={[styles.emptyText, { color: colors.textSub }]}>尚無資產</Text>
@@ -375,8 +426,18 @@ const styles = StyleSheet.create({
     marginHorizontal: 20, marginTop: 10, marginBottom: 4,
   },
 
+  groupHeader: {
+    flexDirection: 'row', alignItems: 'center',
+    marginHorizontal: 16, marginTop: 8, marginBottom: 4,
+    paddingHorizontal: 14, paddingVertical: 8,
+    borderRadius: 10, gap: 6,
+  },
+  groupDot: { width: 8, height: 8, borderRadius: 4 },
+  groupLabel: { fontSize: 13, fontWeight: '700', flex: 1 },
+  groupTotal: { fontSize: 13, fontWeight: '500' },
+
   assetList: {
-    marginHorizontal: 16, marginTop: 8,
+    marginHorizontal: 16, marginTop: 0,
     borderRadius: 12, overflow: 'hidden',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },

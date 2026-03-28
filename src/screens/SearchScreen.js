@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
   Text,
@@ -63,6 +64,7 @@ export default function SearchScreen() {
   const [category, setCategory] = useState('investment');
   const [shares, setShares] = useState('');
   const [price, setPrice] = useState('');
+  const [leverage, setLeverage] = useState('');
   const [adding, setAdding] = useState(false);
   const [hotAssetList, setHotAssetList] = useState([]);
   const [hotPrices, setHotPrices] = useState({});
@@ -73,10 +75,9 @@ export default function SearchScreen() {
   const [chartAsset, setChartAsset] = useState(null);
   const debounceRef = useRef(null);
   const priceInputRef = useRef(null);
+  const leverageInputRef = useRef(null);
 
-  useEffect(() => {
-    loadHotPrices();
-  }, []);
+  useFocusEffect(useCallback(() => { loadHotPrices(); }, []));
 
   const loadHotPrices = async () => {
     setHotLoading(true);
@@ -152,7 +153,8 @@ export default function SearchScreen() {
 
       const sharesNum = parseFloat(shares);
       const priceNum = parseFloat(price);
-      const totalAmount = sharesNum * priceNum;
+      const leverageNum = parseFloat(leverage) || 1;
+      const totalAmount = sharesNum * priceNum * leverageNum;
 
       let currency = 'TWD';
       if (selectedAsset.market_type === 'US') currency = 'USD';
@@ -192,6 +194,7 @@ export default function SearchScreen() {
       setSelectedAsset(null);
       setShares('');
       setPrice('');
+      setLeverage('');
       setQuery('');
       setResults([]);
     } catch (error) {
@@ -418,7 +421,7 @@ export default function SearchScreen() {
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
-                <Text style={[styles.label, { color: colors.text }]}>股數</Text>
+                <Text style={[styles.label, { color: colors.text }]}>持有股數／數量</Text>
                 <TextInput
                   style={[styles.input, { backgroundColor: colors.input, borderColor: colors.inputBorder, color: colors.text }]}
                   placeholder="輸入股數"
@@ -430,21 +433,35 @@ export default function SearchScreen() {
                   onSubmitEditing={() => priceInputRef.current?.focus()}
                   blurOnSubmit={false}
                 />
-                <Text style={[styles.label, { color: colors.text }]}>價格</Text>
+                <Text style={[styles.label, { color: colors.text }]}>平均成本</Text>
                 <TextInput
                   ref={priceInputRef}
                   style={[styles.input, { backgroundColor: colors.input, borderColor: colors.inputBorder, color: colors.text }]}
-                  placeholder="輸入價格"
+                  placeholder="輸入成本價格"
                   placeholderTextColor={colors.textMuted}
                   value={price}
                   onChangeText={setPrice}
+                  keyboardType="decimal-pad"
+                  returnKeyType="next"
+                  onSubmitEditing={() => leverageInputRef.current?.focus()}
+                  blurOnSubmit={false}
+                />
+                <Text style={[styles.label, { color: colors.text }]}>槓桿倍數（預設 1x）</Text>
+                <TextInput
+                  ref={leverageInputRef}
+                  style={[styles.input, { backgroundColor: colors.input, borderColor: colors.inputBorder, color: colors.text }]}
+                  placeholder="1"
+                  placeholderTextColor={colors.textMuted}
+                  value={leverage}
+                  onChangeText={setLeverage}
                   keyboardType="decimal-pad"
                   returnKeyType="done"
                   onSubmitEditing={Keyboard.dismiss}
                 />
                 {shares && price && (
                   <Text style={styles.totalText}>
-                    總金額: {(parseFloat(shares) * parseFloat(price)).toFixed(2)}
+                    現值：{(parseFloat(shares) * parseFloat(price) * (parseFloat(leverage) || 1)).toFixed(2)}
+                    {leverage && parseFloat(leverage) !== 1 ? `  （${parseFloat(leverage)}x 槓桿）` : ''}
                   </Text>
                 )}
                 <TouchableOpacity style={[styles.addButton, adding && styles.addButtonDisabled]} onPress={handleAddAsset} disabled={adding}>
