@@ -8,8 +8,12 @@ import {
   TouchableOpacity,
   Alert,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
-import { LogOut, Globe, RefreshCw, Sun, Moon, Smartphone } from 'lucide-react-native';
+import { LogOut, Globe, RefreshCw, Sun, Moon, Smartphone, Download, Upload, CloudUpload } from 'lucide-react-native';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import * as DocumentPicker from 'expo-document-picker';
 import { supabase } from '../lib/supabase';
 import { fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice } from '../services/api';
 import { useTheme } from '../lib/ThemeContext';
@@ -84,6 +88,120 @@ export default function SettingsScreen() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleExportCSV = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const [{ data: assets }, { data: transactions }] = await Promise.all([
+        supabase.from('assets').select('*').eq('user_id', user.id).order('created_at'),
+        supabase.from('transactions').select('*, assets(name, symbol)').eq('user_id', user.id).order('trans_date', { ascending: false }),
+      ]);
+
+      const assetCsv = [
+        '名稱,代碼,類別,市場,持有股數,均價,現值,幣別,建立日期',
+        ...(assets || []).map(a =>
+          [a.name, a.symbol || '', a.category, a.market_type || '', a.current_shares || 0,
+           a.average_cost || 0, a.current_amount || 0, a.currency, a.created_at?.slice(0, 10)]
+          .map(v => `"${v}"`).join(',')
+        ),
+      ].join('\n');
+
+      const txCsv = [
+        '日期,類型,資產名稱,代碼,股數,價格,總金額,幣別',
+        ...(transactions || []).map(t =>
+          [t.trans_date?.slice(0, 10), t.type, t.assets?.name || '', t.assets?.symbol || '',
+           t.shares || 0, t.price || 0, t.total_amount || 0, t.currency || '']
+          .map(v => `"${v}"`).join(',')
+        ),
+      ].join('\n');
+
+      const content = `資產列表\n${assetCsv}\n\n交易紀錄\n${txCsv}`;
+      const filename = `WealthTracker_${new Date().toISOString().slice(0, 10)}.csv`;
+      const fileUri = FileSystem.documentDirectory + filename;
+      await FileSystem.writeAsStringAsync(fileUri, content, { encoding: FileSystem.EncodingType.UTF8 });
+      await Sharing.shareAsync(fileUri, { mimeType: 'text/csv', dialogTitle: '匯出 CSV' });
+    } catch (e) {
+      console.error('Export CSV error:', e);
+      Alert.alert('錯誤', '匯出失敗');
+    }
+  };
+
+  const handleBackupToCloud = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const [{ data: assets }, { data: transactions }, { data: snapshots }] = await Promise.all([
+        supabase.from('assets').select('*').eq('user_id', user.id),
+        supabase.from('transactions').select('*').eq('user_id', user.id),
+        supabase.from('daily_snapshots').select('*').eq('user_id', user.id).order('snapshot_date', { ascending: false }).limit(180),
+      ]);
+
+      const backup = { version: 1, exported_at: new Date().toISOString(), assets, transactions, snapshots };
+      const filename = `WealthTracker_backup_${new Date().toISOString().slice(0, 10)}.json`;
+      const fileUri = FileSystem.documentDirectory + filename;
+      await FileSystem.writeAsStringAsync(fileUri, JSON.stringify(backup, null, 2));
+      await Sharing.shareAsync(fileUri, { mimeType: 'application/json', dialogTitle: '儲存備份到 iCloud' });
+    } catch (e) {
+      console.error('Backup error:', e);
+      Alert.alert('錯誤', '備份失敗');
+    }
+  };
+
+  const handleRestoreBackup = async () => {
+    Alert.alert(
+      '還原備份',
+      '還原將會覆蓋現有資料，確定繼續嗎？',
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '選擇備份檔',
+          onPress: async () => {
+            try {
+              const result = await DocumentPicker.getDocumentAsync({ type: 'application/json' });
+              if (result.canceled) return;
+
+              const content = await FileSystem.readAsStringAsync(result.assets[0].uri);
+              const backup = JSON.parse(content);
+
+              if (!backup.version || !backup.assets) {
+                Alert.alert('錯誤', '備份檔格式不正確');
+                return;
+              }
+
+              const { data: { user } } = await supabase.auth.getUser();
+              if (!user) return;
+
+              // Delete existing data then restore
+              await supabase.from('daily_snapshots').delete().eq('user_id', user.id);
+              await supabase.from('transactions').delete().eq('user_id', user.id);
+              await supabase.from('assets').delete().eq('user_id', user.id);
+
+              if (backup.assets?.length) {
+                const toInsert = backup.assets.map(a => ({ ...a, user_id: user.id }));
+                await supabase.from('assets').insert(toInsert);
+              }
+              if (backup.transactions?.length) {
+                const toInsert = backup.transactions.map(t => ({ ...t, user_id: user.id }));
+                await supabase.from('transactions').insert(toInsert);
+              }
+              if (backup.snapshots?.length) {
+                const toInsert = backup.snapshots.map(s => ({ ...s, user_id: user.id }));
+                await supabase.from('daily_snapshots').insert(toInsert);
+              }
+
+              Alert.alert('成功', `已還原 ${backup.assets?.length || 0} 項資產、${backup.transactions?.length || 0} 筆交易`);
+            } catch (e) {
+              console.error('Restore error:', e);
+              Alert.alert('錯誤', '還原失敗，請確認備份檔是否正確');
+            }
+          },
+        },
+      ]
+    );
   };
 
   const handleSignOut = async () => {
@@ -239,9 +357,37 @@ export default function SettingsScreen() {
           >
             <View style={styles.optionContent}>
               <RefreshCw size={20} color="#2563eb" />
-              <Text style={[styles.optionText, styles.actionText]}>
-                立即同步資料
-              </Text>
+              <Text style={[styles.optionText, styles.actionText]}>立即同步資料</Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.actionRow, { borderBottomColor: colors.borderLight }]}
+            onPress={handleExportCSV}
+          >
+            <View style={styles.optionContent}>
+              <Download size={20} color="#16a34a" />
+              <Text style={[styles.optionText, { color: '#16a34a', fontWeight: '500' }]}>匯出 CSV</Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.actionRow, { borderBottomColor: colors.borderLight }]}
+            onPress={handleBackupToCloud}
+          >
+            <View style={styles.optionContent}>
+              <CloudUpload size={20} color="#16a34a" />
+              <Text style={[styles.optionText, { color: '#16a34a', fontWeight: '500' }]}>備份到 iCloud</Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.actionRow, { borderBottomColor: colors.borderLight }]}
+            onPress={handleRestoreBackup}
+          >
+            <View style={styles.optionContent}>
+              <Upload size={20} color="#f59e0b" />
+              <Text style={[styles.optionText, { color: '#f59e0b', fontWeight: '500' }]}>還原備份</Text>
             </View>
           </TouchableOpacity>
 
@@ -251,9 +397,7 @@ export default function SettingsScreen() {
           >
             <View style={styles.optionContent}>
               <LogOut size={20} color="#ef4444" />
-              <Text style={[styles.optionText, styles.dangerText]}>
-                登出
-              </Text>
+              <Text style={[styles.optionText, styles.dangerText]}>登出</Text>
             </View>
           </TouchableOpacity>
         </View>
