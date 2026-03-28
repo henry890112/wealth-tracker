@@ -8,6 +8,7 @@ import {
   RefreshControl,
   ActivityIndicator,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RefreshCw, TrendingUp, TrendingDown } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { convertToBaseCurrency } from '../services/api';
@@ -28,7 +29,25 @@ const CATEGORY_COLORS = {
   liability: '#ef4444',
 };
 
+const MARKET_TYPE_LABELS = {
+  TW: '台股',
+  US: '美股',
+  Crypto: '加密貨幣',
+  other: '其他',
+};
+
+const MARKET_TYPE_COLORS = {
+  TW: '#dc2626',
+  US: '#2563eb',
+  Crypto: '#f59e0b',
+  other: '#64748b',
+};
+
+import { useNavigation } from '@react-navigation/native';
+
 export default function DashboardScreen() {
+  const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
   const [assets, setAssets] = useState([]);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -121,6 +140,17 @@ export default function DashboardScreen() {
     return grouped;
   };
 
+  // 將投資資產依 market_type 再分群
+  const groupInvestmentByMarket = (investmentAssets) => {
+    const grouped = {};
+    investmentAssets.forEach(asset => {
+      const key = asset.market_type || 'other';
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(asset);
+    });
+    return grouped;
+  };
+
   const formatCurrency = (amount) => {
     const currency = profile?.base_currency || 'TWD';
     return `${currency} ${amount.toLocaleString('zh-TW', { 
@@ -142,6 +172,7 @@ export default function DashboardScreen() {
   return (
     <ScrollView
       style={styles.container}
+      contentContainerStyle={{ paddingTop: insets.top }}
       refreshControl={
         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
       }
@@ -175,48 +206,65 @@ export default function DashboardScreen() {
       {/* Asset Categories */}
       {Object.entries(groupedAssets).map(([category, categoryAssets]) => (
         <View key={category} style={styles.categorySection}>
+          {/* Category Header */}
           <View style={styles.categoryHeader}>
-            <View
-              style={[
-                styles.categoryIndicator,
-                { backgroundColor: CATEGORY_COLORS[category] },
-              ]}
-            />
-            <Text style={styles.categoryTitle}>
-              {CATEGORY_LABELS[category]}
-            </Text>
+            <View style={[styles.categoryIndicator, { backgroundColor: CATEGORY_COLORS[category] }]} />
+            <Text style={styles.categoryTitle}>{CATEGORY_LABELS[category]}</Text>
             <Text style={styles.categoryTotal}>
-              {formatCurrency(
-                categoryAssets.reduce((sum, a) => sum + a.converted_amount, 0)
-              )}
+              {formatCurrency(categoryAssets.reduce((sum, a) => sum + a.converted_amount, 0))}
             </Text>
           </View>
 
-          {categoryAssets.map(asset => (
-            <View key={asset.id} style={styles.assetCard}>
-              <View style={styles.assetHeader}>
-                <Text style={styles.assetName}>{asset.name}</Text>
-                {asset.symbol && (
-                  <Text style={styles.assetSymbol}>{asset.symbol}</Text>
-                )}
-              </View>
-              <View style={styles.assetDetails}>
-                <Text style={styles.assetAmount}>
-                  {formatCurrency(asset.converted_amount)}
-                </Text>
-                {asset.current_shares > 0 && (
-                  <Text style={styles.assetShares}>
-                    {asset.current_shares.toLocaleString()} 股
-                  </Text>
-                )}
-              </View>
-              {asset.average_cost > 0 && (
-                <Text style={styles.assetCost}>
-                  平均成本: {asset.currency} {asset.average_cost.toFixed(2)}
-                </Text>
-              )}
-            </View>
-          ))}
+          {category === 'investment'
+            ? /* 投資資產：依 market_type 分群顯示 */
+              Object.entries(groupInvestmentByMarket(categoryAssets)).map(([marketKey, marketAssets]) => (
+                <View key={marketKey}>
+                  {/* Market Sub-header */}
+                  <View style={styles.marketHeader}>
+                    <View style={[styles.marketDot, { backgroundColor: MARKET_TYPE_COLORS[marketKey] }]} />
+                    <Text style={styles.marketTitle}>{MARKET_TYPE_LABELS[marketKey]}</Text>
+                    <Text style={styles.marketTotal}>
+                      {formatCurrency(marketAssets.reduce((sum, a) => sum + a.converted_amount, 0))}
+                    </Text>
+                  </View>
+                  {marketAssets.map(asset => (
+                    <TouchableOpacity key={asset.id} style={[styles.assetCard, styles.assetCardIndented]} onPress={() => navigation.navigate('AssetDetail', { assetId: asset.id })}>
+                      <View style={styles.assetHeader}>
+                        <Text style={styles.assetName}>{asset.name}</Text>
+                        {asset.symbol && <Text style={styles.assetSymbol}>{asset.symbol}</Text>}
+                      </View>
+                      <View style={styles.assetDetails}>
+                        <Text style={styles.assetAmount}>{formatCurrency(asset.converted_amount)}</Text>
+                        {asset.current_shares > 0 && (
+                          <Text style={styles.assetShares}>{asset.current_shares.toLocaleString()} 股</Text>
+                        )}
+                      </View>
+                      {asset.average_cost > 0 && (
+                        <Text style={styles.assetCost}>平均成本: {asset.currency} {asset.average_cost.toFixed(2)}</Text>
+                      )}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              ))
+            : /* 其他類別：直接列出 */
+              categoryAssets.map(asset => (
+                <TouchableOpacity key={asset.id} style={styles.assetCard} onPress={() => navigation.navigate('AssetDetail', { assetId: asset.id })}>
+                  <View style={styles.assetHeader}>
+                    <Text style={styles.assetName}>{asset.name}</Text>
+                    {asset.symbol && <Text style={styles.assetSymbol}>{asset.symbol}</Text>}
+                  </View>
+                  <View style={styles.assetDetails}>
+                    <Text style={styles.assetAmount}>{formatCurrency(asset.converted_amount)}</Text>
+                    {asset.current_shares > 0 && (
+                      <Text style={styles.assetShares}>{asset.current_shares.toLocaleString()} 股</Text>
+                    )}
+                  </View>
+                  {asset.average_cost > 0 && (
+                    <Text style={styles.assetCost}>平均成本: {asset.currency} {asset.average_cost.toFixed(2)}</Text>
+                  )}
+                </TouchableOpacity>
+              ))
+          }
         </View>
       ))}
 
@@ -325,11 +373,40 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#64748b',
   },
+  marketHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#f8fafc',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  marketDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 8,
+  },
+  marketTitle: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  marketTotal: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#64748b',
+  },
   assetCard: {
     backgroundColor: 'white',
     padding: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
+  },
+  assetCardIndented: {
+    paddingLeft: 24,
   },
   assetHeader: {
     flexDirection: 'row',

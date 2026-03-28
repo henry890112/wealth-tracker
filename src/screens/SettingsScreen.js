@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { LogOut, Globe, Palette, RefreshCw } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
+import { fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice } from '../services/api';
 
 const CURRENCIES = [
   { code: 'TWD', name: '新台幣 (TWD)' },
@@ -26,6 +27,7 @@ const COLOR_CONVENTIONS = [
 
 export default function SettingsScreen() {
   const [profile, setProfile] = useState(null);
+  const [userEmail, setUserEmail] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -37,6 +39,8 @@ export default function SettingsScreen() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+
+      setUserEmail(user.email || '');
 
       const { data, error } = await supabase
         .from('profiles')
@@ -99,14 +103,57 @@ export default function SettingsScreen() {
   const handleSyncData = async () => {
     Alert.alert(
       '同步資料',
-      '這將更新所有資產的最新價格',
+      '這將從網路更新所有股票與加密貨幣的最新價格',
       [
         { text: '取消', style: 'cancel' },
         {
           text: '同步',
           onPress: async () => {
-            // This would trigger a full data sync
-            Alert.alert('提示', '資料同步功能將在後續版本實作');
+            setSaving(true);
+            try {
+              const { data: { user } } = await supabase.auth.getUser();
+              if (!user) return;
+
+              const { data: assets } = await supabase
+                .from('assets')
+                .select('id, symbol, market_type, current_shares, currency')
+                .eq('user_id', user.id)
+                .not('symbol', 'is', null);
+
+              let updated = 0;
+              for (const asset of (assets || [])) {
+                if (!asset.symbol || asset.current_shares <= 0) continue;
+                try {
+                  let priceData = null;
+                  if (asset.market_type === 'TW') {
+                    priceData = await fetchTWStockPrice(asset.symbol);
+                  } else if (asset.market_type === 'US') {
+                    priceData = await fetchUSStockPrice(asset.symbol);
+                  } else if (asset.market_type === 'Crypto') {
+                    priceData = await fetchCryptoPrice(asset.symbol);
+                  }
+
+                  if (priceData?.price) {
+                    const newAmount = priceData.price * asset.current_shares;
+                    await supabase
+                      .from('assets')
+                      .update({ current_amount: newAmount, updated_at: new Date().toISOString() })
+                      .eq('id', asset.id);
+                    updated++;
+                  }
+                } catch {
+                  // skip assets that fail to fetch
+                }
+              }
+
+              await supabase.rpc('create_daily_snapshot', { p_user_id: user.id });
+              Alert.alert('同步完成', `已更新 ${updated} 項資產的最新價格`);
+            } catch (error) {
+              console.error('Sync error:', error);
+              Alert.alert('錯誤', '同步失敗，請稍後再試');
+            } finally {
+              setSaving(false);
+            }
           },
         },
       ]
@@ -130,7 +177,7 @@ export default function SettingsScreen() {
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>電子郵件</Text>
             <Text style={styles.infoValue}>
-              {profile?.id ? '已登入' : '未登入'}
+              {userEmail}
             </Text>
           </View>
         </View>

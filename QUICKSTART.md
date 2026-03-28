@@ -17,7 +17,8 @@ npm install
 
 ```bash
 # 如果尚未安裝 Supabase CLI
-npm install -g supabase
+brew tap supabase/tap
+brew install supabase
 
 # 啟動 Supabase
 supabase start

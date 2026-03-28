@@ -10,10 +10,10 @@ const CACHE_DURATION = 5 * 60 * 1000;
 
 /**
  * Fetch Taiwan stock price from FinMind API
+ * change_percent = (today_close - yesterday_close) / yesterday_close
  */
 export const fetchTWStockPrice = async (symbol) => {
   try {
-    // Check cache first
     const cached = await getCachedPrice(symbol, 'TW');
     if (cached) return cached;
 
@@ -21,21 +21,26 @@ export const fetchTWStockPrice = async (symbol) => {
       `${FINMIND_BASE_URL}/data?dataset=TaiwanStockPrice&data_id=${symbol}&start_date=${getDateString(-7)}&end_date=${getDateString(0)}`
     );
     const data = await response.json();
-    
+
     if (data.status === 200 && data.data && data.data.length > 0) {
-      const latest = data.data[data.data.length - 1];
+      const rows = data.data;
+      const latest = rows[rows.length - 1];
+      const prevClose = rows.length >= 2
+        ? parseFloat(rows[rows.length - 2].close)
+        : parseFloat(latest.open);
+
       const priceData = {
         symbol,
         price: parseFloat(latest.close),
-        change_percent: calculateChangePercent(latest.open, latest.close),
+        change_percent: calculateChangePercent(prevClose, parseFloat(latest.close)),
         volume: parseFloat(latest.Trading_Volume),
         market_type: 'TW',
       };
-      
+
       await cachePrice(priceData);
       return priceData;
     }
-    
+
     throw new Error('No data available');
   } catch (error) {
     console.error('Error fetching TW stock price:', error);
@@ -44,33 +49,35 @@ export const fetchTWStockPrice = async (symbol) => {
 };
 
 /**
- * Fetch US stock price from FinMind API
+ * Fetch US stock price from Yahoo Finance (free, no token required)
+ * change_percent = (price - previousClose) / previousClose
  */
 export const fetchUSStockPrice = async (symbol) => {
   try {
-    // Check cache first
     const cached = await getCachedPrice(symbol, 'US');
     if (cached) return cached;
 
     const response = await fetch(
-      `${FINMIND_BASE_URL}/data?dataset=USStockPrice&data_id=${symbol}&start_date=${getDateString(-7)}&end_date=${getDateString(0)}`
+      `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=2d&interval=1d`
     );
     const data = await response.json();
-    
-    if (data.status === 200 && data.data && data.data.length > 0) {
-      const latest = data.data[data.data.length - 1];
+
+    const meta = data?.chart?.result?.[0]?.meta;
+    if (meta) {
+      const currentPrice = meta.regularMarketPrice ?? meta.previousClose;
+      const prevClose = meta.chartPreviousClose ?? meta.previousClose;
       const priceData = {
         symbol,
-        price: parseFloat(latest.close),
-        change_percent: calculateChangePercent(latest.open, latest.close),
-        volume: parseFloat(latest.volume),
+        price: currentPrice,
+        change_percent: calculateChangePercent(prevClose, currentPrice),
+        volume: meta.regularMarketVolume ?? 0,
         market_type: 'US',
       };
-      
+
       await cachePrice(priceData);
       return priceData;
     }
-    
+
     throw new Error('No data available');
   } catch (error) {
     console.error('Error fetching US stock price:', error);
@@ -81,31 +88,29 @@ export const fetchUSStockPrice = async (symbol) => {
 /**
  * Fetch cryptocurrency price from CoinGecko API
  */
-export const fetchCryptoPrice = async (symbol) => {
+export const fetchCryptoPrice = async (coinId) => {
   try {
-    // Check cache first
-    const cached = await getCachedPrice(symbol, 'Crypto');
+    const cached = await getCachedPrice(coinId, 'Crypto');
     if (cached) return cached;
 
-    const coinId = symbol.toLowerCase();
     const response = await fetch(
       `${COINGECKO_BASE_URL}/simple/price?ids=${coinId}&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true`
     );
     const data = await response.json();
-    
+
     if (data[coinId]) {
       const priceData = {
-        symbol: symbol.toUpperCase(),
+        symbol: coinId.toUpperCase(),
         price: data[coinId].usd,
         change_percent: data[coinId].usd_24h_change || 0,
         volume: data[coinId].usd_24h_vol || 0,
         market_type: 'Crypto',
       };
-      
+
       await cachePrice(priceData);
       return priceData;
     }
-    
+
     throw new Error('Cryptocurrency not found');
   } catch (error) {
     console.error('Error fetching crypto price:', error);
@@ -118,25 +123,23 @@ export const fetchCryptoPrice = async (symbol) => {
  */
 export const fetchExchangeRate = async (fromCurrency, toCurrency) => {
   try {
-    // Check cache first
     const { data: cached } = await supabase
       .from('exchange_rates')
       .select('*')
       .eq('from_currency', fromCurrency)
       .eq('to_currency', toCurrency)
       .single();
-    
+
     if (cached && isRecentCache(cached.updated_at)) {
       return parseFloat(cached.rate);
     }
 
     const response = await fetch(`${EXCHANGE_RATE_BASE_URL}/${fromCurrency}`);
     const data = await response.json();
-    
+
     if (data.rates && data.rates[toCurrency]) {
       const rate = data.rates[toCurrency];
-      
-      // Cache the rate
+
       await supabase
         .from('exchange_rates')
         .upsert({
@@ -144,13 +147,11 @@ export const fetchExchangeRate = async (fromCurrency, toCurrency) => {
           to_currency: toCurrency,
           rate: rate,
           updated_at: new Date().toISOString(),
-        }, {
-          onConflict: 'from_currency,to_currency'
-        });
-      
+        }, { onConflict: 'from_currency,to_currency' });
+
       return rate;
     }
-    
+
     throw new Error('Exchange rate not found');
   } catch (error) {
     console.error('Error fetching exchange rate:', error);
@@ -163,26 +164,23 @@ export const fetchExchangeRate = async (fromCurrency, toCurrency) => {
  */
 export const searchAssets = async (query, marketType = 'all') => {
   const results = [];
-  
+
   try {
     if (marketType === 'all' || marketType === 'TW') {
-      // Search Taiwan stocks
       const twStocks = await searchTWStocks(query);
       results.push(...twStocks);
     }
-    
+
     if (marketType === 'all' || marketType === 'US') {
-      // Search US stocks
       const usStocks = await searchUSStocks(query);
       results.push(...usStocks);
     }
-    
+
     if (marketType === 'all' || marketType === 'Crypto') {
-      // Search cryptocurrencies
       const cryptos = await searchCrypto(query);
       results.push(...cryptos);
     }
-    
+
     return results;
   } catch (error) {
     console.error('Error searching assets:', error);
@@ -191,19 +189,17 @@ export const searchAssets = async (query, marketType = 'all') => {
 };
 
 /**
- * Search Taiwan stocks
+ * Search Taiwan stocks via FinMind
  */
 const searchTWStocks = async (query) => {
   try {
-    const response = await fetch(
-      `${FINMIND_BASE_URL}/data?dataset=TaiwanStockInfo`
-    );
+    const response = await fetch(`${FINMIND_BASE_URL}/data?dataset=TaiwanStockInfo`);
     const data = await response.json();
-    
+
     if (data.status === 200 && data.data) {
       return data.data
-        .filter(stock => 
-          stock.stock_id.includes(query) || 
+        .filter(stock =>
+          stock.stock_id.includes(query) ||
           stock.stock_name.includes(query)
         )
         .slice(0, 20)
@@ -213,7 +209,6 @@ const searchTWStocks = async (query) => {
           market_type: 'TW',
         }));
     }
-    
     return [];
   } catch (error) {
     console.error('Error searching TW stocks:', error);
@@ -222,41 +217,67 @@ const searchTWStocks = async (query) => {
 };
 
 /**
- * Search US stocks (simplified - in production use a proper API)
+ * Search US stocks (local list)
  */
+const US_STOCKS = [
+  { symbol: 'AAPL',  name: 'Apple Inc.' },
+  { symbol: 'MSFT',  name: 'Microsoft Corporation' },
+  { symbol: 'NVDA',  name: 'NVIDIA Corporation' },
+  { symbol: 'GOOGL', name: 'Alphabet Inc.' },
+  { symbol: 'AMZN',  name: 'Amazon.com Inc.' },
+  { symbol: 'META',  name: 'Meta Platforms Inc.' },
+  { symbol: 'TSLA',  name: 'Tesla Inc.' },
+  { symbol: 'AVGO',  name: 'Broadcom Inc.' },
+  { symbol: 'JPM',   name: 'JPMorgan Chase & Co.' },
+  { symbol: 'V',     name: 'Visa Inc.' },
+  { symbol: 'MA',    name: 'Mastercard Inc.' },
+  { symbol: 'UNH',   name: 'UnitedHealth Group' },
+  { symbol: 'XOM',   name: 'Exxon Mobil Corporation' },
+  { symbol: 'LLY',   name: 'Eli Lilly and Company' },
+  { symbol: 'WMT',   name: 'Walmart Inc.' },
+  { symbol: 'JNJ',   name: 'Johnson & Johnson' },
+  { symbol: 'PG',    name: 'Procter & Gamble Co.' },
+  { symbol: 'AMD',   name: 'Advanced Micro Devices' },
+  { symbol: 'ORCL',  name: 'Oracle Corporation' },
+  { symbol: 'COST',  name: 'Costco Wholesale Corporation' },
+  { symbol: 'HD',    name: 'The Home Depot Inc.' },
+  { symbol: 'BAC',   name: 'Bank of America Corporation' },
+  { symbol: 'NFLX',  name: 'Netflix Inc.' },
+  { symbol: 'QCOM',  name: 'Qualcomm Inc.' },
+  { symbol: 'TXN',   name: 'Texas Instruments Inc.' },
+  { symbol: 'DIS',   name: 'The Walt Disney Company' },
+  { symbol: 'UBER',  name: 'Uber Technologies Inc.' },
+  { symbol: 'PLTR',  name: 'Palantir Technologies Inc.' },
+  { symbol: 'COIN',  name: 'Coinbase Global Inc.' },
+  { symbol: 'SMCI',  name: 'Super Micro Computer Inc.' },
+  { symbol: 'ARM',   name: 'Arm Holdings plc' },
+  { symbol: 'INTC',  name: 'Intel Corporation' },
+  { symbol: 'MU',    name: 'Micron Technology Inc.' },
+  { symbol: 'AMAT',  name: 'Applied Materials Inc.' },
+  { symbol: 'LRCX',  name: 'Lam Research Corporation' },
+  { symbol: 'ASML',  name: 'ASML Holding N.V.' },
+  { symbol: 'TSM',   name: 'Taiwan Semiconductor (ADR)' },
+  { symbol: 'BABA',  name: 'Alibaba Group Holding' },
+  { symbol: 'PDD',   name: 'PDD Holdings (Temu)' },
+  { symbol: 'MSTR',  name: 'MicroStrategy Inc.' },
+];
+
 const searchUSStocks = async (query) => {
-  // This is a simplified version. In production, use a proper stock search API
-  const commonStocks = [
-    { symbol: 'AAPL', name: 'Apple Inc.' },
-    { symbol: 'GOOGL', name: 'Alphabet Inc.' },
-    { symbol: 'MSFT', name: 'Microsoft Corporation' },
-    { symbol: 'AMZN', name: 'Amazon.com Inc.' },
-    { symbol: 'TSLA', name: 'Tesla Inc.' },
-    { symbol: 'META', name: 'Meta Platforms Inc.' },
-    { symbol: 'NVDA', name: 'NVIDIA Corporation' },
-  ];
-  
-  return commonStocks
-    .filter(stock => 
-      stock.symbol.toLowerCase().includes(query.toLowerCase()) ||
-      stock.name.toLowerCase().includes(query.toLowerCase())
-    )
-    .map(stock => ({
-      ...stock,
-      market_type: 'US',
-    }));
+  const q = query.toLowerCase();
+  return US_STOCKS
+    .filter(s => s.symbol.toLowerCase().includes(q) || s.name.toLowerCase().includes(q))
+    .slice(0, 20)
+    .map(s => ({ ...s, market_type: 'US' }));
 };
 
 /**
- * Search cryptocurrencies
+ * Search cryptocurrencies via CoinGecko
  */
 const searchCrypto = async (query) => {
   try {
-    const response = await fetch(
-      `${COINGECKO_BASE_URL}/search?query=${query}`
-    );
+    const response = await fetch(`${COINGECKO_BASE_URL}/search?query=${query}`);
     const data = await response.json();
-    
+
     if (data.coins) {
       return data.coins
         .slice(0, 20)
@@ -267,7 +288,6 @@ const searchCrypto = async (query) => {
           coinId: coin.id,
         }));
     }
-    
     return [];
   } catch (error) {
     console.error('Error searching crypto:', error);
@@ -275,9 +295,92 @@ const searchCrypto = async (query) => {
   }
 };
 
+// 熱門標的
+export const HOT_ASSETS = [
+  { symbol: '2330', name: '台積電', market_type: 'TW' },
+  { symbol: '2454', name: '聯發科', market_type: 'TW' },
+  { symbol: '2317', name: '鴻海', market_type: 'TW' },
+  { symbol: '2308', name: '台達電', market_type: 'TW' },
+  { symbol: '2382', name: '廣達', market_type: 'TW' },
+  { symbol: '2881', name: '富邦金', market_type: 'TW' },
+  { symbol: 'NVDA', name: 'NVIDIA Corporation', market_type: 'US' },
+  { symbol: 'AAPL', name: 'Apple Inc.', market_type: 'US' },
+  { symbol: 'MSFT', name: 'Microsoft Corporation', market_type: 'US' },
+  { symbol: 'TSLA', name: 'Tesla Inc.', market_type: 'US' },
+  { symbol: 'META', name: 'Meta Platforms Inc.', market_type: 'US' },
+  { symbol: 'TSM',  name: 'Taiwan Semiconductor (ADR)', market_type: 'US' },
+  { symbol: 'BTC',  name: 'Bitcoin', market_type: 'Crypto' },
+  { symbol: 'ETH',  name: 'Ethereum', market_type: 'Crypto' },
+  { symbol: 'SOL',  name: 'Solana', market_type: 'Crypto' },
+  { symbol: 'BNB',  name: 'BNB', market_type: 'Crypto' },
+];
+
 /**
- * Helper: Get cached price from database
+ * Fetch 30-day historical prices for chart
  */
+export const fetchHistoricalPrices = async (symbol, marketType) => {
+  const start = getDateString(-30);
+  const end = getDateString(0);
+  try {
+    if (marketType === 'TW') {
+      const res = await fetch(
+        `${FINMIND_BASE_URL}/data?dataset=TaiwanStockPrice&data_id=${symbol}&start_date=${start}&end_date=${end}`
+      );
+      const data = await res.json();
+      if (data.status === 200 && data.data?.length > 0) {
+        return data.data.map(d => ({ date: d.date, price: parseFloat(d.close) }));
+      }
+    } else if (marketType === 'US') {
+      const res = await fetch(
+        `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=1mo&interval=1d`
+      );
+      const data = await res.json();
+      const result = data?.chart?.result?.[0];
+      if (result) {
+        const timestamps = result.timestamp || [];
+        const closes = result.indicators?.quote?.[0]?.close || [];
+        return timestamps.map((ts, i) => ({
+          date: new Date(ts * 1000).toISOString().split('T')[0],
+          price: closes[i] ?? null,
+        })).filter(d => d.price !== null);
+      }
+    } else if (marketType === 'Crypto') {
+      const CRYPTO_IDS = { BTC: 'bitcoin', ETH: 'ethereum', SOL: 'solana', BNB: 'binancecoin' };
+      const coinId = CRYPTO_IDS[symbol] || symbol.toLowerCase();
+      const res = await fetch(
+        `${COINGECKO_BASE_URL}/coins/${coinId}/market_chart?vs_currency=usd&days=30&interval=daily`
+      );
+      const data = await res.json();
+      if (data.prices) {
+        return data.prices.map(([ts, price]) => ({
+          date: new Date(ts).toISOString().split('T')[0],
+          price,
+        }));
+      }
+    }
+  } catch (e) {
+    console.error('fetchHistoricalPrices error:', e);
+  }
+  return [];
+};
+
+/**
+ * Convert amount to base currency
+ */
+export const convertToBaseCurrency = async (amount, fromCurrency, baseCurrency) => {
+  if (fromCurrency === baseCurrency) return amount;
+
+  try {
+    const rate = await fetchExchangeRate(fromCurrency, baseCurrency);
+    return amount * rate;
+  } catch (error) {
+    console.error('Error converting currency:', error);
+    return amount;
+  }
+};
+
+// --- Helpers ---
+
 const getCachedPrice = async (symbol, marketType) => {
   try {
     const { data, error } = await supabase
@@ -286,9 +389,9 @@ const getCachedPrice = async (symbol, marketType) => {
       .eq('symbol', symbol)
       .eq('market_type', marketType)
       .single();
-    
+
     if (error || !data) return null;
-    
+
     if (isRecentCache(data.updated_at)) {
       return {
         symbol: data.symbol,
@@ -298,16 +401,12 @@ const getCachedPrice = async (symbol, marketType) => {
         market_type: data.market_type,
       };
     }
-    
     return null;
-  } catch (error) {
+  } catch {
     return null;
   }
 };
 
-/**
- * Helper: Cache price in database
- */
 const cachePrice = async (priceData) => {
   try {
     await supabase
@@ -319,51 +418,23 @@ const cachePrice = async (priceData) => {
         change_percent: priceData.change_percent,
         volume: priceData.volume,
         updated_at: new Date().toISOString(),
-      }, {
-        onConflict: 'symbol,market_type'
-      });
+      }, { onConflict: 'symbol,market_type' });
   } catch (error) {
     console.error('Error caching price:', error);
   }
 };
 
-/**
- * Helper: Check if cache is recent
- */
 const isRecentCache = (timestamp) => {
-  const cacheTime = new Date(timestamp).getTime();
-  const now = Date.now();
-  return (now - cacheTime) < CACHE_DURATION;
+  return (Date.now() - new Date(timestamp).getTime()) < CACHE_DURATION;
 };
 
-/**
- * Helper: Get date string for API queries
- */
 const getDateString = (daysOffset) => {
   const date = new Date();
   date.setDate(date.getDate() + daysOffset);
   return date.toISOString().split('T')[0];
 };
 
-/**
- * Helper: Calculate percentage change
- */
-const calculateChangePercent = (open, close) => {
-  if (!open || open === 0) return 0;
-  return ((close - open) / open) * 100;
-};
-
-/**
- * Convert amount to base currency
- */
-export const convertToBaseCurrency = async (amount, fromCurrency, baseCurrency) => {
-  if (fromCurrency === baseCurrency) return amount;
-  
-  try {
-    const rate = await fetchExchangeRate(fromCurrency, baseCurrency);
-    return amount * rate;
-  } catch (error) {
-    console.error('Error converting currency:', error);
-    return amount;
-  }
+const calculateChangePercent = (prevPrice, currentPrice) => {
+  if (!prevPrice || prevPrice === 0) return 0;
+  return ((currentPrice - prevPrice) / prevPrice) * 100;
 };
