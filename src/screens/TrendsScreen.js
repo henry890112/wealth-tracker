@@ -9,6 +9,7 @@ import Svg, { Path } from 'react-native-svg';
 import { X, Calendar } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { convertToBaseCurrency } from '../services/api';
+import { useTheme } from '../lib/ThemeContext';
 
 const { width: screenWidth } = Dimensions.get('window');
 const PRIMARY = '#16a34a';
@@ -28,10 +29,8 @@ const CATEGORY_CONFIG = {
   receivable: { label: '應收款項', color: '#0d9488' },
 };
 
-const formatAmount = (amount, currency = 'TWD') => {
-  const prefix = currency === 'TWD' ? 'NT$' : currency;
-  if (Math.abs(amount) >= 10000) return `${prefix} ${(amount / 10000).toFixed(1)}萬`;
-  return `${prefix} ${Math.round(amount).toLocaleString('zh-TW')}`;
+const formatAmount = (amount) => {
+  return Math.round(amount).toLocaleString('zh-TW');
 };
 
 // Validates YYYY-MM-DD
@@ -68,6 +67,7 @@ function DonutChart({ data, size = 160, strokeWidth = 30 }) {
 }
 
 export default function TrendsScreen() {
+  const { colors } = useTheme();
   const [loading, setLoading] = useState(true);
   const [snapshots, setSnapshots] = useState([]);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
@@ -183,10 +183,10 @@ export default function TrendsScreen() {
   };
 
   const currency = profile?.base_currency || 'TWD';
-  const fmt = (v) => formatAmount(v, currency);
+  const fmt = (v) => formatAmount(v);
 
   if (loading) {
-    return <View style={styles.loading}><ActivityIndicator size="large" color={PRIMARY} /></View>;
+    return <View style={[styles.loading, { backgroundColor: colors.bg }]}><ActivityIndicator size="large" color={PRIMARY} /></View>;
   }
 
   const hasData = snapshots.length > 0;
@@ -223,7 +223,6 @@ export default function TrendsScreen() {
 
   const fmtYLabel = (val, baseline) => {
     const abs = parseFloat(val) + baseline;
-    if (Math.abs(abs) >= 10000) return `${(abs / 10000).toFixed(1)}萬`;
     return Math.round(abs).toLocaleString('zh-TW');
   };
 
@@ -245,12 +244,12 @@ export default function TrendsScreen() {
 
   return (
     <>
-      <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 40 }}>
+      <ScrollView style={[styles.container, { backgroundColor: colors.bg }]} contentContainerStyle={{ paddingBottom: 40 }}>
 
         {/* Trend chart card */}
-        <View style={styles.card}>
+        <View style={[styles.card, { backgroundColor: colors.card }]}>
           <View style={styles.cardHeader}>
-            <Text style={styles.cardTitle}>淨資產趨勢</Text>
+            <Text style={[styles.cardTitle, { color: colors.text }]}>淨資產趨勢（{currency}）</Text>
             {changeText && (
               <Text style={[styles.changeBadge, changeText.positive ? styles.pos : styles.neg]}>
                 {changeText.positive ? '+' : ''}{changeText.pct}%
@@ -288,29 +287,32 @@ export default function TrendsScreen() {
             <View style={styles.chartLoading}>
               <ActivityIndicator size="small" color={PRIMARY} />
             </View>
-          ) : hasData ? (
+          ) : snapshots.length >= 2 ? (
             <LineChart
               data={chartData}
               width={screenWidth - 64}
               height={200}
+              yAxisWidth={72}
               formatYLabel={(val) => fmtYLabel(val, chartBaseline)}
               chartConfig={{
-                backgroundGradientFrom: '#fff',
-                backgroundGradientTo: '#fff',
+                backgroundGradientFrom: colors.card,
+                backgroundGradientTo: colors.card,
                 decimalPlaces: 0,
                 color: (opacity = 1) => `rgba(22, 163, 74, ${opacity})`,
                 labelColor: (opacity = 1) => `rgba(148, 163, 184, ${opacity})`,
                 fillShadowGradient: '#16a34a',
                 fillShadowGradientOpacity: 0.12,
                 propsForDots: { r: '3', strokeWidth: '1.5', stroke: '#16a34a' },
-                propsForBackgroundLines: { stroke: '#f1f5f9' },
+                propsForBackgroundLines: { stroke: colors.borderLight },
               }}
               withShadow
               bezier
               style={{ borderRadius: 8, marginLeft: -8, marginTop: 4 }}
             />
           ) : (
-            <Text style={styles.emptyText}>此區間尚無數據{'\n'}系統每日自動記錄您的資產狀況</Text>
+            <Text style={[styles.emptyText, { color: colors.textMuted }]}>
+              {hasData ? '需要至少兩天的記錄才能顯示趨勢\n明日系統會自動記錄今日資產' : '此區間尚無數據\n系統每日自動記錄您的資產狀況'}
+            </Text>
           )}
 
           {changeText && (
@@ -322,18 +324,18 @@ export default function TrendsScreen() {
 
         {/* Asset allocation */}
         {categoryTotals.length > 0 && (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>資產配置</Text>
+          <View style={[styles.card, { backgroundColor: colors.card }]}>
+            <Text style={[styles.cardTitle, { color: colors.text }]}>資產配置</Text>
             <View style={styles.donutRow}>
-              <DonutChart data={categoryTotals} size={160} strokeWidth={30} />
+              <DonutChart data={categoryTotals} size={120} strokeWidth={22} />
               <View style={styles.legend}>
                 {categoryTotals.map((item, i) => (
                   <View key={i} style={styles.legendItem}>
                     <View style={[styles.legendDot, { backgroundColor: item.color }]} />
                     <View>
-                      <Text style={styles.legendLabel}>{item.label}</Text>
-                      <Text style={styles.legendValue}>{fmt(item.value)}</Text>
-                      <Text style={styles.legendPct}>
+                      <Text style={[styles.legendLabel, { color: colors.textSub }]}>{item.label}</Text>
+                      <Text style={[styles.legendValue, { color: colors.text }]}>{fmt(item.value)}</Text>
+                      <Text style={[styles.legendPct, { color: colors.textMuted }]}>
                         {donutTotal > 0 ? ((item.value / donutTotal) * 100).toFixed(1) : 0}%
                       </Text>
                     </View>
@@ -361,15 +363,15 @@ export default function TrendsScreen() {
             <BlurView intensity={60} tint="light" style={StyleSheet.absoluteFill} />
             <View style={styles.modalContent}>
               <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>自定義區間</Text>
+                <Text style={[styles.modalTitle, { color: colors.text }]}>自定義區間</Text>
                 <TouchableOpacity onPress={() => setCustomModalVisible(false)}>
-                  <X size={20} color="#64748b" />
+                  <X size={20} color={colors.textSub} />
                 </TouchableOpacity>
               </View>
 
-              <Text style={styles.inputLabel}>開始日期</Text>
+              <Text style={[styles.inputLabel, { color: colors.textSub }]}>開始日期</Text>
               <TextInput
-                style={styles.dateInput}
+                style={[styles.dateInput, { color: colors.text }]}
                 value={inputStart}
                 onChangeText={setInputStart}
                 placeholder="YYYY-MM-DD"
@@ -378,9 +380,9 @@ export default function TrendsScreen() {
                 maxLength={10}
               />
 
-              <Text style={styles.inputLabel}>結束日期</Text>
+              <Text style={[styles.inputLabel, { color: colors.textSub }]}>結束日期</Text>
               <TextInput
-                style={styles.dateInput}
+                style={[styles.dateInput, { color: colors.text }]}
                 value={inputEnd}
                 onChangeText={setInputEnd}
                 placeholder="YYYY-MM-DD"
@@ -401,12 +403,11 @@ export default function TrendsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f1f5f9' },
-  loading: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f1f5f9' },
+  container: { flex: 1 },
+  loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   chartLoading: { height: 200, justifyContent: 'center', alignItems: 'center' },
 
   card: {
-    backgroundColor: 'white',
     margin: 16, marginBottom: 0, padding: 20,
     borderRadius: 20,
     shadowColor: '#000',
@@ -414,7 +415,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.07, shadowRadius: 12, elevation: 4,
   },
   cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
-  cardTitle: { fontSize: 16, fontWeight: '600', color: '#1e293b' },
+  cardTitle: { fontSize: 16, fontWeight: '600' },
   changeBadge: { fontSize: 13, fontWeight: '600', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12 },
   pos: { color: PRIMARY, backgroundColor: '#dcfce7' },
   neg: { color: '#ef4444', backgroundColor: '#fee2e2' },
@@ -462,7 +463,7 @@ const styles = StyleSheet.create({
   periodLabel: { fontSize: 12, color: PRIMARY, fontWeight: '600' },
   periodLabelActive: { color: 'white', fontWeight: '700' },
 
-  emptyText: { textAlign: 'center', color: '#94a3b8', lineHeight: 22, paddingVertical: 32 },
+  emptyText: { textAlign: 'center', lineHeight: 22, paddingVertical: 32 },
   changeDetail: { fontSize: 13, fontWeight: '500', marginTop: 12, textAlign: 'right' },
   posText: { color: PRIMARY },
   negText: { color: '#ef4444' },
@@ -471,9 +472,9 @@ const styles = StyleSheet.create({
   legend: { flex: 1, gap: 12 },
   legendItem: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   legendDot: { width: 10, height: 10, borderRadius: 5, marginTop: 3 },
-  legendLabel: { fontSize: 12, color: '#64748b' },
-  legendValue: { fontSize: 14, fontWeight: '700', color: '#1e293b' },
-  legendPct: { fontSize: 11, color: '#94a3b8' },
+  legendLabel: { fontSize: 12 },
+  legendValue: { fontSize: 14, fontWeight: '700' },
+  legendPct: { fontSize: 11 },
 
   // ── Custom date modal ──
   modalOverlay: {
@@ -497,8 +498,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 24,
   },
-  modalTitle: { fontSize: 18, fontWeight: '700', color: '#1e293b' },
-  inputLabel: { fontSize: 13, color: '#64748b', marginBottom: 6, fontWeight: '500' },
+  modalTitle: { fontSize: 18, fontWeight: '700' },
+  inputLabel: { fontSize: 13, marginBottom: 6, fontWeight: '500' },
   dateInput: {
     backgroundColor: 'rgba(255,255,255,0.8)',
     borderWidth: 1,
@@ -507,7 +508,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 16,
-    color: '#1e293b',
     marginBottom: 18,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },

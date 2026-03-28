@@ -22,6 +22,7 @@ import {
   fetchTWStockPrice,
   fetchUSStockPrice,
 } from '../services/api';
+import { useTheme } from '../lib/ThemeContext';
 
 const MARKET_TABS = [
   { id: 'all', label: '全部' },
@@ -55,6 +56,7 @@ const getTVSymbol = (asset) => {
 
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
   const [query, setQuery] = useState('');
   const [activeTab, setActiveTab] = useState('all');
   const [results, setResults] = useState([]);
@@ -66,6 +68,7 @@ export default function SearchScreen() {
   const [price, setPrice] = useState('');
   const [adding, setAdding] = useState(false);
   const [hotPrices, setHotPrices] = useState({});
+  const [hotUpdatedAt, setHotUpdatedAt] = useState(null);
   const [sortBy, setSortBy] = useState('change');
   const [chartVisible, setChartVisible] = useState(false);
   const [chartAsset, setChartAsset] = useState(null);
@@ -126,6 +129,7 @@ export default function SearchScreen() {
     }
 
     setHotPrices(prices);
+    setHotUpdatedAt(new Date());
   };
 
   // Debounced search
@@ -243,9 +247,8 @@ export default function SearchScreen() {
   const formatPrice = (asset, priceData) => {
     if (!priceData?.price) return null;
     const p = priceData.price;
-    if (asset.market_type === 'TW') return p.toLocaleString('zh-TW', { maximumFractionDigits: 2 });
-    if (p >= 1000) return `$${Math.round(p).toLocaleString()}`;
-    return `$${p.toLocaleString('en-US', { maximumFractionDigits: 4 })}`;
+    if (asset.market_type === 'TW') return p.toLocaleString('zh-TW', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
   const renderAssetCard = (asset, keyPrefix, index) => {
@@ -257,18 +260,18 @@ export default function SearchScreen() {
     return (
       <TouchableOpacity
         key={`${keyPrefix}-${asset.symbol}-${index}`}
-        style={styles.resultCard}
+        style={[styles.resultCard, { backgroundColor: colors.card, borderBottomColor: colors.borderLight }]}
         onPress={() => handleSelectAsset(asset)}
       >
         <View style={styles.resultInfo}>
-          <Text style={styles.resultName}>{asset.name}</Text>
-          <Text style={styles.resultSymbol}>
+          <Text style={[styles.resultName, { color: colors.text }]}>{asset.name}</Text>
+          <Text style={[styles.resultSymbol, { color: colors.textMuted }]}>
             {asset.symbol} · {MARKET_TYPE_LABELS[asset.market_type] ?? asset.market_type}
           </Text>
         </View>
         <View style={styles.resultRight}>
           <View style={styles.priceBlock}>
-            {priceStr != null && <Text style={styles.priceText}>{priceStr}</Text>}
+            {priceStr != null && <Text style={[styles.priceText, { color: colors.text }]}>{priceStr}</Text>}
             {changePct != null && (
               <Text style={[styles.changeText, isUp ? styles.changeUp : styles.changeDown]}>
                 {formatChange(changePct)}
@@ -280,7 +283,7 @@ export default function SearchScreen() {
             onPress={() => handleShowChart(asset)}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
-            <LineChart size={18} color="#64748b" />
+            <LineChart size={18} color={colors.textSub} />
           </TouchableOpacity>
         </View>
       </TouchableOpacity>
@@ -289,16 +292,17 @@ export default function SearchScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={[styles.container, { backgroundColor: colors.bg }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={90}
     >
       {/* Search Bar */}
-      <View style={styles.searchContainer}>
-        <SearchIcon size={20} color="#64748b" />
+      <View style={[styles.searchContainer, { backgroundColor: colors.cardAlt }]}>
+        <SearchIcon size={20} color={colors.textSub} />
         <TextInput
-          style={styles.searchInput}
+          style={[styles.searchInput, { color: colors.text }]}
           placeholder="搜尋股票代碼或名稱，例如：台積電、NVDA"
+          placeholderTextColor={colors.textMuted}
           value={query}
           onChangeText={setQuery}
           onSubmitEditing={() => handleSearch()}
@@ -308,13 +312,13 @@ export default function SearchScreen() {
         />
         {query.length > 0 && (
           <TouchableOpacity onPress={() => { setQuery(''); setResults([]); }}>
-            <X size={20} color="#64748b" />
+            <X size={20} color={colors.textSub} />
           </TouchableOpacity>
         )}
       </View>
 
       {/* Market Tabs */}
-      <View style={styles.tabsContainer}>
+      <View style={[styles.tabsContainer, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           {MARKET_TABS.map(tab => (
             <TouchableOpacity
@@ -322,7 +326,7 @@ export default function SearchScreen() {
               style={[styles.tab, activeTab === tab.id && styles.activeTab]}
               onPress={() => setActiveTab(tab.id)}
             >
-              <Text style={[styles.tabText, activeTab === tab.id && styles.activeTabText]}>
+              <Text style={[styles.tabText, { color: colors.textSub }, activeTab === tab.id && styles.activeTabText]}>
                 {tab.label}
               </Text>
             </TouchableOpacity>
@@ -343,12 +347,19 @@ export default function SearchScreen() {
         ) : query.length > 0 ? (
           results.length > 0
             ? results.map((asset, i) => renderAssetCard(asset, 'search', i))
-            : <View style={styles.emptyState}><Text style={styles.emptyStateText}>無搜尋結果</Text></View>
+            : <View style={styles.emptyState}><Text style={[styles.emptyStateText, { color: colors.textMuted }]}>無搜尋結果</Text></View>
         ) : (
           <>
-            <View style={styles.hotHeader}>
+            <View style={[styles.hotHeader, { backgroundColor: colors.hotBg, borderBottomColor: colors.hotBorder }]}>
               <Flame size={16} color="#f59e0b" />
-              <Text style={styles.hotHeaderText}>熱門標的</Text>
+              <View>
+                <Text style={styles.hotHeaderText}>熱門標的</Text>
+                {hotUpdatedAt && (
+                  <Text style={styles.hotUpdatedText}>
+                    更新 {hotUpdatedAt.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  </Text>
+                )}
+              </View>
               <View style={styles.sortBtns}>
                 <TouchableOpacity
                   style={[styles.sortBtn, sortBy === 'change' && styles.sortBtnActive]}
@@ -372,37 +383,51 @@ export default function SearchScreen() {
       {/* Add Asset Modal */}
       <Modal visible={modalVisible} animationType="slide" transparent onRequestClose={() => setModalVisible(false)}>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>新增資產</Text>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>新增資產</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
-                <X size={24} color="#64748b" />
+                <X size={24} color={colors.textSub} />
               </TouchableOpacity>
             </View>
             {selectedAsset && (
               <>
-                <View style={styles.assetInfo}>
-                  <Text style={styles.assetInfoSymbol}>{selectedAsset.symbol}</Text>
-                  <Text style={styles.assetInfoName}>{selectedAsset.name}</Text>
+                <View style={[styles.assetInfo, { backgroundColor: colors.input }]}>
+                  <Text style={[styles.assetInfoSymbol, { color: colors.text }]}>{selectedAsset.symbol}</Text>
+                  <Text style={[styles.assetInfoName, { color: colors.textSub }]}>{selectedAsset.name}</Text>
                 </View>
-                <Text style={styles.label}>分類</Text>
+                <Text style={[styles.label, { color: colors.text }]}>分類</Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryScroll}>
                   {CATEGORIES.map(cat => (
                     <TouchableOpacity
                       key={cat.id}
-                      style={[styles.categoryChip, category === cat.id && styles.categoryChipActive]}
+                      style={[styles.categoryChip, { backgroundColor: colors.cardAlt }, category === cat.id && styles.categoryChipActive]}
                       onPress={() => setCategory(cat.id)}
                     >
-                      <Text style={[styles.categoryChipText, category === cat.id && styles.categoryChipTextActive]}>
+                      <Text style={[styles.categoryChipText, { color: colors.textSub }, category === cat.id && styles.categoryChipTextActive]}>
                         {cat.label}
                       </Text>
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
-                <Text style={styles.label}>股數</Text>
-                <TextInput style={styles.input} placeholder="輸入股數" value={shares} onChangeText={setShares} keyboardType="decimal-pad" />
-                <Text style={styles.label}>價格</Text>
-                <TextInput style={styles.input} placeholder="輸入價格" value={price} onChangeText={setPrice} keyboardType="decimal-pad" />
+                <Text style={[styles.label, { color: colors.text }]}>股數</Text>
+                <TextInput
+                  style={[styles.input, { backgroundColor: colors.input, borderColor: colors.inputBorder, color: colors.text }]}
+                  placeholder="輸入股數"
+                  placeholderTextColor={colors.textMuted}
+                  value={shares}
+                  onChangeText={setShares}
+                  keyboardType="decimal-pad"
+                />
+                <Text style={[styles.label, { color: colors.text }]}>價格</Text>
+                <TextInput
+                  style={[styles.input, { backgroundColor: colors.input, borderColor: colors.inputBorder, color: colors.text }]}
+                  placeholder="輸入價格"
+                  placeholderTextColor={colors.textMuted}
+                  value={price}
+                  onChangeText={setPrice}
+                  keyboardType="decimal-pad"
+                />
                 {shares && price && (
                   <Text style={styles.totalText}>
                     總金額: {(parseFloat(shares) * parseFloat(price)).toFixed(2)}
@@ -420,13 +445,13 @@ export default function SearchScreen() {
 
       {/* Chart Modal */}
       <Modal visible={chartVisible} animationType="slide" onRequestClose={() => setChartVisible(false)}>
-        <View style={styles.chartModalContainer}>
-          <View style={[styles.chartModalHeader, { paddingTop: insets.top + 12 }]}>
-            <Text style={styles.chartModalTitle}>
+        <View style={[styles.chartModalContainer, { backgroundColor: colors.card }]}>
+          <View style={[styles.chartModalHeader, { paddingTop: insets.top + 12, borderBottomColor: colors.border }]}>
+            <Text style={[styles.chartModalTitle, { color: colors.text }]}>
               {chartAsset?.name} ({chartAsset?.symbol})
             </Text>
             <TouchableOpacity onPress={() => setChartVisible(false)}>
-              <X size={24} color="#64748b" />
+              <X size={24} color={colors.textSub} />
             </TouchableOpacity>
           </View>
           {chartAsset && (
@@ -439,9 +464,9 @@ export default function SearchScreen() {
               domStorageEnabled
               startInLoadingState
               renderLoading={() => (
-                <View style={styles.chartLoading}>
+                <View style={[styles.chartLoading, { backgroundColor: colors.card }]}>
                   <ActivityIndicator size="large" color="#2563eb" />
-                  <Text style={styles.chartLoadingText}>載入圖表中...</Text>
+                  <Text style={[styles.chartLoadingText, { color: colors.textSub }]}>載入圖表中...</Text>
                 </View>
               )}
             />
@@ -453,24 +478,25 @@ export default function SearchScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f8fafc' },
+  container: { flex: 1 },
   searchContainer: {
     flexDirection: 'row', alignItems: 'center',
     margin: 12, paddingHorizontal: 12,
-    backgroundColor: '#f1f5f9', borderRadius: 10, gap: 8,
+    borderRadius: 10, gap: 8,
   },
   searchInput: { flex: 1, paddingVertical: 12, fontSize: 15 },
-  tabsContainer: { backgroundColor: 'white', borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
+  tabsContainer: { borderBottomWidth: 1 },
   tab: { paddingHorizontal: 20, paddingVertical: 12, borderBottomWidth: 2, borderBottomColor: 'transparent' },
   activeTab: { borderBottomColor: '#2563eb' },
-  tabText: { fontSize: 14, color: '#64748b' },
+  tabText: { fontSize: 14 },
   activeTabText: { color: '#2563eb', fontWeight: '600' },
   hotHeader: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingHorizontal: 16, paddingVertical: 10,
-    backgroundColor: '#fffbeb', borderBottomWidth: 1, borderBottomColor: '#fde68a',
+    borderBottomWidth: 1,
   },
   hotHeaderText: { fontSize: 14, fontWeight: '600', color: '#b45309' },
+  hotUpdatedText: { fontSize: 10, color: '#b45309', opacity: 0.7, marginTop: 1 },
   sortBtns: { flexDirection: 'row', marginLeft: 'auto', gap: 4 },
   sortBtn: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, backgroundColor: '#fef3c7' },
   sortBtnActive: { backgroundColor: '#f59e0b' },
@@ -480,46 +506,46 @@ const styles = StyleSheet.create({
   loadingContainer: { padding: 48, alignItems: 'center' },
   resultCard: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    backgroundColor: 'white', paddingVertical: 12, paddingHorizontal: 16,
-    borderBottomWidth: 1, borderBottomColor: '#f1f5f9',
+    paddingVertical: 12, paddingHorizontal: 16,
+    borderBottomWidth: 1,
   },
   resultInfo: { flex: 1 },
-  resultName: { fontSize: 15, fontWeight: '600', color: '#1e293b', marginBottom: 2 },
-  resultSymbol: { fontSize: 12, color: '#94a3b8' },
+  resultName: { fontSize: 15, fontWeight: '600', marginBottom: 2 },
+  resultSymbol: { fontSize: 12 },
   resultRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   priceBlock: { alignItems: 'flex-end' },
-  priceText: { fontSize: 14, fontWeight: '600', color: '#1e293b', marginBottom: 1 },
+  priceText: { fontSize: 14, fontWeight: '600', marginBottom: 1 },
   changeText: { fontSize: 12, fontWeight: '600' },
   changeUp: { color: '#16a34a' },
   changeDown: { color: '#dc2626' },
   chartBtn: { padding: 4 },
   emptyState: { alignItems: 'center', justifyContent: 'center', padding: 48 },
-  emptyStateText: { fontSize: 16, color: '#94a3b8' },
+  emptyStateText: { fontSize: 16 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  modalContent: { backgroundColor: 'white', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, maxHeight: '80%' },
+  modalContent: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, maxHeight: '80%' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
-  modalTitle: { fontSize: 20, fontWeight: 'bold', color: '#1e293b' },
-  assetInfo: { backgroundColor: '#f8fafc', padding: 16, borderRadius: 8, marginBottom: 24 },
-  assetInfoSymbol: { fontSize: 18, fontWeight: '600', color: '#1e293b', marginBottom: 4 },
-  assetInfoName: { fontSize: 14, color: '#64748b' },
-  label: { fontSize: 14, fontWeight: '600', color: '#1e293b', marginBottom: 8 },
+  modalTitle: { fontSize: 20, fontWeight: 'bold' },
+  assetInfo: { padding: 16, borderRadius: 8, marginBottom: 24 },
+  assetInfoSymbol: { fontSize: 18, fontWeight: '600', marginBottom: 4 },
+  assetInfoName: { fontSize: 14 },
+  label: { fontSize: 14, fontWeight: '600', marginBottom: 8 },
   categoryScroll: { marginBottom: 16 },
-  categoryChip: { backgroundColor: '#f1f5f9', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 16, marginRight: 8 },
+  categoryChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 16, marginRight: 8 },
   categoryChipActive: { backgroundColor: '#2563eb' },
-  categoryChipText: { fontSize: 14, color: '#64748b' },
+  categoryChipText: { fontSize: 14 },
   categoryChipTextActive: { color: 'white', fontWeight: '600' },
-  input: { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, padding: 12, fontSize: 16, marginBottom: 16 },
+  input: { borderWidth: 1, borderRadius: 8, padding: 12, fontSize: 16, marginBottom: 16 },
   totalText: { fontSize: 16, fontWeight: '600', color: '#2563eb', marginBottom: 16, textAlign: 'right' },
   addButton: { flexDirection: 'row', backgroundColor: '#2563eb', padding: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center', gap: 8 },
   addButtonDisabled: { backgroundColor: '#94a3b8' },
   addButtonText: { color: 'white', fontSize: 16, fontWeight: '600' },
-  chartModalContainer: { flex: 1, backgroundColor: 'white' },
+  chartModalContainer: { flex: 1 },
   chartModalHeader: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingHorizontal: 16, paddingBottom: 12,
-    borderBottomWidth: 1, borderBottomColor: '#e2e8f0',
+    borderBottomWidth: 1,
   },
-  chartModalTitle: { fontSize: 16, fontWeight: '600', color: '#1e293b' },
-  chartLoading: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'white' },
-  chartLoadingText: { marginTop: 12, fontSize: 14, color: '#64748b' },
+  chartModalTitle: { fontSize: 16, fontWeight: '600' },
+  chartLoading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  chartLoadingText: { marginTop: 12, fontSize: 14 },
 });

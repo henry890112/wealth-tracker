@@ -8,6 +8,7 @@ import { BlurView } from 'expo-blur';
 import { X, Check } from 'lucide-react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { supabase } from '../lib/supabase';
+import { useTheme } from '../lib/ThemeContext';
 
 const PRIMARY = '#16a34a';
 
@@ -25,6 +26,7 @@ export default function AddAssetScreen() {
   const navigation = useNavigation();
   const route = useRoute();
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
 
   const defaultCategory = route.params?.defaultCategory || 'liquid';
 
@@ -98,15 +100,15 @@ export default function AddAssetScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: '#f1f5f9' }}
+      style={{ flex: 1, backgroundColor: colors.bg }}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.closeBtn}>
-          <X size={20} color="#64748b" />
+      <View style={[styles.header, { paddingTop: insets.top + 12, backgroundColor: colors.bg }]}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={[styles.closeBtn, { backgroundColor: colors.card }]}>
+          <X size={20} color={colors.textSub} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>新增資產</Text>
+        <Text style={[styles.headerTitle, { color: colors.text }]}>新增資產</Text>
         <TouchableOpacity
           onPress={handleSave}
           style={[styles.saveBtn, saving && { opacity: 0.6 }]}
@@ -122,32 +124,32 @@ export default function AddAssetScreen() {
       <ScrollView contentContainerStyle={{ paddingBottom: 60 }}>
 
         {/* Category selector */}
-        <Text style={styles.sectionLabel}>資產類別</Text>
+        <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>資產類別</Text>
         <View style={styles.catGrid}>
           {CATEGORIES.map(c => {
             const active = selectedCategory === c.key;
             return (
               <TouchableOpacity
                 key={c.key}
-                style={[styles.catCard, active && { borderColor: c.color, borderWidth: 2 }]}
+                style={[styles.catCard, { backgroundColor: colors.card }, active && { borderColor: c.color, borderWidth: 2 }]}
                 onPress={() => setSelectedCategory(c.key)}
                 activeOpacity={0.75}
               >
                 <View style={[styles.catDot, { backgroundColor: active ? c.color : c.bg }]} />
-                <Text style={[styles.catLabel, active && { color: c.color, fontWeight: '700' }]}>{c.label}</Text>
-                <Text style={styles.catDesc} numberOfLines={1}>{c.desc}</Text>
+                <Text style={[styles.catLabel, { color: colors.text }, active && { color: c.color, fontWeight: '700' }]}>{c.label}</Text>
+                <Text style={[styles.catDesc, { color: colors.textMuted }]} numberOfLines={1}>{c.desc}</Text>
               </TouchableOpacity>
             );
           })}
         </View>
 
         {/* Form */}
-        <View style={styles.formCard}>
+        <View style={[styles.formCard, { backgroundColor: colors.card }]}>
           {/* Name */}
           <View style={styles.field}>
-            <Text style={styles.fieldLabel}>名稱 *</Text>
+            <Text style={[styles.fieldLabel, { color: colors.textSub }]}>名稱 *</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, { backgroundColor: colors.input, borderColor: colors.inputBorder, color: colors.text }]}
               value={name}
               onChangeText={setName}
               placeholder={`例：${selectedCategory === 'liquid' ? '台灣銀行活存' : selectedCategory === 'fixed' ? '自住房產' : selectedCategory === 'receivable' ? '借給朋友的錢' : selectedCategory === 'liability' ? '房屋貸款' : '台積電'}`}
@@ -158,9 +160,9 @@ export default function AddAssetScreen() {
           {/* Symbol (optional, shown for investment) */}
           {isInvestment && (
             <View style={styles.field}>
-              <Text style={styles.fieldLabel}>代碼（選填）</Text>
+              <Text style={[styles.fieldLabel, { color: colors.textSub }]}>代碼（選填）</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, { backgroundColor: colors.input, borderColor: colors.inputBorder, color: colors.text }]}
                 value={symbol}
                 onChangeText={t => setSymbol(t.toUpperCase())}
                 placeholder="例：2330、AAPL、BTC"
@@ -172,7 +174,7 @@ export default function AddAssetScreen() {
 
           {/* Currency */}
           <View style={styles.field}>
-            <Text style={styles.fieldLabel}>幣別</Text>
+            <Text style={[styles.fieldLabel, { color: colors.textSub }]}>幣別</Text>
             {/* Liquid glass currency selector */}
             <View style={styles.currencyGlass}>
               <BlurView intensity={20} tint="light" style={StyleSheet.absoluteFill} />
@@ -196,13 +198,13 @@ export default function AddAssetScreen() {
 
           {/* Amount */}
           <View style={styles.field}>
-            <Text style={styles.fieldLabel}>
+            <Text style={[styles.fieldLabel, { color: colors.textSub }]}>
               {isInvestment ? '現值金額' : selectedCategory === 'liability' ? '負債金額' : '資產金額'} *
             </Text>
             <View style={styles.inputRow}>
-              <Text style={styles.currencyPrefix}>{currency === 'TWD' ? 'NT$' : currency}</Text>
+              <Text style={[styles.currencyPrefix, { color: colors.textSub }]}>{currency}</Text>
               <TextInput
-                style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                style={[styles.input, { flex: 1, marginBottom: 0, backgroundColor: colors.input, borderColor: colors.inputBorder, color: colors.text }]}
                 value={amount}
                 onChangeText={setAmount}
                 placeholder="0"
@@ -215,13 +217,13 @@ export default function AddAssetScreen() {
           {/* Investment-only fields */}
           {isInvestment && (
             <>
-              <View style={styles.divider} />
-              <Text style={styles.investHint}>投資詳細（選填，用於計算損益）</Text>
+              <View style={[styles.divider, { backgroundColor: colors.borderLight }]} />
+              <Text style={[styles.investHint, { color: colors.textMuted }]}>投資詳細（選填，用於計算損益）</Text>
               <View style={styles.row2}>
                 <View style={[styles.field, { flex: 1 }]}>
-                  <Text style={styles.fieldLabel}>持有股數/數量</Text>
+                  <Text style={[styles.fieldLabel, { color: colors.textSub }]}>持有股數/數量</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, { backgroundColor: colors.input, borderColor: colors.inputBorder, color: colors.text }]}
                     value={shares}
                     onChangeText={setShares}
                     placeholder="0"
@@ -231,9 +233,9 @@ export default function AddAssetScreen() {
                 </View>
                 <View style={{ width: 12 }} />
                 <View style={[styles.field, { flex: 1 }]}>
-                  <Text style={styles.fieldLabel}>平均成本</Text>
+                  <Text style={[styles.fieldLabel, { color: colors.textSub }]}>平均成本</Text>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, { backgroundColor: colors.input, borderColor: colors.inputBorder, color: colors.text }]}
                     value={avgCost}
                     onChangeText={setAvgCost}
                     placeholder="0"
@@ -269,46 +271,45 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingBottom: 12,
-    backgroundColor: '#f1f5f9',
   },
   closeBtn: {
     width: 36, height: 36, borderRadius: 18,
-    backgroundColor: 'white', justifyContent: 'center', alignItems: 'center',
+    justifyContent: 'center', alignItems: 'center',
     shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 4, elevation: 2,
   },
-  headerTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '700', color: '#1e293b' },
+  headerTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '700' },
   saveBtn: {
     width: 36, height: 36, borderRadius: 18,
     backgroundColor: PRIMARY, justifyContent: 'center', alignItems: 'center',
     shadowColor: PRIMARY, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.35, shadowRadius: 6, elevation: 4,
   },
 
-  sectionLabel: { fontSize: 13, color: '#94a3b8', fontWeight: '600', marginHorizontal: 16, marginTop: 16, marginBottom: 8 },
+  sectionLabel: { fontSize: 13, fontWeight: '600', marginHorizontal: 16, marginTop: 16, marginBottom: 8 },
 
   catGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 12, gap: 8, marginBottom: 4 },
   catCard: {
-    width: '46%', backgroundColor: 'white', borderRadius: 12, padding: 12,
+    width: '46%', borderRadius: 12, padding: 12,
     borderWidth: 2, borderColor: 'transparent',
     shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 1,
   },
   catDot: { width: 10, height: 10, borderRadius: 5, marginBottom: 6 },
-  catLabel: { fontSize: 14, fontWeight: '600', color: '#1e293b', marginBottom: 2 },
-  catDesc: { fontSize: 11, color: '#94a3b8' },
+  catLabel: { fontSize: 14, fontWeight: '600', marginBottom: 2 },
+  catDesc: { fontSize: 11 },
 
   formCard: {
-    backgroundColor: 'white', marginHorizontal: 16, marginTop: 12, marginBottom: 12,
+    marginHorizontal: 16, marginTop: 12, marginBottom: 12,
     borderRadius: 16, padding: 16,
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
   },
   field: { marginBottom: 16 },
-  fieldLabel: { fontSize: 13, color: '#64748b', fontWeight: '500', marginBottom: 6 },
+  fieldLabel: { fontSize: 13, fontWeight: '500', marginBottom: 6 },
   input: {
-    backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0',
+    borderWidth: 1,
     borderRadius: 10, paddingHorizontal: 12, paddingVertical: 11,
-    fontSize: 15, color: '#1e293b', marginBottom: 0,
+    fontSize: 15, marginBottom: 0,
   },
   inputRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  currencyPrefix: { fontSize: 15, color: '#64748b', fontWeight: '500', minWidth: 36 },
+  currencyPrefix: { fontSize: 15, fontWeight: '500', minWidth: 36 },
 
   // Liquid glass currency selector
   currencyGlass: {
@@ -330,8 +331,8 @@ const styles = StyleSheet.create({
   currencyLabel: { fontSize: 13, color: PRIMARY, fontWeight: '600' },
   currencyLabelActive: { color: 'white' },
 
-  divider: { height: 1, backgroundColor: '#f1f5f9', marginBottom: 12 },
-  investHint: { fontSize: 12, color: '#94a3b8', marginBottom: 12 },
+  divider: { height: 1, marginBottom: 12 },
+  investHint: { fontSize: 12, marginBottom: 12 },
   row2: { flexDirection: 'row' },
 
   saveFullBtn: {

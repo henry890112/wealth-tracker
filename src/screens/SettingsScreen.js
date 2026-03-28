@@ -8,9 +8,10 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { LogOut, Globe, Palette, RefreshCw } from 'lucide-react-native';
+import { LogOut, Globe, RefreshCw, Sun, Moon, Smartphone } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice } from '../services/api';
+import { useTheme } from '../lib/ThemeContext';
 
 const CURRENCIES = [
   { code: 'TWD', name: '新台幣 (TWD)' },
@@ -20,12 +21,15 @@ const CURRENCIES = [
   { code: 'CNY', name: '人民幣 (CNY)' },
 ];
 
-const COLOR_CONVENTIONS = [
-  { id: 'red_down_green_up', name: '紅跌綠漲 (亞洲)' },
-  { id: 'green_down_red_up', name: '綠跌紅漲 (歐美)' },
+const THEME_OPTIONS = [
+  { id: 'system', label: '跟隨系統', Icon: Smartphone },
+  { id: 'light',  label: '淺色模式', Icon: Sun        },
+  { id: 'dark',   label: '深色模式', Icon: Moon       },
 ];
 
+
 export default function SettingsScreen() {
+  const { preference, setPreference, colors } = useTheme();
   const [profile, setProfile] = useState(null);
   const [userEmail, setUserEmail] = useState('');
   const [loading, setLoading] = useState(true);
@@ -162,41 +166,61 @@ export default function SettingsScreen() {
 
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
+      <View style={[styles.loadingContainer, { backgroundColor: colors.bg }]}>
         <ActivityIndicator size="large" color="#2563eb" />
       </View>
     );
   }
 
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView style={[styles.container, { backgroundColor: colors.bg }]}>
       {/* User Info */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>帳號資訊</Text>
-        <View style={styles.card}>
+        <Text style={[styles.sectionTitle, { color: colors.textSub }]}>帳號資訊</Text>
+        <View style={[styles.card, { backgroundColor: colors.card }]}>
           <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>電子郵件</Text>
-            <Text style={styles.infoValue}>
+            <Text style={[styles.infoLabel, { color: colors.textSub }]}>電子郵件</Text>
+            <Text style={[styles.infoValue, { color: colors.text }]}>
               {userEmail}
             </Text>
           </View>
         </View>
       </View>
 
+      {/* Theme */}
+      <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: colors.textSub }]}>外觀主題</Text>
+        <View style={[styles.card, { backgroundColor: colors.card }]}>
+          {THEME_OPTIONS.map(({ id, label, Icon }, idx) => (
+            <TouchableOpacity
+              key={id}
+              style={[styles.optionRow, { borderBottomColor: colors.borderLight }, idx === THEME_OPTIONS.length - 1 && { borderBottomWidth: 0 }]}
+              onPress={() => setPreference(id)}
+            >
+              <View style={styles.optionContent}>
+                <Icon size={20} color={colors.textSub} />
+                <Text style={[styles.optionText, { color: colors.text }]}>{label}</Text>
+              </View>
+              {preference === id && <View style={styles.selectedIndicator} />}
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+
       {/* Currency Settings */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>基準貨幣</Text>
-        <View style={styles.card}>
+        <Text style={[styles.sectionTitle, { color: colors.textSub }]}>基準貨幣</Text>
+        <View style={[styles.card, { backgroundColor: colors.card }]}>
           {CURRENCIES.map((currency) => (
             <TouchableOpacity
               key={currency.code}
-              style={styles.optionRow}
+              style={[styles.optionRow, { borderBottomColor: colors.borderLight }]}
               onPress={() => updateProfile({ base_currency: currency.code })}
               disabled={saving}
             >
               <View style={styles.optionContent}>
-                <Globe size={20} color="#64748b" />
-                <Text style={styles.optionText}>{currency.name}</Text>
+                <Globe size={20} color={colors.textSub} />
+                <Text style={[styles.optionText, { color: colors.text }]}>{currency.name}</Text>
               </View>
               {profile?.base_currency === currency.code && (
                 <View style={styles.selectedIndicator} />
@@ -206,35 +230,12 @@ export default function SettingsScreen() {
         </View>
       </View>
 
-      {/* Color Convention */}
+{/* Actions */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>漲跌顏色習慣</Text>
-        <View style={styles.card}>
-          {COLOR_CONVENTIONS.map((convention) => (
-            <TouchableOpacity
-              key={convention.id}
-              style={styles.optionRow}
-              onPress={() => updateProfile({ color_convention: convention.id })}
-              disabled={saving}
-            >
-              <View style={styles.optionContent}>
-                <Palette size={20} color="#64748b" />
-                <Text style={styles.optionText}>{convention.name}</Text>
-              </View>
-              {profile?.color_convention === convention.id && (
-                <View style={styles.selectedIndicator} />
-              )}
-            </TouchableOpacity>
-          ))}
-        </View>
-      </View>
-
-      {/* Actions */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>操作</Text>
-        <View style={styles.card}>
+        <Text style={[styles.sectionTitle, { color: colors.textSub }]}>操作</Text>
+        <View style={[styles.card, { backgroundColor: colors.card }]}>
           <TouchableOpacity
-            style={styles.actionRow}
+            style={[styles.actionRow, { borderBottomColor: colors.borderLight }]}
             onPress={handleSyncData}
           >
             <View style={styles.optionContent}>
@@ -246,7 +247,7 @@ export default function SettingsScreen() {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.actionRow}
+            style={[styles.actionRow, { borderBottomWidth: 0 }]}
             onPress={handleSignOut}
           >
             <View style={styles.optionContent}>
@@ -261,8 +262,8 @@ export default function SettingsScreen() {
 
       {/* App Info */}
       <View style={styles.footer}>
-        <Text style={styles.footerText}>WealthTracker v1.0.0</Text>
-        <Text style={styles.footerSubtext}>
+        <Text style={[styles.footerText, { color: colors.textMuted }]}>WealthTracker v1.0.0</Text>
+        <Text style={[styles.footerSubtext, { color: colors.textMuted }]}>
           個人資產管理系統
         </Text>
       </View>
@@ -273,13 +274,11 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8fafc',
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f8fafc',
   },
   section: {
     marginTop: 24,
@@ -288,13 +287,11 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#64748b',
     marginBottom: 12,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
   card: {
-    backgroundColor: 'white',
     borderRadius: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
@@ -310,12 +307,10 @@ const styles = StyleSheet.create({
   },
   infoLabel: {
     fontSize: 16,
-    color: '#64748b',
   },
   infoValue: {
     fontSize: 16,
     fontWeight: '500',
-    color: '#1e293b',
   },
   optionRow: {
     flexDirection: 'row',
@@ -323,7 +318,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
   },
   optionContent: {
     flexDirection: 'row',
@@ -333,7 +327,6 @@ const styles = StyleSheet.create({
   },
   optionText: {
     fontSize: 16,
-    color: '#1e293b',
   },
   selectedIndicator: {
     width: 8,
@@ -347,7 +340,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
   },
   actionText: {
     color: '#2563eb',
@@ -363,11 +355,9 @@ const styles = StyleSheet.create({
   },
   footerText: {
     fontSize: 14,
-    color: '#94a3b8',
     marginBottom: 4,
   },
   footerSubtext: {
     fontSize: 12,
-    color: '#cbd5e1',
   },
 });

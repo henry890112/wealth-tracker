@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, ActivityIndicator,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../lib/supabase';
+import { useTheme } from '../lib/ThemeContext';
 
 const TYPE_CONFIG = {
   BUY:    { label: '買入', color: '#16a34a', bg: '#dcfce7' },
@@ -11,10 +13,11 @@ const TYPE_CONFIG = {
 };
 
 export default function RecordsScreen() {
+  const { colors } = useTheme();
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => { loadData(); }, []);
+  useFocusEffect(useCallback(() => { loadData(); }, []));
 
   const loadData = async () => {
     try {
@@ -37,7 +40,7 @@ export default function RecordsScreen() {
 
   if (loading) {
     return (
-      <View style={styles.loading}>
+      <View style={[styles.loading, { backgroundColor: colors.bg }]}>
         <ActivityIndicator size="large" color="#16a34a" />
       </View>
     );
@@ -45,16 +48,16 @@ export default function RecordsScreen() {
 
   if (transactions.length === 0) {
     return (
-      <View style={styles.empty}>
-        <Text style={styles.emptyText}>尚無交易紀錄</Text>
-        <Text style={styles.emptySub}>買賣資產後紀錄將顯示在這裡</Text>
+      <View style={[styles.empty, { backgroundColor: colors.bg }]}>
+        <Text style={[styles.emptyText, { color: colors.textSub }]}>尚無交易紀錄</Text>
+        <Text style={[styles.emptySub, { color: colors.textMuted }]}>買賣資產後紀錄將顯示在這裡</Text>
       </View>
     );
   }
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 40 }}>
-      <View style={styles.list}>
+    <ScrollView style={[styles.container, { backgroundColor: colors.bg }]} contentContainerStyle={{ paddingBottom: 40 }}>
+      <View style={[styles.list, { backgroundColor: colors.card }]}>
         {transactions.map((tx, idx) => {
           const cfg = TYPE_CONFIG[tx.type] || TYPE_CONFIG.ADJUST;
           const date = new Date(tx.trans_date);
@@ -64,14 +67,14 @@ export default function RecordsScreen() {
           return (
             <View
               key={tx.id}
-              style={[styles.row, idx === transactions.length - 1 && { borderBottomWidth: 0 }]}
+              style={[styles.row, { borderBottomColor: colors.borderLight }, idx === transactions.length - 1 && { borderBottomWidth: 0 }]}
             >
               <View style={[styles.badge, { backgroundColor: cfg.bg }]}>
                 <Text style={[styles.badgeText, { color: cfg.color }]}>{cfg.label}</Text>
               </View>
               <View style={styles.rowContent}>
-                <Text style={styles.assetName}>{tx.assets?.name || '—'}</Text>
-                <Text style={styles.meta}>
+                <Text style={[styles.assetName, { color: colors.text }]}>{tx.assets?.name || '—'}</Text>
+                <Text style={[styles.meta, { color: colors.textMuted }]}>
                   {tx.assets?.symbol ? `${tx.assets.symbol} · ` : ''}{dateStr}
                 </Text>
               </View>
@@ -80,7 +83,7 @@ export default function RecordsScreen() {
                   {tx.type === 'SELL' ? '-' : '+'}{assetCurrency} {amount.toLocaleString('zh-TW', { maximumFractionDigits: 0 })}
                 </Text>
                 {parseFloat(tx.shares) !== 0 && (
-                  <Text style={styles.shares}>
+                  <Text style={[styles.shares, { color: colors.textMuted }]}>
                     {tx.shares} 股 @ {parseFloat(tx.price).toFixed(2)}
                   </Text>
                 )}
@@ -94,13 +97,12 @@ export default function RecordsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f1f5f9' },
-  loading: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f1f5f9' },
-  empty: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f1f5f9', padding: 60 },
-  emptyText: { fontSize: 16, fontWeight: '600', color: '#64748b', marginBottom: 8 },
-  emptySub: { fontSize: 13, color: '#94a3b8', textAlign: 'center' },
+  container: { flex: 1 },
+  loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  empty: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 60 },
+  emptyText: { fontSize: 16, fontWeight: '600', marginBottom: 8 },
+  emptySub: { fontSize: 13, textAlign: 'center' },
   list: {
-    backgroundColor: 'white',
     margin: 16, borderRadius: 12, overflow: 'hidden',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
@@ -109,7 +111,7 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row', alignItems: 'center',
     padding: 14, gap: 10,
-    borderBottomWidth: 1, borderBottomColor: '#f1f5f9',
+    borderBottomWidth: 1,
   },
   badge: {
     paddingHorizontal: 10, paddingVertical: 4,
@@ -117,8 +119,8 @@ const styles = StyleSheet.create({
   },
   badgeText: { fontSize: 12, fontWeight: '700' },
   rowContent: { flex: 1 },
-  assetName: { fontSize: 14, fontWeight: '500', color: '#1e293b', marginBottom: 2 },
-  meta: { fontSize: 12, color: '#94a3b8' },
+  assetName: { fontSize: 14, fontWeight: '500', marginBottom: 2 },
+  meta: { fontSize: 12 },
   amount: { fontSize: 14, fontWeight: '600' },
-  shares: { fontSize: 11, color: '#94a3b8', marginTop: 2 },
+  shares: { fontSize: 11, marginTop: 2 },
 });

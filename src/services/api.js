@@ -197,11 +197,17 @@ const searchTWStocks = async (query) => {
     const data = await response.json();
 
     if (data.status === 200 && data.data) {
+      const seen = new Set();
       return data.data
         .filter(stock =>
           stock.stock_id.includes(query) ||
           stock.stock_name.includes(query)
         )
+        .filter(stock => {
+          if (seen.has(stock.stock_id)) return false;
+          seen.add(stock.stock_id);
+          return true;
+        })
         .slice(0, 20)
         .map(stock => ({
           symbol: stock.stock_id,
