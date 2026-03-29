@@ -141,7 +141,7 @@ export default function AddAssetScreen() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView contentContainerStyle={{ paddingBottom: 60 }}>
+      <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 80 }}>
 
         {/* Category selector */}
         <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>資產類別</Text>
@@ -204,11 +204,11 @@ export default function AddAssetScreen() {
                   return (
                     <TouchableOpacity
                       key={cur}
-                      style={[styles.currencyBtn, active && styles.currencyBtnActive]}
+                      style={[styles.currencyBtn, { backgroundColor: colors.card, borderColor: colors.border }, active && styles.currencyBtnActive]}
                       onPress={() => setCurrency(cur)}
                       activeOpacity={0.75}
                     >
-                      <Text style={[styles.currencyLabel, active && styles.currencyLabelActive]}>{cur}</Text>
+                      <Text style={[styles.currencyLabel, { color: colors.textSub }, active && styles.currencyLabelActive]}>{cur}</Text>
                     </TouchableOpacity>
                   );
                 })}
@@ -354,8 +354,8 @@ const styles = StyleSheet.create({
   currencyRow: { flexDirection: 'row', padding: 4, gap: 4 },
   currencyBtn: {
     paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8,
-    backgroundColor: 'rgba(255,255,255,0.5)',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.7)',
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    borderWidth: 1, borderColor: 'rgba(22,163,74,0.35)',
   },
   currencyBtnActive: {
     backgroundColor: PRIMARY,

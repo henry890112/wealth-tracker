@@ -18,11 +18,13 @@ import {
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Search as SearchIcon, Plus, X, Flame, LineChart } from 'lucide-react-native';
+import { Search as SearchIcon, Plus, X, Flame, LineChart, Clock } from 'lucide-react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
 import {
   searchAssets,
   fetchTrendingAssets,
+  fetchExchangeRate,
 } from '../services/api';
 import { useTheme } from '../lib/ThemeContext';
 
@@ -31,6 +33,7 @@ const MARKET_TABS = [
   { id: 'TW', label: '台股' },
   { id: 'US', label: '美股' },
   { id: 'Crypto', label: '虛幣' },
+  { id: 'FX', label: '外幣' },
 ];
 
 const CATEGORIES = [
@@ -43,7 +46,17 @@ const CATEGORIES = [
 
 const MARKET_TYPE_LABELS = { TW: '台股', US: '美股', Crypto: '虛幣' };
 
+const INDEX_TV_MAP = {
+  '^TWII':  'TVC:TWII',
+  '^TWOII': 'TVC:TPEX',
+  '^GSPC':  'SP:SPX',
+  '^IXIC':  'NASDAQ:IXIC',
+  '^DJI':   'TVC:DJI',
+  '^RUT':   'TVC:RUT',
+};
+
 const getTVSymbol = (asset) => {
+  if (INDEX_TV_MAP[asset.symbol]) return INDEX_TV_MAP[asset.symbol];
   if (asset.market_type === 'TW') return `TWSE:${asset.symbol}`;
   if (asset.market_type === 'Crypto') {
     const map = { BTC: 'BINANCE:BTCUSDT', ETH: 'BINANCE:ETHUSDT', SOL: 'BINANCE:SOLUSDT', BNB: 'BINANCE:BNBUSDT' };
@@ -51,6 +64,8 @@ const getTVSymbol = (asset) => {
   }
   return asset.symbol;
 };
+
+const PRIMARY = '#16a34a';
 
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
@@ -70,14 +85,103 @@ export default function SearchScreen() {
   const [hotPrices, setHotPrices] = useState({});
   const [hotUpdatedAt, setHotUpdatedAt] = useState(null);
   const [hotLoading, setHotLoading] = useState(true);
+  const [fxRates, setFxRates] = useState([]);
+  const [baseCurrency, setBaseCurrency] = useState('TWD');
+  const [fxModal, setFxModal] = useState(false);
+  const [selectedFx, setSelectedFx] = useState(null);
+  const [fxBaseAmount, setFxBaseAmount] = useState('');
+  const [fxAdding, setFxAdding] = useState(false);
   const [sortBy, setSortBy] = useState('change_desc');
   const [chartVisible, setChartVisible] = useState(false);
   const [chartAsset, setChartAsset] = useState(null);
+  const [recentSearches, setRecentSearches] = useState([]);
   const debounceRef = useRef(null);
   const priceInputRef = useRef(null);
   const leverageInputRef = useRef(null);
 
-  useFocusEffect(useCallback(() => { loadHotPrices(); }, []));
+  useFocusEffect(useCallback(() => { loadHotPrices(); loadFxRates(); }, []));
+
+  const FX_CURRENCIES = [
+    { code: 'USD', name: '美元', flag: '🇺🇸' },
+    { code: 'JPY', name: '日圓', flag: '🇯🇵' },
+    { code: 'EUR', name: '歐元', flag: '🇪🇺' },
+    { code: 'GBP', name: '英鎊', flag: '🇬🇧' },
+    { code: 'CNY', name: '人民幣', flag: '🇨🇳' },
+    { code: 'HKD', name: '港幣', flag: '🇭🇰' },
+    { code: 'AUD', name: '澳幣', flag: '🇦🇺' },
+    { code: 'SGD', name: '新幣', flag: '🇸🇬' },
+    { code: 'KRW', name: '韓元', flag: '🇰🇷' },
+  ];
+
+  const loadFxRates = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const { data: profile } = user
+        ? await supabase.from('profiles').select('base_currency').eq('id', user.id).single()
+        : { data: null };
+      const base = profile?.base_currency || 'TWD';
+      setBaseCurrency(base);
+
+      const targets = FX_CURRENCIES.filter(c => c.code !== base);
+      const rates = await Promise.all(
+        targets.map(async (c) => {
+          try {
+            const rate = await fetchExchangeRate(base, c.code);
+            return { ...c, rate };
+          } catch {
+            return { ...c, rate: null };
+          }
+        })
+      );
+      setFxRates(rates);
+    } catch (e) {
+      console.warn('loadFxRates error:', e.message);
+    }
+  };
+
+  const openFxModal = (fx) => {
+    setSelectedFx(fx);
+    setFxBaseAmount('');
+    setFxModal(true);
+  };
+
+  const handleFxRecord = async () => {
+    const baseAmt = parseFloat(fxBaseAmount);
+    if (!baseAmt || baseAmt <= 0) { Alert.alert('請輸入金額'); return; }
+    if (!selectedFx?.rate) { Alert.alert('匯率資料不足'); return; }
+    setFxAdding(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('未登入');
+      const foreignAmt = baseAmt * selectedFx.rate;
+      const { data: asset, error } = await supabase.from('assets').insert({
+        user_id: user.id,
+        name: `${selectedFx.name}現金`,
+        category: 'liquid',
+        currency: selectedFx.code,
+        current_amount: foreignAmt,
+        current_shares: 0,
+        average_cost: 0,
+        leverage: 1,
+      }).select().single();
+      if (error) throw error;
+      await supabase.from('transactions').insert({
+        asset_id: asset.id,
+        type: 'ADJUST',
+        shares: 0,
+        price: 0,
+        total_amount: foreignAmt,
+        trans_date: new Date().toISOString(),
+      });
+      await supabase.rpc('create_daily_snapshot', { p_user_id: user.id });
+      setFxModal(false);
+      Alert.alert('新增成功', `已記錄 ${Math.round(foreignAmt).toLocaleString()} ${selectedFx.code}（${baseCurrency} ${baseAmt.toLocaleString()}）`);
+    } catch (e) {
+      Alert.alert('錯誤', e.message);
+    } finally {
+      setFxAdding(false);
+    }
+  };
 
   const loadHotPrices = async () => {
     setHotLoading(true);
@@ -90,6 +194,37 @@ export default function SearchScreen() {
       console.warn('loadHotPrices error:', e.message);
     } finally {
       setHotLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    AsyncStorage.getItem('recent_searches').then(val => {
+      if (val) {
+        try { setRecentSearches(JSON.parse(val)); } catch {}
+      }
+    });
+  }, []);
+
+  const saveRecentSearch = async (q) => {
+    const trimmed = q.trim();
+    if (!trimmed) return;
+    try {
+      const existing = await AsyncStorage.getItem('recent_searches');
+      const prev = existing ? JSON.parse(existing) : [];
+      const updated = [trimmed, ...prev.filter(s => s !== trimmed)].slice(0, 8);
+      setRecentSearches(updated);
+      await AsyncStorage.setItem('recent_searches', JSON.stringify(updated));
+    } catch (e) {
+      console.warn('saveRecentSearch error:', e);
+    }
+  };
+
+  const clearRecentSearches = async () => {
+    try {
+      setRecentSearches([]);
+      await AsyncStorage.removeItem('recent_searches');
+    } catch (e) {
+      console.warn('clearRecentSearches error:', e);
     }
   };
 
@@ -113,10 +248,17 @@ export default function SearchScreen() {
     }
   };
 
+  const indexAssets = useMemo(() => {
+    if (activeTab === 'Crypto' || activeTab === 'FX') return [];
+    return activeTab === 'all'
+      ? hotAssetList.filter(a => a.isIndex)
+      : hotAssetList.filter(a => a.isIndex && a.market_type === activeTab);
+  }, [activeTab, hotAssetList]);
+
   const hotAssets = useMemo(() => {
     const base = activeTab === 'all'
-      ? hotAssetList
-      : hotAssetList.filter(a => a.market_type === activeTab);
+      ? hotAssetList.filter(a => !a.isIndex)
+      : hotAssetList.filter(a => !a.isIndex && a.market_type === activeTab);
     if (Object.keys(hotPrices).length === 0) return base;
     return [...base].sort((a, b) => {
       const pa = hotPrices[a.symbol];
@@ -241,7 +383,7 @@ export default function SearchScreen() {
       <TouchableOpacity
         key={`${keyPrefix}-${asset.symbol}-${index}`}
         style={[styles.resultCard, { backgroundColor: colors.card, borderBottomColor: colors.borderLight }]}
-        onPress={() => handleSelectAsset(asset)}
+        onPress={() => asset.isIndex ? handleShowChart(asset) : handleSelectAsset(asset)}
       >
         <View style={styles.resultInfo}>
           <Text style={[styles.resultName, { color: colors.text }]}>{asset.name}</Text>
@@ -262,13 +404,15 @@ export default function SearchScreen() {
               </Text>
             )}
           </View>
-          <TouchableOpacity
-            style={styles.chartBtn}
-            onPress={() => handleShowChart(asset)}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <LineChart size={18} color={colors.textSub} />
-          </TouchableOpacity>
+          {!asset.isIndex && (
+            <TouchableOpacity
+              style={styles.chartBtn}
+              onPress={() => handleShowChart(asset)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <LineChart size={18} color={colors.textSub} />
+            </TouchableOpacity>
+          )}
         </View>
       </TouchableOpacity>
     );
@@ -290,7 +434,7 @@ export default function SearchScreen() {
           placeholderTextColor={colors.textMuted}
           value={query}
           onChangeText={setQuery}
-          onSubmitEditing={() => handleSearch()}
+          onSubmitEditing={() => { saveRecentSearch(query); handleSearch(); }}
           returnKeyType="search"
           autoCorrect={false}
           autoCapitalize="none"
@@ -322,6 +466,7 @@ export default function SearchScreen() {
       {/* Results / Hot Assets */}
       <ScrollView
         style={styles.resultsContainer}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 80 }}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         refreshControl={
@@ -342,8 +487,67 @@ export default function SearchScreen() {
           results.length > 0
             ? results.map((asset, i) => renderAssetCard(asset, 'search', i))
             : <View style={styles.emptyState}><Text style={[styles.emptyStateText, { color: colors.textMuted }]}>無搜尋結果</Text></View>
+        ) : activeTab === 'FX' ? (
+          <View style={[styles.fxGrid, { backgroundColor: colors.card }]}>
+            {fxRates.length === 0
+              ? <ActivityIndicator style={{ padding: 32 }} color={PRIMARY} />
+              : fxRates.map((fx, i) => (
+                <View
+                  key={fx.code}
+                  style={[styles.fxItem, { borderBottomColor: colors.borderLight },
+                    i === fxRates.length - 1 && { borderBottomWidth: 0 }]}
+                >
+                  <Text style={styles.fxFlag}>{fx.flag}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.fxCode, { color: colors.text }]}>{fx.name}（{fx.code}）</Text>
+                    <Text style={[styles.fxName, { color: colors.textMuted }]}>
+                      {fx.rate != null
+                        ? `1 ${baseCurrency} = ${fx.rate >= 1 ? fx.rate.toFixed(2) : fx.rate.toFixed(4)} ${fx.code}`
+                        : '匯率載入中...'}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={[styles.fxBuyBtn, { backgroundColor: PRIMARY }]}
+                    onPress={() => openFxModal(fx)}
+                  >
+                    <Text style={{ color: 'white', fontSize: 12, fontWeight: '700' }}>記錄</Text>
+                  </TouchableOpacity>
+                </View>
+              ))
+            }
+          </View>
         ) : (
           <>
+            {recentSearches.length > 0 && (
+              <>
+                <View style={[styles.recentHeader, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+                  <Clock size={15} color={colors.textSub} />
+                  <Text style={[styles.recentHeaderText, { color: colors.textSub }]}>最近搜尋</Text>
+                  <TouchableOpacity onPress={clearRecentSearches} style={styles.clearBtn}>
+                    <Text style={[styles.clearBtnText, { color: colors.textMuted }]}>清除</Text>
+                  </TouchableOpacity>
+                </View>
+                {recentSearches.map((item, i) => (
+                  <TouchableOpacity
+                    key={i}
+                    style={[styles.recentItem, { backgroundColor: colors.card, borderBottomColor: colors.borderLight }]}
+                    onPress={() => { setQuery(item); handleSearch(item); }}
+                  >
+                    <Clock size={14} color={colors.textMuted} />
+                    <Text style={[styles.recentItemText, { color: colors.text }]}>{item}</Text>
+                  </TouchableOpacity>
+                ))}
+              </>
+            )}
+            {indexAssets.length > 0 && !hotLoading && (
+              <>
+                <View style={[styles.indexHeader, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+                  <LineChart size={16} color="#2563eb" />
+                  <Text style={styles.indexHeaderText}>大盤指數</Text>
+                </View>
+                {indexAssets.map((asset, i) => renderAssetCard(asset, 'index', i))}
+              </>
+            )}
             <View style={[styles.hotHeader, { backgroundColor: colors.hotBg, borderBottomColor: colors.hotBorder }]}>
               <Flame size={16} color="#f59e0b" />
               <View>
@@ -476,6 +680,51 @@ export default function SearchScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
+      {/* FX Record Modal */}
+      <Modal visible={fxModal} transparent animationType="slide" onRequestClose={() => setFxModal(false)}>
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: colors.text }]}>
+                  {selectedFx?.flag} 記錄{selectedFx?.name}
+                </Text>
+                <TouchableOpacity onPress={() => setFxModal(false)}>
+                  <X size={22} color={colors.textSub} />
+                </TouchableOpacity>
+              </View>
+              {selectedFx?.rate && (
+                <Text style={[styles.label, { color: colors.textMuted, marginBottom: 8 }]}>
+                  匯率：1 {baseCurrency} = {selectedFx.rate >= 1 ? selectedFx.rate.toFixed(2) : selectedFx.rate.toFixed(4)} {selectedFx.code}
+                </Text>
+              )}
+              <Text style={[styles.label, { color: colors.text }]}>支出金額（{baseCurrency}）</Text>
+              <TextInput
+                style={[styles.input, { backgroundColor: colors.input, borderColor: colors.inputBorder, color: colors.text }]}
+                placeholder={`輸入 ${baseCurrency} 金額`}
+                placeholderTextColor={colors.textMuted}
+                value={fxBaseAmount}
+                onChangeText={setFxBaseAmount}
+                keyboardType="decimal-pad"
+                autoFocus
+              />
+              {fxBaseAmount && selectedFx?.rate && (
+                <Text style={[styles.totalText, { color: PRIMARY }]}>
+                  換得：{Math.round(parseFloat(fxBaseAmount) * selectedFx.rate).toLocaleString()} {selectedFx?.code}
+                </Text>
+              )}
+              <TouchableOpacity
+                style={[styles.addButton, fxAdding && styles.addButtonDisabled]}
+                onPress={handleFxRecord}
+                disabled={fxAdding}
+              >
+                <Text style={styles.addButtonText}>{fxAdding ? '記錄中...' : '新增到流動資產'}</Text>
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        </TouchableWithoutFeedback>
+      </Modal>
+
       {/* Chart Modal */}
       <Modal visible={chartVisible} animationType="slide" onRequestClose={() => setChartVisible(false)}>
         <View style={[styles.chartModalContainer, { backgroundColor: colors.card }]}>
@@ -524,6 +773,27 @@ const styles = StyleSheet.create({
   activeTab: { borderBottomColor: '#2563eb' },
   tabText: { fontSize: 14 },
   activeTabText: { color: '#2563eb', fontWeight: '600' },
+  fxGrid: {
+    marginHorizontal: 16, borderRadius: 12, overflow: 'hidden',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2,
+  },
+  fxItem: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 14, paddingVertical: 11, gap: 10,
+    borderBottomWidth: 1,
+  },
+  fxFlag: { fontSize: 22 },
+  fxCode: { fontSize: 14, fontWeight: '600' },
+  fxName: { fontSize: 11, marginTop: 1 },
+  fxRate: { fontSize: 15, fontWeight: '700', minWidth: 70, textAlign: 'right' },
+  fxBuyBtn: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8 },
+
+  indexHeader: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 16, paddingVertical: 10,
+    borderBottomWidth: 1,
+  },
+  indexHeaderText: { fontSize: 14, fontWeight: '600', color: '#2563eb' },
   hotHeader: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingHorizontal: 16, paddingVertical: 10,
@@ -556,6 +826,20 @@ const styles = StyleSheet.create({
   changeUp: { color: '#16a34a' },
   changeDown: { color: '#dc2626' },
   chartBtn: { padding: 4 },
+  recentHeader: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 16, paddingVertical: 10,
+    borderBottomWidth: 1,
+  },
+  recentHeaderText: { fontSize: 13, fontWeight: '600' },
+  clearBtn: { marginLeft: 'auto', paddingHorizontal: 4, paddingVertical: 2 },
+  clearBtnText: { fontSize: 13 },
+  recentItem: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: 16, paddingVertical: 12,
+    borderBottomWidth: 1,
+  },
+  recentItemText: { fontSize: 15 },
   emptyState: { alignItems: 'center', justifyContent: 'center', padding: 48 },
   emptyStateText: { fontSize: 16 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },

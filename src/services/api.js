@@ -85,13 +85,42 @@ export const fetchUSStockPrice = async (symbol) => {
   }
 };
 
+// Map ticker symbols to CoinGecko IDs
+const SYMBOL_TO_COINGECKO_ID = {
+  BTC:  'bitcoin',
+  ETH:  'ethereum',
+  USDT: 'tether',
+  BNB:  'binancecoin',
+  SOL:  'solana',
+  XRP:  'ripple',
+  USDC: 'usd-coin',
+  DOGE: 'dogecoin',
+  ADA:  'cardano',
+  AVAX: 'avalanche-2',
+  TRX:  'tron',
+  TON:  'the-open-network',
+  LINK: 'chainlink',
+  DOT:  'polkadot',
+  MATIC:'matic-network',
+  SHIB: 'shiba-inu',
+  LTC:  'litecoin',
+  UNI:  'uniswap',
+  ATOM: 'cosmos',
+  XLM:  'stellar',
+};
+
 /**
  * Fetch cryptocurrency price from CoinGecko API
+ * Accepts ticker symbol (BTC, ETH…) or CoinGecko ID (bitcoin, ethereum…)
  */
-export const fetchCryptoPrice = async (coinId) => {
+export const fetchCryptoPrice = async (symbol) => {
   try {
-    const cached = await getCachedPrice(coinId, 'Crypto');
+    const upperSymbol = symbol.toUpperCase();
+    const cached = await getCachedPrice(upperSymbol, 'Crypto');
     if (cached) return cached;
+
+    // Convert ticker symbol to CoinGecko ID; fallback to lowercase of input
+    const coinId = SYMBOL_TO_COINGECKO_ID[upperSymbol] || symbol.toLowerCase();
 
     const response = await fetch(
       `${COINGECKO_BASE_URL}/simple/price?ids=${coinId}&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true`
@@ -103,7 +132,7 @@ export const fetchCryptoPrice = async (coinId) => {
 
     if (data[coinId]) {
       const priceData = {
-        symbol: coinId.toUpperCase(),
+        symbol: upperSymbol,
         price: data[coinId].usd,
         change_percent: data[coinId].usd_24h_change || 0,
         volume: data[coinId].usd_24h_vol || 0,
@@ -307,6 +336,19 @@ const searchCrypto = async (query) => {
   }
 };
 
+// 大盤指數（固定清單，用 Yahoo Finance 取價）
+export const TW_INDICES = [
+  { symbol: '^TWII',  name: '台股加權指數', market_type: 'TW', isIndex: true },
+  { symbol: '^TWOII', name: '台股櫃買指數', market_type: 'TW', isIndex: true },
+];
+
+export const US_INDICES = [
+  { symbol: '^GSPC', name: 'S&P 500',     market_type: 'US', isIndex: true },
+  { symbol: '^IXIC', name: 'NASDAQ',       market_type: 'US', isIndex: true },
+  { symbol: '^DJI',  name: '道瓊工業指數', market_type: 'US', isIndex: true },
+  { symbol: '^RUT',  name: '羅素 2000',    market_type: 'US', isIndex: true },
+];
+
 // 熱門標的
 // TW candidate pool — sorted by live volume when fetched, pick top 10
 const TW_CANDIDATES = [
@@ -338,6 +380,23 @@ const TW_CANDIDATES = [
 export const fetchTrendingAssets = async () => {
   const assets = [];
   const prices = {};
+
+  // ── 0. 大盤指數（Yahoo Finance，TW 優先，US 次之）────────────
+  const allIndices = [...TW_INDICES, ...US_INDICES];
+  const idxResults = await Promise.allSettled(
+    allIndices.map(async (idx) => {
+      const priceData = await fetchUSStockPrice(idx.symbol);
+      return { idx, priceData };
+    })
+  );
+  idxResults.forEach((r, i) => {
+    if (r.status === 'fulfilled' && r.value.priceData) {
+      prices[allIndices[i].symbol] = { ...r.value.priceData, market_type: allIndices[i].market_type };
+    } else if (r.status === 'rejected') {
+      console.warn(`fetchTrendingAssets index ${allIndices[i].symbol}:`, r.reason?.message);
+    }
+  });
+  allIndices.forEach(idx => assets.push({ ...idx }));
 
   // ── 1. Crypto — CoinGecko markets, fallback to simple/price ──
   const CRYPTO_FALLBACK = [

@@ -4,6 +4,7 @@ import {
   TouchableOpacity,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/ThemeContext';
 
@@ -30,6 +31,7 @@ const MARKET_FILTERS = [
 
 export default function RecordsScreen() {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [typeFilter, setTypeFilter] = useState('all');
@@ -104,7 +106,7 @@ export default function RecordsScreen() {
         {renderChip(MARKET_FILTERS, marketFilter, setMarketFilter, '#2563eb')}
       </View>
 
-      <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
+      <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 80 }}>
         {filtered.length === 0 ? (
           <View style={styles.empty}>
             <Text style={[styles.emptyText, { color: colors.textSub }]}>無符合紀錄</Text>

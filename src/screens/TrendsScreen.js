@@ -140,7 +140,7 @@ function DonutChart({ data, size = 180, strokeWidth = 28, selectedIndex, onSelec
 }
 
 export default function TrendsScreen() {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const [loading, setLoading] = useState(true);
   const [snapshots, setSnapshots] = useState([]);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
@@ -357,8 +357,8 @@ export default function TrendsScreen() {
   const { data: chartData, baseline: chartBaseline } = getChartData();
 
   return (
-    <>
-      <ScrollView style={[styles.container, { backgroundColor: colors.bg }]} contentContainerStyle={{ paddingBottom: 40 }}>
+    <View style={[styles.container, { backgroundColor: colors.bg }]}>
+      <ScrollView contentContainerStyle={{ paddingBottom: 120 }}>
 
         {/* Trend chart card */}
         <View style={[styles.card, { backgroundColor: colors.card }]}>
@@ -372,8 +372,7 @@ export default function TrendsScreen() {
           </View>
 
           {/* ── Liquid Glass period selector ── */}
-          <View style={styles.glassContainer}>
-            <BlurView intensity={30} tint="light" style={StyleSheet.absoluteFill} />
+          <View style={[styles.glassContainer, { backgroundColor: colors.card }]}>
             <View style={styles.periodRow}>
               {PERIODS.map((p) => {
                 const isActive = p.days === selectedPeriod.days && !(p.days === null && selectedPeriod.days !== null);
@@ -382,12 +381,14 @@ export default function TrendsScreen() {
                 return (
                   <TouchableOpacity
                     key={p.label}
-                    style={[styles.periodBtn, active && styles.periodBtnActive]}
+                    style={[styles.periodBtn,
+                      { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)', borderColor: colors.borderLight },
+                      active && styles.periodBtnActive]}
                     onPress={() => handlePeriodSelect(p)}
                     activeOpacity={0.75}
                   >
                     {p.days === null && <Calendar size={10} color={active ? 'white' : PRIMARY} style={{ marginRight: 3 }} />}
-                    <Text style={[styles.periodLabel, active && styles.periodLabelActive]}>
+                    <Text style={[styles.periodLabel, { color: colors.textSub }, active && styles.periodLabelActive]}>
                       {p.label}
                     </Text>
                   </TouchableOpacity>
@@ -557,7 +558,7 @@ export default function TrendsScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
-    </>
+    </View>
   );
 }
 
