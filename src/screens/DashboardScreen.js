@@ -47,23 +47,65 @@ export default function DashboardScreen() {
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [hidden, setHidden] = useState(false);
+  const [sortOrder, setSortOrder] = useState('default'); // 'default' | 'desc' | 'asc'
+
+  const cycleSortOrder = () => {
+    setSortOrder(prev => prev === 'default' ? 'desc' : prev === 'desc' ? 'asc' : 'default');
+  };
+
+  // Merge assets with the same symbol (investments) or name (others) within the same category
+  const mergedAssets = useMemo(() => {
+    const map = new Map();
+    for (const asset of assets) {
+      const key = asset.category === 'investment' && asset.symbol
+        ? `inv:${asset.symbol}:${asset.market_type || ''}:${asset.category}`
+        : `${asset.category}:${asset.name}`;
+
+      if (!map.has(key)) {
+        map.set(key, { ...asset, _allIds: [asset.id] });
+      } else {
+        const existing = map.get(key);
+        existing._allIds.push(asset.id);
+        existing.converted_amount += asset.converted_amount;
+        existing.current_shares = (existing.current_shares || 0) + (asset.current_shares || 0);
+        if (existing.pnl !== null && asset.pnl !== null) {
+          existing.pnl += asset.pnl;
+          // pnl_pct is only meaningful for single assets; clear it for merged rows
+          existing.pnl_pct = null;
+        } else if (asset.pnl !== null) {
+          existing.pnl = asset.pnl;
+          existing.pnl_pct = null;
+        }
+      }
+    }
+    return Array.from(map.values());
+  }, [assets]);
 
   const categoryTotals = useMemo(() => {
     const totals = {};
     for (const cat of [...ASSET_CATEGORIES, 'liability']) {
-      const catAssets = assets.filter(a => a.category === cat);
+      const catAssets = mergedAssets.filter(a => a.category === cat);
       totals[cat] = {
         total: catAssets.reduce((sum, a) => sum + a.converted_amount, 0),
         count: catAssets.length,
       };
     }
     return totals;
-  }, [assets]);
+  }, [mergedAssets]);
 
   const filteredAssets = useMemo(() => {
-    if (!selectedCategory) return assets;
-    return assets.filter(a => a.category === selectedCategory);
-  }, [assets, selectedCategory]);
+    if (!selectedCategory) return mergedAssets;
+    return mergedAssets.filter(a => a.category === selectedCategory);
+  }, [mergedAssets, selectedCategory]);
+
+  const sortedFilteredAssets = useMemo(() => {
+    if (sortOrder === 'default') return filteredAssets;
+    return [...filteredAssets].sort((a, b) =>
+      sortOrder === 'desc'
+        ? b.converted_amount - a.converted_amount
+        : a.converted_amount - b.converted_amount
+    );
+  }, [filteredAssets, sortOrder]);
 
   useFocusEffect(useCallback(() => { loadData(); }, []));
 
@@ -296,17 +338,24 @@ export default function DashboardScreen() {
         </View>
 
         {/* Filter bar */}
-        {selectedCategory && (
-          <View style={[styles.filterBar, { backgroundColor: colors.card }]}>
-            <Text style={[styles.filterText, { color: colors.textSub }]}>篩選中</Text>
-            <TouchableOpacity onPress={() => setSelectedCategory(null)} style={styles.clearBtn}>
-              <Text style={styles.clearText}>清除</Text>
-            </TouchableOpacity>
-            <View style={{ flex: 1 }} />
-            <RefreshCw size={12} color={colors.textMuted} />
-            <Text style={[styles.filterCount, { color: colors.textMuted }]}> {filteredAssets.length} 項</Text>
-          </View>
-        )}
+        <View style={[styles.filterBar, { backgroundColor: colors.card }]}>
+          {selectedCategory ? (
+            <>
+              <Text style={[styles.filterText, { color: colors.textSub }]}>篩選中</Text>
+              <TouchableOpacity onPress={() => setSelectedCategory(null)} style={styles.clearBtn}>
+                <Text style={styles.clearText}>清除</Text>
+              </TouchableOpacity>
+            </>
+          ) : null}
+          <View style={{ flex: 1 }} />
+          <RefreshCw size={12} color={colors.textMuted} />
+          <Text style={[styles.filterCount, { color: colors.textMuted }]}> {sortedFilteredAssets.length} 項</Text>
+          <TouchableOpacity onPress={cycleSortOrder} style={styles.sortBtn} activeOpacity={0.7}>
+            <Text style={[styles.sortText, { color: sortOrder !== 'default' ? PRIMARY : colors.textMuted }]}>
+              {sortOrder === 'default' ? '排序' : sortOrder === 'desc' ? '金額↓' : '金額↑'}
+            </Text>
+          </TouchableOpacity>
+        </View>
 
         {/* Price update time */}
         {lastUpdated && (
@@ -316,13 +365,13 @@ export default function DashboardScreen() {
         )}
 
         {/* Asset list */}
-        {filteredAssets.length > 0 ? (
+        {sortedFilteredAssets.length > 0 ? (
           (() => {
             const renderAssetRows = (list) => list.map((asset, idx) => (
               <TouchableOpacity
                 key={asset.id}
                 style={[styles.assetRow, { borderBottomColor: colors.borderLight }, idx === list.length - 1 && { borderBottomWidth: 0 }]}
-                onPress={() => navigation.navigate('AssetDetail', { assetId: asset.id })}
+                onPress={() => navigation.navigate('AssetDetail', { assetId: asset.id, allIds: asset._allIds || [asset.id] })}
                 activeOpacity={0.7}
               >
                 <View style={{ flex: 1 }}>
@@ -340,7 +389,9 @@ export default function DashboardScreen() {
                   </View>
                   {asset.pnl !== null && (
                     <Text style={{ fontSize: 11, fontWeight: '600', color: asset.pnl >= 0 ? '#16a34a' : '#ef4444' }}>
-                      {hidden ? '****' : `${asset.pnl >= 0 ? '+' : ''}${fmt(asset.pnl)}  (${asset.pnl >= 0 ? '+' : ''}${asset.pnl_pct.toFixed(1)}%)`}
+                      {hidden ? '****' : asset.pnl_pct !== null
+                        ? `${asset.pnl >= 0 ? '+' : ''}${fmt(asset.pnl)}  (${asset.pnl >= 0 ? '+' : ''}${asset.pnl_pct.toFixed(1)}%)`
+                        : `${asset.pnl >= 0 ? '+' : ''}${fmt(asset.pnl)}`}
                     </Text>
                   )}
                   {asset.current_shares > 0 && (
@@ -370,7 +421,7 @@ export default function DashboardScreen() {
             if (!selectedCategory) {
               const CAT_ORDER = ['liquid', 'investment', 'fixed', 'receivable', 'liability'];
               const groups = {};
-              filteredAssets.forEach(a => {
+              sortedFilteredAssets.forEach(a => {
                 if (!groups[a.category]) groups[a.category] = [];
                 groups[a.category].push(a);
               });
@@ -384,7 +435,7 @@ export default function DashboardScreen() {
             if (selectedCategory === 'investment') {
               const MT_ORDER = ['TW', 'US', 'Crypto', 'other'];
               const groups = {};
-              filteredAssets.forEach(a => {
+              sortedFilteredAssets.forEach(a => {
                 const mt = a.market_type || 'other';
                 if (!groups[mt]) groups[mt] = [];
                 groups[mt].push(a);
@@ -398,7 +449,7 @@ export default function DashboardScreen() {
             // Other single category: flat list
             return (
               <View style={[styles.assetList, { backgroundColor: colors.card }]}>
-                {renderAssetRows(filteredAssets)}
+                {renderAssetRows(sortedFilteredAssets)}
               </View>
             );
           })()
@@ -501,6 +552,8 @@ const styles = StyleSheet.create({
   clearBtn: { paddingHorizontal: 4 },
   clearText: { fontSize: 13, color: PRIMARY, fontWeight: '600' },
   filterCount: { fontSize: 12 },
+  sortBtn: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, marginLeft: 4 },
+  sortText: { fontSize: 12, fontWeight: '600' },
 
   updateTime: {
     fontSize: 11,

@@ -10,6 +10,10 @@ import {
   TouchableOpacity,
   Modal,
   TextInput,
+  Keyboard,
+  TouchableWithoutFeedback,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { Trash2, Plus } from 'lucide-react-native';
@@ -39,7 +43,7 @@ const TRANSACTION_TYPES = [
 export default function AssetDetailScreen() {
   const route = useRoute();
   const navigation = useNavigation();
-  const { assetId } = route.params;
+  const { assetId, allIds } = route.params;
 
   const [asset, setAsset] = useState(null);
   const [transactions, setTransactions] = useState([]);
@@ -87,10 +91,11 @@ export default function AssetDetailScreen() {
       );
       setAsset({ ...assetData, converted_amount: convertedAmount });
 
+      const assetIds = allIds && allIds.length > 1 ? allIds : [assetId];
       const { data: transactionsData, error: transactionsError } = await supabase
         .from('transactions')
         .select('*')
-        .eq('asset_id', assetId)
+        .in('asset_id', assetIds)
         .order('trans_date', { ascending: false });
 
       if (transactionsError) throw transactionsError;
@@ -137,15 +142,17 @@ export default function AssetDetailScreen() {
     );
   };
 
+  const isInvestmentAsset = asset?.category === 'investment';
+
   const handleAddTransaction = async () => {
-    if (!txShares || !txPrice) {
-      Alert.alert('錯誤', '請輸入股數和價格');
+    if ((isInvestmentAsset && !txShares) || !txPrice) {
+      Alert.alert('錯誤', isInvestmentAsset ? '請輸入股數和價格' : '請輸入價格');
       return;
     }
 
     setAdding(true);
     try {
-      const sharesNum = parseFloat(txShares);
+      const sharesNum = isInvestmentAsset ? parseFloat(txShares) : 1;
       const priceNum = parseFloat(txPrice);
       const totalAmount = sharesNum * priceNum;
 
@@ -308,7 +315,11 @@ export default function AssetDetailScreen() {
         transparent={true}
         onRequestClose={() => setModalVisible(false)}
       >
-        <View style={styles.modalOverlay}>
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>新增交易記錄</Text>
 
@@ -336,14 +347,18 @@ export default function AssetDetailScreen() {
               ))}
             </View>
 
-            <Text style={styles.label}>股數</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="輸入股數"
-              value={txShares}
-              onChangeText={setTxShares}
-              keyboardType="decimal-pad"
-            />
+            {isInvestmentAsset && (
+              <>
+                <Text style={styles.label}>股數</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="輸入股數"
+                  value={txShares}
+                  onChangeText={setTxShares}
+                  keyboardType="decimal-pad"
+                />
+              </>
+            )}
 
             <Text style={styles.label}>價格 ({asset.currency})</Text>
             <TextInput
@@ -354,9 +369,9 @@ export default function AssetDetailScreen() {
               keyboardType="decimal-pad"
             />
 
-            {txShares && txPrice && (
+            {(isInvestmentAsset ? txShares : true) && txPrice && (
               <Text style={styles.totalText}>
-                總金額: {asset.currency} {(parseFloat(txShares) * parseFloat(txPrice)).toFixed(2)}
+                總金額: {asset.currency} {((isInvestmentAsset ? parseFloat(txShares) : 1) * parseFloat(txPrice)).toFixed(2)}
               </Text>
             )}
 
@@ -383,7 +398,8 @@ export default function AssetDetailScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
+        </TouchableWithoutFeedback>
       </Modal>
     </>
   );

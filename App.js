@@ -104,7 +104,7 @@ function DashboardStackScreen() {
   return (
     <DashboardStack.Navigator>
       <DashboardStack.Screen name="DashboardMain" component={DashboardScreen} options={{ headerShown: false }} />
-      <DashboardStack.Screen name="AssetDetail"   component={AssetDetailScreen} options={{ title: '資產詳情' }} />
+      <DashboardStack.Screen name="AssetDetail"   component={AssetDetailScreen} options={{ title: '資產詳情', headerBackTitle: '返回' }} />
       <DashboardStack.Screen name="AddAsset"      component={AddAssetScreen} options={{ headerShown: false }} />
     </DashboardStack.Navigator>
   );
