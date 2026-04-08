@@ -19,7 +19,7 @@ import {
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Search as SearchIcon, Plus, X, Flame, LineChart as LineChartIcon, Clock, Calendar } from 'lucide-react-native';
+import { Search as SearchIcon, Plus, X, Flame, LineChart as LineChartIcon, Clock, Calendar, Star } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Svg, Polyline } from 'react-native-svg';
 import { LineChart } from 'react-native-chart-kit';
@@ -35,6 +35,7 @@ import {
 import { useTheme } from '../lib/ThemeContext';
 
 const MARKET_TABS = [
+  { id: 'watchlist', label: '★ 自選' },
   { id: 'all', label: '全部' },
   { id: 'TW', label: '台股' },
   { id: 'US', label: '美股' },
@@ -281,12 +282,15 @@ export default function SearchScreen() {
   const [twChartLoading, setTwChartLoading] = useState(false);
   const [recentSearches, setRecentSearches] = useState([]);
   const [searchPrices, setSearchPrices] = useState({});
+  const [watchlist, setWatchlist] = useState([]);
+  const [watchlistPrices, setWatchlistPrices] = useState({});
+  const [watchlistLoading, setWatchlistLoading] = useState(false);
   const [searchPriceLoading, setSearchPriceLoading] = useState(false);
   const debounceRef = useRef(null);
   const priceInputRef = useRef(null);
   const leverageInputRef = useRef(null);
 
-  useFocusEffect(useCallback(() => { loadHotPrices(); loadFxRates(); }, []));
+  useFocusEffect(useCallback(() => { loadHotPrices(); loadFxRates(); loadWatchlist(); }, []));
 
   useEffect(() => {
     if (chartAsset && chartAsset.market_type === 'TW' && !chartAsset.isIndex) {
@@ -306,6 +310,10 @@ export default function SearchScreen() {
       setTwChartData(null);
     }
   }, [chartAsset]);
+
+  useEffect(() => {
+    if (activeTab === 'watchlist') fetchWatchlistPrices(watchlist);
+  }, [activeTab]);
 
   const FX_CURRENCIES = [
     { code: 'USD', name: '美元', flag: '🇺🇸' },
@@ -540,6 +548,49 @@ export default function SearchScreen() {
     }
   };
 
+  const loadWatchlist = async () => {
+    try {
+      const val = await AsyncStorage.getItem('watchlist');
+      if (val) {
+        const list = JSON.parse(val);
+        setWatchlist(list);
+        if (activeTab === 'watchlist') fetchWatchlistPrices(list);
+      }
+    } catch {}
+  };
+
+  const saveWatchlistToStorage = async (list) => {
+    try { await AsyncStorage.setItem('watchlist', JSON.stringify(list)); } catch {}
+  };
+
+  const isInWatchlist = (symbol) => watchlist.some(w => w.symbol === symbol);
+
+  const toggleWatchlist = async (asset) => {
+    const inList = isInWatchlist(asset.symbol);
+    const updated = inList
+      ? watchlist.filter(w => w.symbol !== asset.symbol)
+      : [...watchlist, { symbol: asset.symbol, name: asset.name, market_type: asset.market_type }];
+    setWatchlist(updated);
+    await saveWatchlistToStorage(updated);
+  };
+
+  const fetchWatchlistPrices = async (list) => {
+    if (!list || list.length === 0) return;
+    setWatchlistLoading(true);
+    const prices = {};
+    await Promise.all(list.map(async (item) => {
+      try {
+        let priceData = null;
+        if (item.market_type === 'TW') priceData = await fetchTWStockPrice(item.symbol);
+        else if (item.market_type === 'US') priceData = await fetchUSStockPrice(item.symbol);
+        else if (item.market_type === 'Crypto') priceData = await fetchCryptoPrice(item.symbol);
+        if (priceData) prices[item.symbol] = priceData;
+      } catch {}
+    }));
+    setWatchlistPrices(prices);
+    setWatchlistLoading(false);
+  };
+
   // Debounced search
   useEffect(() => {
     if (!query.trim()) { setResults([]); setSearchPrices({}); setSearchPriceLoading(false); return; }
@@ -578,6 +629,17 @@ export default function SearchScreen() {
       setLoading(false);
     }
   };
+
+  const watchlistGrouped = useMemo(() => {
+    const groups = [
+      { id: 'TW', label: '台股' },
+      { id: 'US', label: '美股' },
+      { id: 'Crypto', label: '虛幣' },
+    ];
+    return groups
+      .map(g => ({ ...g, items: watchlist.filter(w => w.market_type === g.id) }))
+      .filter(g => g.items.length > 0);
+  }, [watchlist]);
 
   const indexAssets = useMemo(() => {
     if (activeTab === 'Crypto' || activeTab === 'FX') return [];
@@ -701,7 +763,7 @@ export default function SearchScreen() {
   };
 
   const renderAssetCard = (asset, keyPrefix, index) => {
-    const priceData = hotPrices[asset.symbol] || searchPrices[asset.symbol];
+    const priceData = hotPrices[asset.symbol] || searchPrices[asset.symbol] || watchlistPrices[asset.symbol];
     const changePct = priceData?.change_percent;
     const isUp = changePct != null && changePct >= 0;
     const priceStr = formatPrice(asset, priceData);
@@ -746,6 +808,17 @@ export default function SearchScreen() {
               <LineChartIcon size={18} color={colors.textSub} />
             </TouchableOpacity>
           )}
+          <TouchableOpacity
+            style={styles.starBtn}
+            onPress={() => toggleWatchlist(asset)}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Star
+              size={16}
+              color={isInWatchlist(asset.symbol) ? '#f59e0b' : colors.textSub}
+              fill={isInWatchlist(asset.symbol) ? '#f59e0b' : 'none'}
+            />
+          </TouchableOpacity>
         </View>
       </TouchableOpacity>
     );
@@ -839,8 +912,8 @@ export default function SearchScreen() {
         refreshControl={
           query.length === 0 ? (
             <RefreshControl
-              refreshing={hotLoading}
-              onRefresh={loadHotPrices}
+              refreshing={activeTab === 'watchlist' ? watchlistLoading : hotLoading}
+              onRefresh={activeTab === 'watchlist' ? () => fetchWatchlistPrices(watchlist) : loadHotPrices}
               tintColor="#f59e0b"
             />
           ) : undefined
@@ -862,6 +935,30 @@ export default function SearchScreen() {
                 {results.map((asset, i) => renderAssetCard(asset, 'search', i))}
               </>
             : <View style={styles.emptyState}><Text style={[styles.emptyStateText, { color: colors.textMuted }]}>無搜尋結果</Text></View>
+        ) : activeTab === 'watchlist' ? (
+          watchlist.length === 0 ? (
+            <View style={[styles.emptyState, { paddingTop: 64 }]}>
+              <Star size={44} color={colors.textMuted} />
+              <Text style={[styles.emptyStateText, { color: colors.textMuted, marginTop: 16, textAlign: 'center', lineHeight: 24 }]}>
+                {'尚無自選標的\n點擊標的右側 ★ 加入自選'}
+              </Text>
+            </View>
+          ) : watchlistLoading && Object.keys(watchlistPrices).length === 0 ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color="#f59e0b" />
+            </View>
+          ) : (
+            watchlistGrouped.map(group => (
+              <React.Fragment key={group.id}>
+                <View style={[styles.indexHeader, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+                  <Star size={14} color="#f59e0b" fill="#f59e0b" />
+                  <Text style={[styles.indexHeaderText, { color: colors.textSub }]}>{group.label}</Text>
+                  <Text style={[{ color: colors.textMuted, fontSize: 12, marginLeft: 4 }]}>({group.items.length})</Text>
+                </View>
+                {group.items.map((item, i) => renderAssetCard(item, `watchlist-${group.id}`, i))}
+              </React.Fragment>
+            ))
+          )
         ) : activeTab === 'FX' ? (
           <View style={[styles.fxTable, { backgroundColor: colors.card }]}>
             {/* Header row */}
@@ -1462,6 +1559,7 @@ const styles = StyleSheet.create({
   changeUp: { color: '#16a34a' },
   changeDown: { color: '#dc2626' },
   chartBtn: { padding: 4 },
+  starBtn: { padding: 4 },
   recentHeader: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingHorizontal: 16, paddingVertical: 10,

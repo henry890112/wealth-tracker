@@ -21,26 +21,26 @@ export const fetchTWStockPrice = async (symbol) => {
     const cached = await getCachedPrice(symbol, 'TW');
     if (cached) return cached;
 
-    // Try TWSE MIS real-time (上市 tse, then 上櫃 otc)
+    // Layer 1: TWSE MIS 盤中即時（交易時間內最準確）
     for (const prefix of ['tse', 'otc']) {
       try {
         const res = await fetch(
           `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${prefix}_${symbol}.tw&json=1&delay=0`,
-          { headers: { 'Referer': 'https://mis.twse.com.tw/' } }
+          { headers: { 'Referer': 'https://mis.twse.com.tw/stock/fibest.html', 'User-Agent': 'Mozilla/5.0' } }
         );
         if (!res.ok) continue;
         const data = await res.json();
         const item = data?.msgArray?.[0];
-        // z = current price (dash means no trade yet today)
         if (!item || !item.z || item.z === '-') continue;
         const currentPrice = parseFloat(item.z);
-        const prevClose = parseFloat(item.y);
         if (isNaN(currentPrice) || currentPrice <= 0) continue;
-
+        const prevClose = parseFloat(item.y);
         const priceData = {
           symbol,
           price: currentPrice,
-          change_percent: calculateChangePercent(prevClose, currentPrice),
+          change_percent: (!isNaN(prevClose) && prevClose > 0)
+            ? calculateChangePercent(prevClose, currentPrice)
+            : 0,
           volume: parseFloat(item.v) * 1000 || 0,
           market_type: 'TW',
         };
@@ -49,7 +49,40 @@ export const fetchTWStockPrice = async (symbol) => {
       } catch { continue; }
     }
 
-    // Fallback: FinMind historical (last close)
+    // Layer 2: Yahoo Finance v8/chart（不需 cookie，盤後收盤價準確）
+    // 上市用 .TW，上櫃用 .TWO，query1 / query2 各試一次
+    for (const suffix of ['.TW', '.TWO']) {
+      for (const host of ['query1', 'query2']) {
+        try {
+          const res = await fetch(
+            `https://${host}.finance.yahoo.com/v8/finance/chart/${symbol}${suffix}?range=5d&interval=1d`,
+            { headers: { 'User-Agent': 'Mozilla/5.0' } }
+          );
+          if (!res.ok) continue;
+          const data = await res.json();
+          const meta = data?.chart?.result?.[0]?.meta;
+          if (!meta?.regularMarketPrice) continue;
+          // chartPreviousClose = range 第一根收盤，不是昨天收盤！
+          // 正確昨日收盤 = closes 陣列倒數第二個有效值
+          const closes = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close ?? [];
+          const validCloses = closes.filter(c => c != null && !isNaN(c));
+          const prevClose = validCloses.length >= 2
+            ? validCloses[validCloses.length - 2]  // 昨日收盤
+            : meta.chartPreviousClose;              // 備援
+          const priceData = {
+            symbol,
+            price: meta.regularMarketPrice,
+            change_percent: calculateChangePercent(prevClose, meta.regularMarketPrice),
+            volume: meta.regularMarketVolume ?? 0,
+            market_type: 'TW',
+          };
+          await cachePrice(priceData);
+          return priceData;
+        } catch { continue; }
+      }
+    }
+
+    // Layer 3: FinMind 歷史收盤（最後備援，T+1 延遲）
     const response = await fetch(
       `${FINMIND_BASE_URL}/data?dataset=TaiwanStockPrice&data_id=${symbol}&start_date=${getDateString(-7)}&end_date=${getDateString(0)}`
     );
@@ -117,12 +150,17 @@ export const fetchUSStockPrice = async (symbol) => {
     const data = await response.json();
     const meta = data?.chart?.result?.[0]?.meta;
     if (meta) {
-      const currentPrice = meta.regularMarketPrice ?? meta.previousClose;
-      const prevClose = meta.chartPreviousClose ?? meta.previousClose;
+      const usCloses = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close ?? [];
+      const usValidCloses = usCloses.filter(c => c != null && !isNaN(c));
+      const usPrevClose = usValidCloses.length >= 2
+        ? usValidCloses[usValidCloses.length - 2]
+        : (meta.previousClose ?? meta.chartPreviousClose);
       const priceData = {
         symbol,
-        price: currentPrice,
-        change_percent: calculateChangePercent(prevClose, currentPrice),
+        price: meta.regularMarketPrice ?? meta.previousClose,
+        change_percent: (meta.regularMarketChangePercent != null)
+          ? meta.regularMarketChangePercent
+          : calculateChangePercent(usPrevClose, meta.regularMarketPrice ?? meta.previousClose),
         volume: meta.regularMarketVolume ?? 0,
         market_type: 'US',
       };
