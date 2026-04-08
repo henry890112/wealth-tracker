@@ -62,6 +62,7 @@ const INDEX_TV_MAP = {
   '^IXIC':  'FOREXCOM:NASUSD',
   '^DJI':   'FOREXCOM:DJUSD',
   '^RUT':   'TVC:RUT',
+  '^VIX':   'CBOE:VIX',
 };
 
 const getTVSymbol = (asset) => {
@@ -72,6 +73,112 @@ const getTVSymbol = (asset) => {
     return map[asset.symbol] || `BINANCE:${asset.symbol}USDT`;
   }
   return asset.symbol;
+};
+
+const fetchTWStockData = async (symbol) => {
+  try {
+    const startDate = new Date(Date.now() - 1095 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const url = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${symbol}&start_date=${startDate}`;
+    const res = await fetch(url);
+    const json = await res.json();
+    if (!json.data || json.data.length === 0) return null;
+    return json.data
+      .map(d => ({ time: d.date, open: d.open, high: d.max, low: d.min, close: d.close, volume: d.Trading_Volume || 0 }))
+      .filter(d => d.open && d.close);
+  } catch (e) {
+    return null;
+  }
+};
+
+const fetchUSIndexData = async (symbol) => {
+  try {
+    const encoded = encodeURIComponent(symbol);
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?range=5y&interval=1d`;
+    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    const json = await res.json();
+    const result = json?.chart?.result?.[0];
+    if (!result) return null;
+    const timestamps = result.timestamp || [];
+    const q = result.indicators?.quote?.[0] || {};
+    const rows = [];
+    for (let i = 0; i < timestamps.length; i++) {
+      const o = q.open?.[i], h = q.high?.[i], l = q.low?.[i], c = q.close?.[i];
+      if (o == null || h == null || l == null || c == null) continue;
+      const date = new Date(timestamps[i] * 1000).toISOString().split('T')[0];
+      rows.push({ time: date, open: o, high: h, low: l, close: c });
+    }
+    return rows.length > 0 ? rows : null;
+  } catch (e) {
+    return null;
+  }
+};
+
+const getTWStockHtml = (symbol, data) => {
+  const dataJson = JSON.stringify(data || []);
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a2e; font-family: sans-serif; }
+  #tooltip {
+    position: absolute; top: 8px; left: 10px; z-index: 10;
+    background: rgba(30,30,50,0.92); border: 1px solid #3a3a5e;
+    border-radius: 6px; padding: 6px 10px; font-size: 11px; color: #d1d4dc;
+    display: none; pointer-events: none; line-height: 1.6;
+  }
+  #tooltip .date { color: #aaa; font-size: 10px; margin-bottom: 2px; }
+  #tooltip .up { color: #26a69a; }
+  #tooltip .down { color: #ef5350; }
+  #chartWrap { position: relative; }
+  #chart { width: 100%; height: 100vh; }
+  #msg { color: #888; text-align: center; padding: 40px 20px; font-size: 14px; }
+</style>
+</head>
+<body>
+<div id="chartWrap">
+  <div id="tooltip"></div>
+  <div id="chart"></div>
+</div>
+<div id="msg" style="display:none">無資料</div>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+const allData = ${dataJson};
+if (allData.length > 0) {
+  const chart = LightweightCharts.createChart(document.getElementById('chart'), {
+    width: window.innerWidth, height: window.innerHeight,
+    layout: { background: { color: '#1a1a2e' }, textColor: '#d1d4dc' },
+    grid: { vertLines: { color: '#2a2a3e' }, horzLines: { color: '#2a2a3e' } },
+    timeScale: { borderColor: '#485c7b' },
+    rightPriceScale: { borderColor: '#485c7b' },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  });
+  const series = chart.addCandlestickSeries({
+    upColor: '#26a69a', downColor: '#ef5350',
+    borderVisible: false,
+    wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+  });
+  series.setData(allData);
+  chart.timeScale().fitContent();
+  const tooltip = document.getElementById('tooltip');
+  chart.subscribeCrosshairMove(param => {
+    if (!param.time || !param.seriesData || !param.seriesData.get(series)) {
+      tooltip.style.display = 'none'; return;
+    }
+    const d = param.seriesData.get(series);
+    const color = d.close >= d.open ? 'up' : 'down';
+    tooltip.innerHTML = '<div class="date">' + param.time + '</div>' +
+      '<span class="' + color + '">開 ' + d.open.toFixed(2) + '　高 ' + d.high.toFixed(2) + '　低 ' + d.low.toFixed(2) + '　收 ' + d.close.toFixed(2) + '</span>';
+    tooltip.style.display = 'block';
+  });
+  window.addEventListener('resize', () => chart.applyOptions({ width: window.innerWidth, height: window.innerHeight }));
+} else {
+  document.getElementById('msg').style.display = 'block';
+}
+</script>
+</body>
+</html>`;
 };
 
 const PRIMARY = '#16a34a';
@@ -170,13 +277,35 @@ export default function SearchScreen() {
   const [sortBy, setSortBy] = useState('change_desc');
   const [chartVisible, setChartVisible] = useState(false);
   const [chartAsset, setChartAsset] = useState(null);
+  const [twChartData, setTwChartData] = useState(null);
+  const [twChartLoading, setTwChartLoading] = useState(false);
   const [recentSearches, setRecentSearches] = useState([]);
   const [searchPrices, setSearchPrices] = useState({});
+  const [searchPriceLoading, setSearchPriceLoading] = useState(false);
   const debounceRef = useRef(null);
   const priceInputRef = useRef(null);
   const leverageInputRef = useRef(null);
 
   useFocusEffect(useCallback(() => { loadHotPrices(); loadFxRates(); }, []));
+
+  useEffect(() => {
+    if (chartAsset && chartAsset.market_type === 'TW' && !chartAsset.isIndex) {
+      setTwChartData(null);
+      setTwChartLoading(true);
+      fetchTWStockData(chartAsset.symbol)
+        .then(data => setTwChartData(data))
+        .finally(() => setTwChartLoading(false));
+    } else if (chartAsset?.isIndex) {
+      // 所有大盤指數（台股 ^TWII/^TWOII、美股 ^GSPC 等）都走 Yahoo Finance
+      setTwChartData(null);
+      setTwChartLoading(true);
+      fetchUSIndexData(chartAsset.symbol)
+        .then(data => setTwChartData(data))
+        .finally(() => setTwChartLoading(false));
+    } else {
+      setTwChartData(null);
+    }
+  }, [chartAsset]);
 
   const FX_CURRENCIES = [
     { code: 'USD', name: '美元', flag: '🇺🇸' },
@@ -413,7 +542,7 @@ export default function SearchScreen() {
 
   // Debounced search
   useEffect(() => {
-    if (!query.trim()) { setResults([]); setSearchPrices({}); return; }
+    if (!query.trim()) { setResults([]); setSearchPrices({}); setSearchPriceLoading(false); return; }
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => handleSearch(query), 300);
     return () => clearTimeout(debounceRef.current);
@@ -427,18 +556,22 @@ export default function SearchScreen() {
       const found = await searchAssets(q, activeTab);
       setResults(found);
       // Fetch live prices for results in the background
-      found.forEach(async (asset) => {
-        if (!asset.symbol || asset.isIndex) return;
-        try {
-          let priceData = null;
-          if (asset.market_type === 'TW') priceData = await fetchTWStockPrice(asset.symbol);
-          else if (asset.market_type === 'US') priceData = await fetchUSStockPrice(asset.symbol);
-          else if (asset.market_type === 'Crypto') priceData = await fetchCryptoPrice(asset.symbol);
-          if (priceData) {
-            setSearchPrices(prev => ({ ...prev, [asset.symbol]: priceData }));
-          }
-        } catch {}
-      });
+      const fetchable = found.filter(a => a.symbol && !a.isIndex && ['TW','US','Crypto'].includes(a.market_type));
+      if (fetchable.length > 0) {
+        setSearchPriceLoading(true);
+        let remaining = fetchable.length;
+        fetchable.forEach(async (asset) => {
+          try {
+            let priceData = null;
+            if (asset.market_type === 'TW') priceData = await fetchTWStockPrice(asset.symbol);
+            else if (asset.market_type === 'US') priceData = await fetchUSStockPrice(asset.symbol);
+            else if (asset.market_type === 'Crypto') priceData = await fetchCryptoPrice(asset.symbol);
+            if (priceData) setSearchPrices(prev => ({ ...prev, [asset.symbol]: priceData }));
+          } catch {}
+          remaining--;
+          if (remaining === 0) setSearchPriceLoading(false);
+        });
+      }
     } catch {
       Alert.alert('錯誤', '搜尋失敗，請稍後再試');
     } finally {
@@ -529,6 +662,8 @@ export default function SearchScreen() {
           trans_date: new Date().toISOString(),
         });
       if (transError) throw transError;
+
+      await supabase.rpc('create_daily_snapshot', { p_user_id: user.id });
 
       Alert.alert('成功', '資產已新增');
       setModalVisible(false);
@@ -717,7 +852,15 @@ export default function SearchScreen() {
           </View>
         ) : query.length > 0 ? (
           results.length > 0
-            ? results.map((asset, i) => renderAssetCard(asset, 'search', i))
+            ? <>
+                {searchPriceLoading && (
+                  <View style={styles.priceLoadingBar}>
+                    <ActivityIndicator size="small" color="#f59e0b" />
+                    <Text style={[styles.priceLoadingText, { color: colors.textMuted }]}>載入即時價格中...</Text>
+                  </View>
+                )}
+                {results.map((asset, i) => renderAssetCard(asset, 'search', i))}
+              </>
             : <View style={styles.emptyState}><Text style={[styles.emptyStateText, { color: colors.textMuted }]}>無搜尋結果</Text></View>
         ) : activeTab === 'FX' ? (
           <View style={[styles.fxTable, { backgroundColor: colors.card }]}>
@@ -1199,6 +1342,24 @@ export default function SearchScreen() {
             </TouchableOpacity>
           </View>
           {chartAsset && (
+            (chartAsset.market_type === 'TW' && !chartAsset.isIndex) ||
+            chartAsset.isIndex
+          ) ? (
+            twChartLoading ? (
+              <View style={[styles.chartLoading, { backgroundColor: colors.card }]}>
+                <ActivityIndicator size="large" color="#2563eb" />
+                <Text style={[styles.chartLoadingText, { color: colors.textSub }]}>載入圖表中...</Text>
+              </View>
+            ) : (
+              <WebView
+                style={{ flex: 1 }}
+                source={{ html: getTWStockHtml(chartAsset.symbol, twChartData) }}
+                javaScriptEnabled
+                domStorageEnabled
+                originWhitelist={['*']}
+              />
+            )
+          ) : chartAsset ? (
             <WebView
               style={{ flex: 1 }}
               source={{
@@ -1214,7 +1375,7 @@ export default function SearchScreen() {
                 </View>
               )}
             />
-          )}
+          ) : null}
         </View>
       </Modal>
     </KeyboardAvoidingView>
@@ -1317,6 +1478,8 @@ const styles = StyleSheet.create({
   recentItemText: { fontSize: 15 },
   emptyState: { alignItems: 'center', justifyContent: 'center', padding: 48 },
   emptyStateText: { fontSize: 16 },
+  priceLoadingBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 8 },
+  priceLoadingText: { fontSize: 12 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalContent: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, maxHeight: '80%' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },

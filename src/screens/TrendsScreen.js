@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, Dimensions, ActivityIndicator,
   TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Alert,
+  Keyboard, TouchableWithoutFeedback,
 } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
 import { BlurView } from 'expo-blur';
@@ -514,6 +515,7 @@ export default function TrendsScreen() {
         animationType="fade"
         onRequestClose={() => setCustomModalVisible(false)}
       >
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
         <KeyboardAvoidingView
           style={styles.modalOverlay}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -557,6 +559,7 @@ export default function TrendsScreen() {
             </View>
           </View>
         </KeyboardAvoidingView>
+        </TouchableWithoutFeedback>
       </Modal>
     </View>
   );

@@ -36,6 +36,7 @@ export default function RecordsScreen() {
   const [loading, setLoading] = useState(true);
   const [typeFilter, setTypeFilter] = useState('all');
   const [marketFilter, setMarketFilter] = useState('all');
+  const [assetFilter, setAssetFilter] = useState('all');
 
   useFocusEffect(useCallback(() => { loadData(); }, []));
 
@@ -46,7 +47,7 @@ export default function RecordsScreen() {
 
       const { data } = await supabase
         .from('transactions')
-        .select('*, assets(name, symbol, currency, market_type)')
+        .select('*, assets(name, symbol, currency, market_type, category)')
         .order('trans_date', { ascending: false })
         .limit(200);
 
@@ -58,6 +59,18 @@ export default function RecordsScreen() {
     }
   };
 
+  // Build unique asset list for filter chips
+  const assetFilters = useMemo(() => {
+    const seen = new Map();
+    for (const tx of transactions) {
+      const name = tx.assets?.name;
+      if (name && !seen.has(name)) {
+        seen.set(name, { key: name, label: name });
+      }
+    }
+    return [{ key: 'all', label: '全部資產' }, ...Array.from(seen.values())];
+  }, [transactions]);
+
   const filtered = useMemo(() => {
     return transactions.filter(tx => {
       if (typeFilter !== 'all' && tx.type !== typeFilter) return false;
@@ -65,9 +78,10 @@ export default function RecordsScreen() {
         const mt = tx.assets?.market_type || 'other';
         if (mt !== marketFilter) return false;
       }
+      if (assetFilter !== 'all' && tx.assets?.name !== assetFilter) return false;
       return true;
     });
-  }, [transactions, typeFilter, marketFilter]);
+  }, [transactions, typeFilter, marketFilter, assetFilter]);
 
   if (loading) {
     return (
@@ -104,6 +118,7 @@ export default function RecordsScreen() {
       <View style={[styles.filterBar, { backgroundColor: colors.card, borderBottomColor: colors.borderLight }]}>
         {renderChip(TYPE_FILTERS,   typeFilter,   setTypeFilter,   '#16a34a')}
         {renderChip(MARKET_FILTERS, marketFilter, setMarketFilter, '#2563eb')}
+        {assetFilters.length > 2 && renderChip(assetFilters, assetFilter, setAssetFilter, '#7c3aed')}
       </View>
 
       <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 80 }}>

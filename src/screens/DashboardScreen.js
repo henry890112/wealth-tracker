@@ -58,8 +58,8 @@ export default function DashboardScreen() {
     const map = new Map();
     for (const asset of assets) {
       const key = asset.category === 'investment' && asset.symbol
-        ? `inv:${asset.symbol}:${asset.market_type || ''}:${asset.category}`
-        : `${asset.category}:${asset.name}`;
+        ? `inv:${asset.symbol}:${asset.market_type || ''}:${asset.currency || ''}:${asset.category}`
+        : `${asset.category}:${asset.name}:${asset.currency || ''}`;
 
       if (!map.has(key)) {
         map.set(key, { ...asset, _allIds: [asset.id] });
@@ -70,11 +70,12 @@ export default function DashboardScreen() {
         existing.current_shares = (existing.current_shares || 0) + (asset.current_shares || 0);
         if (existing.pnl !== null && asset.pnl !== null) {
           existing.pnl += asset.pnl;
-          // pnl_pct is only meaningful for single assets; clear it for merged rows
-          existing.pnl_pct = null;
+          existing.converted_cost = (existing.converted_cost || 0) + (asset.converted_cost || 0);
+          existing.pnl_pct = existing.converted_cost > 0 ? (existing.pnl / existing.converted_cost) * 100 : null;
         } else if (asset.pnl !== null) {
           existing.pnl = asset.pnl;
-          existing.pnl_pct = null;
+          existing.converted_cost = asset.converted_cost;
+          existing.pnl_pct = asset.pnl_pct;
         }
       }
     }
@@ -136,7 +137,7 @@ export default function DashboardScreen() {
         const convertedCost = await convertToBaseCurrency(costBasis, asset.currency, baseCurrency);
         const pnl = convertedAmount - convertedCost;
         const pnl_pct = convertedCost > 0 ? (pnl / convertedCost) * 100 : 0;
-        return { id: asset.id, current_amount: newAmount, converted_amount: convertedAmount, pnl, pnl_pct };
+        return { id: asset.id, current_amount: newAmount, converted_amount: convertedAmount, pnl, pnl_pct, converted_cost: convertedCost };
       })
     );
 
@@ -178,14 +179,15 @@ export default function DashboardScreen() {
           );
           let pnl = null;
           let pnl_pct = null;
+          let converted_cost = null;
           if (asset.category === 'investment' && asset.current_shares > 0 && asset.average_cost > 0) {
             const lev = asset.leverage || 1;
             const costBasis = asset.current_shares * asset.average_cost / lev;
-            const convertedCost = await convertToBaseCurrency(costBasis, asset.currency, baseCurrency);
-            pnl = convertedAmount - convertedCost;
-            pnl_pct = convertedCost > 0 ? (pnl / convertedCost) * 100 : 0;
+            converted_cost = await convertToBaseCurrency(costBasis, asset.currency, baseCurrency);
+            pnl = convertedAmount - converted_cost;
+            pnl_pct = converted_cost > 0 ? (pnl / converted_cost) * 100 : 0;
           }
-          return { ...asset, converted_amount: convertedAmount, pnl, pnl_pct };
+          return { ...asset, converted_amount: convertedAmount, pnl, pnl_pct, converted_cost };
         })
       );
       setAssets(converted);
