@@ -8,6 +8,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/ThemeContext';
+import { fetchExchangeRate } from '../services/api';
 
 const CATEGORIES = ['住房', '交通', '訂閱', '保險', '貸款', '餐飲', '其他'];
 const CURRENCIES = ['TWD', 'USD', 'JPY', 'EUR', 'CNY'];
@@ -26,6 +27,9 @@ export default function FixedExpensesScreen() {
   const insets = useSafeAreaInsets();
   const [expenses, setExpenses] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [baseCurrency, setBaseCurrency] = useState('TWD');
+  const [rates, setRates] = useState({}); // { USD: 32.5, ... } rates to baseCurrency
+  const [ratesLoading, setRatesLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
   const [editing, setEditing] = useState(null); // null = new, id = editing
   const [form, setForm] = useState(EMPTY_FORM);
@@ -45,17 +49,66 @@ export default function FixedExpensesScreen() {
         .order('due_day', { ascending: true });
 
       if (error) throw error;
-      setExpenses(data || []);
+      const expenseList = data || [];
+      setExpenses(expenseList);
+
+      // Fetch base currency from profile
+      const { data: profileData } = await supabase
+        .from('profiles').select('base_currency').eq('id', user.id).single();
+      const base = profileData?.base_currency || 'TWD';
+      setBaseCurrency(base);
+
+      // Fetch exchange rates for all currencies that differ from base
+      const foreignCurrencies = [...new Set(
+        expenseList.map(e => e.currency).filter(c => c && c !== base)
+      )];
+      if (foreignCurrencies.length > 0) {
+        setRatesLoading(true);
+        const rateEntries = await Promise.all(
+          foreignCurrencies.map(async (cur) => {
+            try {
+              const rate = await fetchExchangeRate(cur, base);
+              return [cur, rate];
+            } catch {
+              return [cur, null];
+            }
+          })
+        );
+        setRates(Object.fromEntries(rateEntries));
+      }
+      setRatesLoading(false);
     } catch (e) {
       console.error('Error loading fixed expenses:', e);
+      setRatesLoading(false);
     } finally {
       setLoading(false);
     }
   };
 
-  const totalTWD = expenses
-    .filter(e => e.currency === 'TWD')
-    .reduce((sum, e) => sum + Number(e.amount), 0);
+  // Group subtotals by currency
+  const subtotals = expenses.reduce((acc, e) => {
+    const cur = e.currency || 'TWD';
+    acc[cur] = (acc[cur] || 0) + Number(e.amount);
+    return acc;
+  }, {});
+
+  // Total in base currency (null if any foreign rate is still loading)
+  const hasForeign = Object.keys(subtotals).some(c => c !== baseCurrency);
+  const totalBase = ratesLoading && hasForeign ? null : Object.entries(subtotals).reduce((sum, [cur, amt]) => {
+    if (cur === baseCurrency) return sum + amt;
+    const rate = rates[cur];
+    return rate != null ? sum + amt * rate : sum;
+  }, 0);
+
+  // Build breakdown lines, e.g. "TWD 14,000" / "USD 20 ≈ TWD 650"
+  const breakdownLines = Object.entries(subtotals).map(([cur, amt]) => {
+    const fmtAmt = amt.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+    if (cur === baseCurrency) return `${cur} ${fmtAmt}`;
+    const rate = rates[cur];
+    if (rate == null) return `${cur} ${fmtAmt}`;
+    const converted = (amt * rate).toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+    return `${cur} ${fmtAmt} ≈ ${baseCurrency} ${converted}`;
+  });
 
   const openNew = () => {
     setEditing(null);
@@ -145,11 +198,22 @@ export default function FixedExpensesScreen() {
     <View style={[styles.container, { backgroundColor: c.bg }]}>
       {/* Total card */}
       <View style={[styles.totalCard, { backgroundColor: c.card, borderColor: c.border }]}>
-        <Text style={[styles.totalLabel, { color: c.textSub }]}>本月 TWD 固定支出總計</Text>
-        <Text style={[styles.totalAmount, { color: c.text }]}>
-          {totalTWD.toLocaleString('zh-TW', { minimumFractionDigits: 0 })}
-          <Text style={[styles.totalCurrency, { color: c.textMuted }]}> TWD</Text>
+        <Text style={[styles.totalLabel, { color: c.textSub }]}>
+          本月固定支出總計（折合 {baseCurrency}）
         </Text>
+        <Text style={[styles.totalAmount, { color: c.text }]}>
+          {totalBase == null
+            ? '---'
+            : totalBase.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+          <Text style={[styles.totalCurrency, { color: c.textMuted }]}> {baseCurrency}</Text>
+        </Text>
+        {breakdownLines.length > 1 && (
+          <View style={styles.breakdownRow}>
+            <Text style={[styles.breakdownText, { color: c.textMuted }]}>
+              {breakdownLines.join(' + ')}
+            </Text>
+          </View>
+        )}
         <Text style={[styles.totalSub, { color: c.textMuted }]}>共 {expenses.length} 筆固定支出</Text>
       </View>
 
@@ -365,6 +429,8 @@ const styles = StyleSheet.create({
   totalLabel: { fontSize: 13, marginBottom: 4 },
   totalAmount: { fontSize: 32, fontWeight: '700' },
   totalCurrency: { fontSize: 16, fontWeight: '400' },
+  breakdownRow: { marginTop: 6, paddingTop: 6, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(128,128,128,0.3)', width: '100%', alignItems: 'center' },
+  breakdownText: { fontSize: 12, textAlign: 'center' },
   totalSub: { fontSize: 12, marginTop: 4 },
 
   empty: { alignItems: 'center', marginTop: 60 },
