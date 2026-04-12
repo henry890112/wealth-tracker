@@ -9,6 +9,21 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/ThemeContext';
 
+const fetchRates = async () => {
+  try {
+    const res = await fetch('https://tw.rter.info/capi.php');
+    const data = await res.json();
+    return {
+      USD: data['USDTWD']?.Exrate || 32.5,
+      JPY: data['JPYTWD']?.Exrate || 0.22,
+      EUR: data['EURTWD']?.Exrate || 35.0,
+      CNY: data['CNYTWD']?.Exrate || 4.5,
+    };
+  } catch {
+    return { USD: 32.5, JPY: 0.22, EUR: 35.0, CNY: 4.5 };
+  }
+};
+
 const CATEGORIES = ['住房', '交通', '訂閱', '保險', '貸款', '餐飲', '其他'];
 const CURRENCIES = ['TWD', 'USD', 'JPY', 'EUR', 'CNY'];
 
@@ -25,6 +40,7 @@ export default function FixedExpensesScreen() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const [expenses, setExpenses] = useState([]);
+  const [rates, setRates] = useState({});
   const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
   const [editing, setEditing] = useState(null); // null = new, id = editing
@@ -38,14 +54,18 @@ export default function FixedExpensesScreen() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const { data, error } = await supabase
-        .from('fixed_expenses')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('due_day', { ascending: true });
+      const [{ data, error }, fetchedRates] = await Promise.all([
+        supabase
+          .from('fixed_expenses')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('due_day', { ascending: true }),
+        fetchRates(),
+      ]);
 
       if (error) throw error;
       setExpenses(data || []);
+      setRates(fetchedRates);
     } catch (e) {
       console.error('Error loading fixed expenses:', e);
     } finally {
@@ -53,9 +73,13 @@ export default function FixedExpensesScreen() {
     }
   };
 
-  const totalTWD = expenses
-    .filter(e => e.currency === 'TWD')
-    .reduce((sum, e) => sum + Number(e.amount), 0);
+  const totalInBase = expenses.reduce((sum, e) => {
+    const amt = Number(e.amount);
+    if (e.currency === 'TWD') return sum + amt;
+    const rate = rates[e.currency];
+    if (!rate) return sum + amt; // fallback: treat as TWD
+    return sum + amt * rate;
+  }, 0);
 
   const openNew = () => {
     setEditing(null);
@@ -145,9 +169,9 @@ export default function FixedExpensesScreen() {
     <View style={[styles.container, { backgroundColor: c.bg }]}>
       {/* Total card */}
       <View style={[styles.totalCard, { backgroundColor: c.card, borderColor: c.border }]}>
-        <Text style={[styles.totalLabel, { color: c.textSub }]}>本月 TWD 固定支出總計</Text>
+        <Text style={[styles.totalLabel, { color: c.textSub }]}>本月固定支出總計（折合 TWD）</Text>
         <Text style={[styles.totalAmount, { color: c.text }]}>
-          {totalTWD.toLocaleString('zh-TW', { minimumFractionDigits: 0 })}
+          {Math.round(totalInBase).toLocaleString('zh-TW', { minimumFractionDigits: 0 })}
           <Text style={[styles.totalCurrency, { color: c.textMuted }]}> TWD</Text>
         </Text>
         <Text style={[styles.totalSub, { color: c.textMuted }]}>共 {expenses.length} 筆固定支出</Text>
@@ -165,36 +189,55 @@ export default function FixedExpensesScreen() {
               <Text style={[styles.emptyText, { color: c.textMuted }]}>尚無固定支出</Text>
               <Text style={[styles.emptySub, { color: c.textMuted }]}>點擊右下角 + 新增</Text>
             </View>
-          ) : (
-            expenses.map(item => (
-              <TouchableOpacity
-                key={item.id}
-                style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}
-                onPress={() => openEdit(item)}
-                onLongPress={() => handleDelete(item)}
-                activeOpacity={0.75}
-              >
-                <View style={styles.cardLeft}>
-                  <View style={[styles.categoryBadge, { backgroundColor: c.cardAlt }]}>
-                    <Text style={[styles.categoryText, { color: c.textSub }]}>{item.category || '其他'}</Text>
-                  </View>
-                  <Text style={[styles.itemName, { color: c.text }]}>{item.name}</Text>
-                  {item.note ? (
-                    <Text style={[styles.itemNote, { color: c.textMuted }]} numberOfLines={1}>{item.note}</Text>
-                  ) : null}
+          ) : (() => {
+            // Build grouped map in CATEGORIES order
+            const grouped = {};
+            CATEGORIES.forEach(cat => {
+              const items = expenses.filter(e => (e.category || '其他') === cat);
+              if (items.length > 0) grouped[cat] = items;
+            });
+            // Any category not in CATEGORIES list goes to 其他
+            expenses.forEach(e => {
+              const cat = e.category || '其他';
+              if (!CATEGORIES.includes(cat)) {
+                if (!grouped['其他']) grouped['其他'] = [];
+                if (!grouped['其他'].find(x => x.id === e.id)) grouped['其他'].push(e);
+              }
+            });
+            return Object.entries(grouped).map(([category, items]) => (
+              <View key={category} style={{ marginBottom: 8 }}>
+                <View style={styles.sectionHeader}>
+                  <View style={styles.sectionBar} />
+                  <Text style={[styles.sectionTitle, { color: c.textMuted }]}>{category}</Text>
                 </View>
-                <View style={styles.cardRight}>
-                  <Text style={[styles.itemAmount, { color: '#ef4444' }]}>
-                    {Number(item.amount).toLocaleString('zh-TW', { minimumFractionDigits: 0 })}
-                  </Text>
-                  <Text style={[styles.itemCurrency, { color: c.textSub }]}>{item.currency}</Text>
-                  {item.due_day ? (
-                    <Text style={[styles.itemDue, { color: c.textMuted }]}>每月 {item.due_day} 日</Text>
-                  ) : null}
-                </View>
-              </TouchableOpacity>
-            ))
-          )}
+                {items.map(item => (
+                  <TouchableOpacity
+                    key={item.id}
+                    style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}
+                    onPress={() => openEdit(item)}
+                    onLongPress={() => handleDelete(item)}
+                    activeOpacity={0.75}
+                  >
+                    <View style={styles.cardLeft}>
+                      <Text style={[styles.itemName, { color: c.text }]}>{item.name}</Text>
+                      {item.note ? (
+                        <Text style={[styles.itemNote, { color: c.textMuted }]} numberOfLines={1}>{item.note}</Text>
+                      ) : null}
+                    </View>
+                    <View style={styles.cardRight}>
+                      <Text style={[styles.itemAmount, { color: '#ef4444' }]}>
+                        {Number(item.amount).toLocaleString('zh-TW', { minimumFractionDigits: 0 })}
+                      </Text>
+                      <Text style={[styles.itemCurrency, { color: c.textSub }]}>{item.currency}</Text>
+                      {item.due_day ? (
+                        <Text style={[styles.itemDue, { color: c.textMuted }]}>每月 {item.due_day} 日</Text>
+                      ) : null}
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ));
+          })()}
         </ScrollView>
       )}
 
@@ -370,6 +413,10 @@ const styles = StyleSheet.create({
   empty: { alignItems: 'center', marginTop: 60 },
   emptyText: { fontSize: 16, fontWeight: '600', marginBottom: 6 },
   emptySub: { fontSize: 13 },
+
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', marginTop: 16, marginBottom: 8, paddingHorizontal: 4 },
+  sectionBar: { width: 3, height: 14, backgroundColor: '#16a34a', borderRadius: 2, marginRight: 8 },
+  sectionTitle: { fontSize: 13, fontWeight: '600', letterSpacing: 0.5 },
 
   card: {
     flexDirection: 'row',
