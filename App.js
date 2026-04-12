@@ -6,7 +6,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { LayoutGrid, PieChart, Clock, Settings, Search } from 'lucide-react-native';
+import { LayoutGrid, PieChart, Clock, Settings, Search, CreditCard } from 'lucide-react-native';
 import { supabase } from './src/lib/supabase';
 import { ThemeProvider, useTheme, COLORS } from './src/lib/ThemeContext';
 
@@ -18,6 +18,7 @@ import SettingsScreen from './src/screens/SettingsScreen';
 import AuthScreen from './src/screens/AuthScreen';
 import AssetDetailScreen from './src/screens/AssetDetailScreen';
 import AddAssetScreen from './src/screens/AddAssetScreen';
+import FixedExpensesScreen from './src/screens/FixedExpensesScreen';
 
 const Tab = createBottomTabNavigator();
 const DashboardStack = createNativeStackNavigator();
@@ -25,11 +26,12 @@ const DashboardStack = createNativeStackNavigator();
 const PRIMARY = '#16a34a';
 
 const TAB_CONFIG = [
-  { name: 'Dashboard', label: '總覽', Icon: LayoutGrid },
-  { name: 'Search',    label: '搜尋', Icon: Search     },
-  { name: 'Charts',    label: '圖表', Icon: PieChart   },
-  { name: 'Records',   label: '紀錄', Icon: Clock      },
-  { name: 'Settings',  label: '設定', Icon: Settings   },
+  { name: 'Dashboard',      label: '總覽',   Icon: LayoutGrid },
+  { name: 'Search',         label: '搜尋',   Icon: Search     },
+  { name: 'Charts',         label: '圖表',   Icon: PieChart   },
+  { name: 'Records',        label: '紀錄',   Icon: Clock      },
+  { name: 'FixedExpenses',  label: '固定支出', Icon: CreditCard },
+  { name: 'Settings',       label: '設定',   Icon: Settings   },
 ];
 
 // Map shared COLORS to tab bar tokens
@@ -152,8 +154,9 @@ function AppInner() {
           <Tab.Screen name="Dashboard" component={DashboardStackScreen} options={{ title: '總覽', headerShown: false }} />
           <Tab.Screen name="Search"    component={SearchScreen}         options={{ title: '搜尋資產' }} />
           <Tab.Screen name="Charts"    component={TrendsScreen}         options={{ title: '圖表' }} />
-          <Tab.Screen name="Records"   component={RecordsScreen}        options={{ title: '紀錄' }} />
-          <Tab.Screen name="Settings"  component={SettingsScreen}       options={{ title: '設定' }} />
+          <Tab.Screen name="Records"       component={RecordsScreen}        options={{ title: '紀錄' }} />
+          <Tab.Screen name="FixedExpenses" component={FixedExpensesScreen}  options={{ title: '固定支出' }} />
+          <Tab.Screen name="Settings"      component={SettingsScreen}       options={{ title: '設定' }} />
         </Tab.Navigator>
       </NavigationContainer>
     </>
