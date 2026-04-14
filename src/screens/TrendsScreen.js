@@ -333,6 +333,22 @@ export default function TrendsScreen() {
     ? `${customRange.start} ~ ${customRange.end}`
     : selectedPeriod.label;
 
+  const mergeBySymbol = (assets) => {
+    const map = {};
+    assets.forEach(a => {
+      const key = a.symbol || a.name;
+      if (map[key]) {
+        map[key] = {
+          ...map[key],
+          converted_amount: (map[key].converted_amount || 0) + (a.converted_amount || 0),
+        };
+      } else {
+        map[key] = { ...a };
+      }
+    });
+    return Object.values(map);
+  };
+
   const getDrilldownData = (category) => {
     const catAssets = detailedAssets.filter(a => a.category === category);
     if (category === 'investment') {
@@ -350,12 +366,12 @@ export default function TrendsScreen() {
           color: MARKET_TYPE_CONFIG[mt]?.color || '#94a3b8',
         }));
     }
-    return catAssets
+    return mergeBySymbol(catAssets)
       .filter(a => a.converted_amount > 0)
       .sort((a, b) => b.converted_amount - a.converted_amount)
       .slice(0, 6)
       .map((a, i) => ({
-        key: a.id,
+        key: a.symbol || a.name,
         label: a.name,
         value: a.converted_amount,
         color: DRILL_PALETTE[i % DRILL_PALETTE.length],
@@ -382,12 +398,13 @@ export default function TrendsScreen() {
       default:
         filtered = detailedAssets;
     }
-    return filtered
+    const mergedAssets = mergeBySymbol(filtered);
+    return mergedAssets
       .filter(a => a.converted_amount > 0)
       .sort((a, b) => b.converted_amount - a.converted_amount)
       .slice(0, 6)
       .map((a, i) => ({
-        key: a.id,
+        key: a.symbol || a.name,
         label: a.name,
         value: a.converted_amount,
         color: DRILL_PALETTE[i % DRILL_PALETTE.length],
