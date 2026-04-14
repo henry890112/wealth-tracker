@@ -13,6 +13,14 @@ import { fetchExchangeRate } from '../services/api';
 const CATEGORIES = ['住房', '交通', '訂閱', '保險', '貸款', '餐飲', '其他'];
 const CURRENCIES = ['TWD', 'USD', 'JPY', 'EUR', 'CNY'];
 
+const FREQUENCIES = [
+  { key: 'monthly', label: '每月' },
+  { key: 'quarterly', label: '每季' },
+  { key: 'semi_annual', label: '每半年' },
+  { key: 'yearly', label: '每年' },
+];
+const FREQUENCY_MONTHS = { monthly: 1, quarterly: 3, semi_annual: 6, yearly: 12 };
+
 const CATEGORY_COLORS = {
   住房: '#3b82f6',
   交通: '#f59e0b',
@@ -30,6 +38,7 @@ const EMPTY_FORM = {
   due_day: '',
   category: '其他',
   note: '',
+  frequency: 'monthly',
 };
 
 export default function FixedExpensesScreen() {
@@ -84,11 +93,15 @@ export default function FixedExpensesScreen() {
 
       const rateMap = await fetchRates(items, base);
       setRates(rateMap);
-      const total = items.reduce((sum, e) => {
-        const rate = rateMap[e.currency] ?? 1;
-        return sum + Number(e.amount) * rate;
+      const monthlyEquiv = items.reduce((sum, e) => {
+        const amt = Number(e.amount);
+        const months = FREQUENCY_MONTHS[e.frequency || 'monthly'];
+        const monthly = amt / months;
+        if (e.currency === base) return sum + monthly;
+        const rate = rateMap[e.currency];
+        return sum + (rate ? monthly * rate : monthly);
       }, 0);
-      setTotalInBase(total);
+      setTotalInBase(monthlyEquiv);
     } catch (e) {
       console.error('Error loading fixed expenses:', e);
     } finally {
@@ -117,6 +130,7 @@ export default function FixedExpensesScreen() {
       due_day: item.due_day ? String(item.due_day) : '',
       category: item.category || '其他',
       note: item.note || '',
+      frequency: item.frequency || 'monthly',
     });
     setModalVisible(true);
   };
@@ -143,6 +157,7 @@ export default function FixedExpensesScreen() {
         due_day,
         category: form.category,
         note: form.note.trim() || null,
+        frequency: form.frequency,
       };
 
       if (editing) {
@@ -190,7 +205,7 @@ export default function FixedExpensesScreen() {
     <View style={[styles.container, { backgroundColor: c.bg }]}>
       {/* Total card */}
       <View style={[styles.totalCard, { backgroundColor: c.card, borderColor: c.border }]}>
-        <Text style={[styles.totalLabel, { color: c.textSub }]}>本月固定支出（{baseCurrency}）</Text>
+        <Text style={[styles.totalLabel, { color: c.textSub }]}>月均固定支出（{baseCurrency}）</Text>
         <Text style={[styles.totalAmount, { color: c.text }]}>
           {Math.round(totalInBase).toLocaleString('zh-TW', { minimumFractionDigits: 0 })}
           <Text style={[styles.totalCurrency, { color: c.textMuted }]}> {baseCurrency}</Text>
@@ -256,6 +271,11 @@ export default function FixedExpensesScreen() {
                           {item.due_day ? (
                             <Text style={[styles.itemDue, { color: c.textMuted }]}>每月 {item.due_day} 日</Text>
                           ) : null}
+                          {(item.frequency && item.frequency !== 'monthly') && (
+                            <Text style={{ color: '#f59e0b', fontSize: 11 }}>
+                              {FREQUENCIES.find(f => f.key === item.frequency)?.label}
+                            </Text>
+                          )}
                         </View>
                       </TouchableOpacity>
                     );
@@ -351,6 +371,24 @@ export default function FixedExpensesScreen() {
                   placeholderTextColor={c.textMuted}
                   keyboardType="numeric"
                 />
+              </FormField>
+
+              <FormField label="付款頻率" colors={c}>
+                <View style={styles.chipRow}>
+                  {FREQUENCIES.map(f => (
+                    <TouchableOpacity
+                      key={f.key}
+                      style={[styles.chip, form.frequency === f.key && styles.chipActive,
+                        { borderColor: form.frequency === f.key ? '#16a34a' : c.border,
+                          backgroundColor: form.frequency === f.key ? 'rgba(22,163,74,0.12)' : c.input }]}
+                      onPress={() => setForm(p => ({ ...p, frequency: f.key }))}
+                    >
+                      <Text style={[styles.chipText, { color: form.frequency === f.key ? '#16a34a' : c.textSub }]}>
+                        {f.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
               </FormField>
 
               <FormField label="分類" colors={c}>
