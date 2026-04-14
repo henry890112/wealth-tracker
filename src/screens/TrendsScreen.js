@@ -40,6 +40,15 @@ const MARKET_TYPE_CONFIG = {
 
 const DRILL_PALETTE = ['#6366f1', '#ec4899', '#14b8a6', '#f97316', '#8b5cf6', '#06b6d4'];
 
+const FILTER_OPTIONS = [
+  { label: '全部',  key: 'all' },
+  { label: '台股',  key: 'TW' },
+  { label: '美股',  key: 'US' },
+  { label: '虛幣',  key: 'Crypto' },
+  { label: '外幣',  key: 'liquid' },
+  { label: '其他',  key: 'other' },
+];
+
 const formatAmount = (amount) => {
   return Math.round(amount).toLocaleString('zh-TW');
 };
@@ -154,6 +163,8 @@ export default function TrendsScreen() {
 
   const [selectedPeriod, setSelectedPeriod] = useState(PERIODS[2]); // default 90d
   const [customRange, setCustomRange] = useState(null); // { start, end } strings
+
+  const [selectedFilter, setSelectedFilter] = useState('all');
 
   // Custom date modal
   const [customModalVisible, setCustomModalVisible] = useState(false);
@@ -351,20 +362,91 @@ export default function TrendsScreen() {
       }));
   };
 
-  const currentDonutData = drilldownCategory
-    ? getDrilldownData(drilldownCategory)
-    : categoryTotals;
+  const getFilteredDonutData = () => {
+    let filtered;
+    switch (selectedFilter) {
+      case 'TW':
+      case 'US':
+      case 'Crypto':
+        filtered = detailedAssets.filter(a => a.market_type === selectedFilter);
+        break;
+      case 'liquid':
+        filtered = detailedAssets.filter(a => a.category === 'liquid');
+        break;
+      case 'other':
+        filtered = detailedAssets.filter(a =>
+          a.category === 'fixed' || a.category === 'receivable' ||
+          (a.category === 'investment' && a.market_type === 'other')
+        );
+        break;
+      default:
+        filtered = detailedAssets;
+    }
+    return filtered
+      .filter(a => a.converted_amount > 0)
+      .sort((a, b) => b.converted_amount - a.converted_amount)
+      .slice(0, 6)
+      .map((a, i) => ({
+        key: a.id,
+        label: a.name,
+        value: a.converted_amount,
+        color: DRILL_PALETTE[i % DRILL_PALETTE.length],
+      }));
+  };
+
+  const currentDonutData = selectedFilter !== 'all'
+    ? getFilteredDonutData()
+    : drilldownCategory
+      ? getDrilldownData(drilldownCategory)
+      : categoryTotals;
   const donutTotal = currentDonutData.reduce((s, d) => s + d.value, 0);
   const { data: chartData, baseline: chartBaseline } = getChartData();
+
+  const selectedFilterLabel = FILTER_OPTIONS.find(o => o.key === selectedFilter)?.label || '全部';
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
       <ScrollView contentContainerStyle={{ paddingBottom: 120 }}>
 
+        {/* Category filter chips */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={{ paddingHorizontal: 16, marginTop: 16, marginBottom: 4 }}
+          contentContainerStyle={{ gap: 8 }}
+        >
+          {FILTER_OPTIONS.map(opt => {
+            const active = selectedFilter === opt.key;
+            return (
+              <TouchableOpacity
+                key={opt.key}
+                onPress={() => {
+                  setSelectedFilter(opt.key);
+                  setDrilldownCategory(null);
+                  setSelectedDonutIndex(null);
+                }}
+                style={{
+                  paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20,
+                  backgroundColor: active ? PRIMARY : (isDark ? '#16213e' : '#f1f5f9'),
+                  borderWidth: 1,
+                  borderColor: active ? PRIMARY : (isDark ? '#2a3a5e' : '#e2e8f0'),
+                }}
+                activeOpacity={0.75}
+              >
+                <Text style={{ color: active ? '#fff' : colors.textSub, fontSize: 13, fontWeight: active ? '700' : '500' }}>
+                  {opt.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+
         {/* Trend chart card */}
         <View style={[styles.card, { backgroundColor: colors.card }]}>
           <View style={styles.cardHeader}>
-            <Text style={[styles.cardTitle, { color: colors.text }]}>淨資產趨勢（{currency}）</Text>
+            <Text style={[styles.cardTitle, { color: colors.text }]}>
+              {selectedFilter === 'all' ? `淨資產趨勢（${currency}）` : `${selectedFilterLabel} 淨資產趨勢`}
+            </Text>
             {changeText && (
               <Text style={[styles.changeBadge, changeText.positive ? styles.pos : styles.neg]}>
                 {changeText.positive ? '+' : ''}{changeText.pct}%
@@ -443,9 +525,13 @@ export default function TrendsScreen() {
           <View style={[styles.card, { backgroundColor: colors.card }]}>
             <View style={styles.cardHeader}>
               <Text style={[styles.cardTitle, { color: colors.text }]}>
-                {drilldownCategory ? CATEGORY_CONFIG[drilldownCategory]?.label : '資產配置'}
+                {selectedFilter !== 'all'
+                  ? `${selectedFilterLabel} 資產配置`
+                  : drilldownCategory
+                    ? CATEGORY_CONFIG[drilldownCategory]?.label
+                    : '資產配置'}
               </Text>
-              {drilldownCategory && (
+              {selectedFilter === 'all' && drilldownCategory && (
                 <TouchableOpacity
                   onPress={() => { setDrilldownCategory(null); setSelectedDonutIndex(null); }}
                   style={[styles.backBtn, { backgroundColor: colors.bg }]}
@@ -461,7 +547,7 @@ export default function TrendsScreen() {
                 strokeWidth={28}
                 selectedIndex={selectedDonutIndex}
                 onSelect={(i) => {
-                  if (!drilldownCategory && i != null) {
+                  if (selectedFilter === 'all' && !drilldownCategory && i != null) {
                     // drill into category
                     setDrilldownCategory(currentDonutData[i].key);
                     setSelectedDonutIndex(null);
@@ -479,7 +565,7 @@ export default function TrendsScreen() {
                   <TouchableOpacity
                     key={item.key ?? i}
                     onPress={() => {
-                      if (!drilldownCategory) {
+                      if (selectedFilter === 'all' && !drilldownCategory) {
                         setDrilldownCategory(item.key);
                         setSelectedDonutIndex(null);
                       } else {
