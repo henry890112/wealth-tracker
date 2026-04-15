@@ -220,6 +220,36 @@ export default function DashboardScreen() {
       }
 
       await supabase.rpc('create_daily_snapshot', { p_user_id: user.id });
+
+      // 同步存分類快照
+      try {
+        const today = new Date().toISOString().split('T')[0];
+        const getCategoryKey = (a) => {
+          const mt = a.market_type || '';
+          const cat = a.category || '';
+          if (mt === 'TW' || cat === '台股') return 'TW';
+          if (mt === 'US' || cat === '美股') return 'US';
+          if (mt === 'Crypto' || cat === '虛幣') return 'Crypto';
+          if (cat === '外幣' || mt === 'liquid') return 'liquid';
+          return 'other';
+        };
+        const totals = {};
+        (converted || []).forEach(a => {
+          const key = getCategoryKey(a);
+          totals[key] = (totals[key] || 0) + Number(a.converted_amount || 0);
+        });
+        const rows = Object.entries(totals).map(([category, value]) => ({
+          user_id: user.id,
+          date: today,
+          category,
+          value,
+        }));
+        if (rows.length > 0) {
+          await supabase.from('category_snapshots').upsert(rows, { onConflict: 'user_id,date,category' });
+        }
+      } catch (e) {
+        console.log('category snapshot error:', e);
+      }
     } catch (error) {
       console.error('Error loading data:', error);
     } finally {
