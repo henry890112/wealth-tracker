@@ -526,14 +526,12 @@ const searchTWStocks = async (query) => {
  */
 const searchUSStocks = async (query) => {
   try {
-    const url = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=15&newsCount=0&enableFuzzyQuery=false&quotesQueryId=tss_match_phrase_query`;
-    const res = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-    });
+    const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=15&newsCount=0`;
+    const res = await fetch(url);
     const json = await res.json();
-    const quotes = json?.finance?.result?.[0]?.quotes || [];
+    const quotes = json?.quotes || [];
     return quotes
-      .filter(q => q.quoteType === 'EQUITY' && q.exchange && !q.symbol.includes('.'))
+      .filter(q => q.quoteType === 'EQUITY')
       .map(q => ({
         symbol: q.symbol,
         name: q.shortname || q.longname || q.symbol,
