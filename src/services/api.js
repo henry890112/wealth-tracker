@@ -11,6 +11,29 @@ const CACHE_DURATION = 60 * 1000;
 const BINANCE_BASE_URL = 'https://api.binance.com/api/v3';
 const STABLECOINS = new Set(['USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'FDUSD']);
 
+export const US_POPULAR_STOCKS = [
+  { symbol: 'AAPL', name: 'Apple Inc.', market_type: 'US' },
+  { symbol: 'NVDA', name: 'NVIDIA Corporation', market_type: 'US' },
+  { symbol: 'MSFT', name: 'Microsoft Corporation', market_type: 'US' },
+  { symbol: 'AMZN', name: 'Amazon.com Inc.', market_type: 'US' },
+  { symbol: 'GOOGL', name: 'Alphabet Inc.', market_type: 'US' },
+  { symbol: 'META', name: 'Meta Platforms Inc.', market_type: 'US' },
+  { symbol: 'TSLA', name: 'Tesla Inc.', market_type: 'US' },
+  { symbol: 'BRK.B', name: 'Berkshire Hathaway Inc.', market_type: 'US' },
+  { symbol: 'JPM', name: 'JPMorgan Chase & Co.', market_type: 'US' },
+  { symbol: 'V', name: 'Visa Inc.', market_type: 'US' },
+  { symbol: 'JNJ', name: 'Johnson & Johnson', market_type: 'US' },
+  { symbol: 'WMT', name: 'Walmart Inc.', market_type: 'US' },
+  { symbol: 'XOM', name: 'Exxon Mobil Corporation', market_type: 'US' },
+  { symbol: 'AMD', name: 'Advanced Micro Devices', market_type: 'US' },
+  { symbol: 'NFLX', name: 'Netflix Inc.', market_type: 'US' },
+  { symbol: 'DIS', name: 'The Walt Disney Company', market_type: 'US' },
+  { symbol: 'PYPL', name: 'PayPal Holdings Inc.', market_type: 'US' },
+  { symbol: 'INTC', name: 'Intel Corporation', market_type: 'US' },
+  { symbol: 'QCOM', name: 'Qualcomm Incorporated', market_type: 'US' },
+  { symbol: 'SMR', name: 'NuScale Power Corporation', market_type: 'US' },
+];
+
 /**
  * Fetch Taiwan stock price.
  * Primary: TWSE MIS real-time API (免費，盤中即時)
@@ -729,7 +752,7 @@ export const fetchTrendingAssets = async () => {
 
     const usResults = await Promise.allSettled(
       symbols.map(async (sym) => {
-        const known = US_STOCKS.find(s => s.symbol === sym);
+        const known = US_POPULAR_STOCKS.find(s => s.symbol === sym);
         const priceData = await fetchUSStockPrice(sym);
         return { sym, name: known?.name || sym, priceData };
       })
@@ -743,6 +766,21 @@ export const fetchTrendingAssets = async () => {
     });
   } catch (e) {
     console.warn('fetchTrendingAssets US error:', e.message);
+    // Fallback: show static popular stocks with cached/live prices
+    const fallbackSymbols = US_POPULAR_STOCKS.slice(0, 10);
+    const fallbackResults = await Promise.allSettled(
+      fallbackSymbols.map(async (stock) => {
+        const priceData = await fetchUSStockPrice(stock.symbol);
+        return { ...stock, priceData };
+      })
+    );
+    fallbackResults.forEach(r => {
+      if (r.status === 'fulfilled') {
+        const { symbol, name, priceData } = r.value;
+        assets.push({ symbol, name, market_type: 'US' });
+        if (priceData) prices[symbol] = priceData;
+      }
+    });
   }
 
   // ── 3. TW — candidate pool sorted by live volume ───────────
