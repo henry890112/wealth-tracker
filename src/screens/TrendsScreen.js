@@ -173,28 +173,73 @@ export default function TrendsScreen() {
 
   useFocusEffect(useCallback(() => { loadData(); }, []));
 
-  const loadSnapshots = useCallback(async (uid, days, range) => {
+  const loadSnapshots = useCallback(async (uid, days, range, filter = 'all') => {
     setSnapshotLoading(true);
     try {
-      let query = supabase
-        .from('daily_snapshots').select('*')
-        .eq('user_id', uid)
-        .order('snapshot_date', { ascending: true });
+      if (filter === 'all') {
+        let query = supabase
+          .from('daily_snapshots').select('*')
+          .eq('user_id', uid)
+          .order('snapshot_date', { ascending: true });
 
-      if (range) {
-        query = query.gte('snapshot_date', range.start).lte('snapshot_date', range.end);
+        if (range) {
+          query = query.gte('snapshot_date', range.start).lte('snapshot_date', range.end);
+        } else {
+          const since = new Date();
+          since.setDate(since.getDate() - days);
+          query = query.gte('snapshot_date', since.toISOString().split('T')[0]);
+        }
+
+        const { data } = await query;
+        setSnapshots(data || []);
       } else {
-        const since = new Date();
-        since.setDate(since.getDate() - days);
-        query = query.gte('snapshot_date', since.toISOString().split('T')[0]);
-      }
+        let query = supabase
+          .from('category_snapshots').select('date, value')
+          .eq('user_id', uid)
+          .eq('category', filter)
+          .order('date', { ascending: true });
 
-      const { data } = await query;
-      setSnapshots(data || []);
+        if (range) {
+          query = query.gte('date', range.start).lte('date', range.end);
+        } else {
+          const since = new Date();
+          since.setDate(since.getDate() - days);
+          query = query.gte('date', since.toISOString().split('T')[0]);
+        }
+
+        const { data } = await query;
+        setSnapshots((data || []).map(r => ({ snapshot_date: r.date, net_worth_base: r.value })));
+      }
     } finally {
       setSnapshotLoading(false);
     }
   }, []);
+
+  const saveCategorySnapshots = async (assets, uid, date) => {
+    const getCategoryKey = (a) => {
+      if (a.market_type === 'TW') return 'TW';
+      if (a.market_type === 'US') return 'US';
+      if (a.market_type === 'Crypto') return 'Crypto';
+      if (a.category === 'liquid') return 'liquid';
+      return 'other';
+    };
+    const totals = {};
+    assets.forEach(a => {
+      const key = getCategoryKey(a);
+      totals[key] = (totals[key] || 0) + (a.converted_amount || 0);
+    });
+    const rows = Object.entries(totals).map(([category, value]) => ({
+      user_id: uid,
+      date,
+      category,
+      value,
+    }));
+    if (rows.length > 0) {
+      await supabase.from('category_snapshots').upsert(rows, {
+        onConflict: 'user_id,date,category',
+      });
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -206,7 +251,7 @@ export default function TrendsScreen() {
         .from('profiles').select('*').eq('id', user.id).single();
       setProfile(profileData);
 
-      await loadSnapshots(user.id, PERIODS[2].days, null);
+      await loadSnapshots(user.id, PERIODS[2].days, null, selectedFilter);
 
       const { data: assetsData } = await supabase
         .from('assets').select('id, name, category, current_amount, currency, market_type')
@@ -221,6 +266,9 @@ export default function TrendsScreen() {
           })
         );
         setDetailedAssets(converted);
+
+        const today = new Date().toISOString().split('T')[0];
+        await saveCategorySnapshots(converted, user.id, today);
 
         const catSums = {};
         converted.forEach(a => {
@@ -257,7 +305,7 @@ export default function TrendsScreen() {
     }
     setSelectedPeriod(period);
     setCustomRange(null);
-    if (userId) loadSnapshots(userId, period.days, null);
+    if (userId) loadSnapshots(userId, period.days, null, selectedFilter);
   };
 
   const applyCustomRange = () => {
@@ -273,7 +321,7 @@ export default function TrendsScreen() {
     setCustomRange(range);
     setSelectedPeriod(PERIODS[4]); // 自定義
     setCustomModalVisible(false);
-    if (userId) loadSnapshots(userId, null, range);
+    if (userId) loadSnapshots(userId, null, range, selectedFilter);
   };
 
   const currency = profile?.base_currency || 'TWD';
@@ -438,9 +486,11 @@ export default function TrendsScreen() {
               <TouchableOpacity
                 key={opt.key}
                 onPress={() => {
-                  setSelectedFilter(opt.key);
+                  const newFilter = opt.key;
+                  setSelectedFilter(newFilter);
                   setDrilldownCategory(null);
                   setSelectedDonutIndex(null);
+                  if (userId) loadSnapshots(userId, selectedPeriod.days, customRange, newFilter);
                 }}
                 style={{
                   paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20,
@@ -462,7 +512,7 @@ export default function TrendsScreen() {
         <View style={[styles.card, { backgroundColor: colors.card }]}>
           <View style={styles.cardHeader}>
             <Text style={[styles.cardTitle, { color: colors.text }]}>
-              {selectedFilter === 'all' ? `淨資產趨勢（${currency}）` : `${selectedFilterLabel} 淨資產趨勢`}
+              {selectedFilter === 'all' ? `總淨資產趨勢（${currency}）` : `${selectedFilterLabel} 趨勢`}
             </Text>
             {changeText && (
               <Text style={[styles.changeBadge, changeText.positive ? styles.pos : styles.neg]}>
