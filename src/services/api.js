@@ -522,57 +522,28 @@ const searchTWStocks = async (query) => {
 };
 
 /**
- * Search US stocks (local list)
+ * Search US stocks via Yahoo Finance API
  */
-const US_STOCKS = [
-  { symbol: 'AAPL',  name: 'Apple Inc.' },
-  { symbol: 'MSFT',  name: 'Microsoft Corporation' },
-  { symbol: 'NVDA',  name: 'NVIDIA Corporation' },
-  { symbol: 'GOOGL', name: 'Alphabet Inc.' },
-  { symbol: 'AMZN',  name: 'Amazon.com Inc.' },
-  { symbol: 'META',  name: 'Meta Platforms Inc.' },
-  { symbol: 'TSLA',  name: 'Tesla Inc.' },
-  { symbol: 'AVGO',  name: 'Broadcom Inc.' },
-  { symbol: 'JPM',   name: 'JPMorgan Chase & Co.' },
-  { symbol: 'V',     name: 'Visa Inc.' },
-  { symbol: 'MA',    name: 'Mastercard Inc.' },
-  { symbol: 'UNH',   name: 'UnitedHealth Group' },
-  { symbol: 'XOM',   name: 'Exxon Mobil Corporation' },
-  { symbol: 'LLY',   name: 'Eli Lilly and Company' },
-  { symbol: 'WMT',   name: 'Walmart Inc.' },
-  { symbol: 'JNJ',   name: 'Johnson & Johnson' },
-  { symbol: 'PG',    name: 'Procter & Gamble Co.' },
-  { symbol: 'AMD',   name: 'Advanced Micro Devices' },
-  { symbol: 'ORCL',  name: 'Oracle Corporation' },
-  { symbol: 'COST',  name: 'Costco Wholesale Corporation' },
-  { symbol: 'HD',    name: 'The Home Depot Inc.' },
-  { symbol: 'BAC',   name: 'Bank of America Corporation' },
-  { symbol: 'NFLX',  name: 'Netflix Inc.' },
-  { symbol: 'QCOM',  name: 'Qualcomm Inc.' },
-  { symbol: 'TXN',   name: 'Texas Instruments Inc.' },
-  { symbol: 'DIS',   name: 'The Walt Disney Company' },
-  { symbol: 'UBER',  name: 'Uber Technologies Inc.' },
-  { symbol: 'PLTR',  name: 'Palantir Technologies Inc.' },
-  { symbol: 'COIN',  name: 'Coinbase Global Inc.' },
-  { symbol: 'SMCI',  name: 'Super Micro Computer Inc.' },
-  { symbol: 'ARM',   name: 'Arm Holdings plc' },
-  { symbol: 'INTC',  name: 'Intel Corporation' },
-  { symbol: 'MU',    name: 'Micron Technology Inc.' },
-  { symbol: 'AMAT',  name: 'Applied Materials Inc.' },
-  { symbol: 'LRCX',  name: 'Lam Research Corporation' },
-  { symbol: 'ASML',  name: 'ASML Holding N.V.' },
-  { symbol: 'TSM',   name: 'Taiwan Semiconductor (ADR)' },
-  { symbol: 'BABA',  name: 'Alibaba Group Holding' },
-  { symbol: 'PDD',   name: 'PDD Holdings (Temu)' },
-  { symbol: 'MSTR',  name: 'MicroStrategy Inc.' },
-];
-
 const searchUSStocks = async (query) => {
-  const q = query.toLowerCase();
-  return US_STOCKS
-    .filter(s => s.symbol.toLowerCase().includes(q) || s.name.toLowerCase().includes(q))
-    .slice(0, 20)
-    .map(s => ({ ...s, market_type: 'US' }));
+  try {
+    const url = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=15&newsCount=0&enableFuzzyQuery=false&quotesQueryId=tss_match_phrase_query`;
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    });
+    const json = await res.json();
+    const quotes = json?.finance?.result?.[0]?.quotes || [];
+    return quotes
+      .filter(q => q.quoteType === 'EQUITY' && q.exchange && !q.symbol.includes('.'))
+      .map(q => ({
+        symbol: q.symbol,
+        name: q.shortname || q.longname || q.symbol,
+        market_type: 'US',
+      }))
+      .slice(0, 15);
+  } catch (e) {
+    console.log('searchUSStocks error:', e);
+    return [];
+  }
 };
 
 /**
