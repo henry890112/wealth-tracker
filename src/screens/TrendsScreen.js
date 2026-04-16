@@ -251,8 +251,7 @@ export default function TrendsScreen() {
         .from('profiles').select('*').eq('id', user.id).single();
       setProfile(profileData);
 
-      await loadSnapshots(user.id, PERIODS[2].days, null, selectedFilter);
-
+      // 先載入並換算資產，再 upsert 今日快照，最後才讀歷史快照畫折線圖
       const { data: assetsData } = await supabase
         .from('assets').select('id, name, category, current_amount, currency, market_type')
         .eq('user_id', user.id);
@@ -268,6 +267,15 @@ export default function TrendsScreen() {
         setDetailedAssets(converted);
 
         const today = new Date().toISOString().split('T')[0];
+
+        // Upsert 今日 daily_snapshots（確保折線圖最右邊的點是即時值）
+        const totalValue = converted.reduce((sum, a) => sum + Number(a.converted_amount || 0), 0);
+        await supabase.from('daily_snapshots').upsert(
+          { user_id: user.id, snapshot_date: today, net_worth_base: totalValue },
+          { onConflict: 'user_id,snapshot_date' }
+        );
+
+        // Upsert 今日 category_snapshots
         await saveCategorySnapshots(converted, user.id, today);
 
         const catSums = {};
@@ -285,6 +293,9 @@ export default function TrendsScreen() {
             }))
         );
       }
+
+      // 在 upsert 完成後才讀歷史快照，確保今天的點已存入
+      await loadSnapshots(user.id, PERIODS[2].days, null, selectedFilter);
     } catch (e) {
       console.error('Error loading charts:', e);
     } finally {
