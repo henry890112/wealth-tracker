@@ -606,6 +606,7 @@ export const US_INDICES = [
   { symbol: '^IXIC', name: 'NASDAQ',       market_type: 'US', isIndex: true },
   { symbol: '^DJI',  name: '道瓊工業指數', market_type: 'US', isIndex: true },
   { symbol: '^RUT',  name: '羅素 2000',    market_type: 'US', isIndex: true },
+  { symbol: '^SOX',  name: '費城半導體指數', market_type: 'US', isIndex: true },
   { symbol: '^VIX',  name: 'VIX 恐慌指數', market_type: 'US', isIndex: true },
 ];
 
