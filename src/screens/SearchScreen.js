@@ -63,6 +63,7 @@ const INDEX_TV_MAP = {
   '^IXIC':  'FOREXCOM:NASUSD',
   '^DJI':   'FOREXCOM:DJUSD',
   '^RUT':   'TVC:RUT',
+  '^SOX':   'PHLX:SOX',
   '^VIX':   'CBOE:VIX',
 };
 
