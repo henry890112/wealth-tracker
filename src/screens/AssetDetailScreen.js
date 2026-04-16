@@ -282,11 +282,24 @@ export default function AssetDetailScreen() {
       }, 0);
       const avgCost = totalShares > 0 ? weightedCost / totalShares : 0;
 
+      // Convert cost basis to base currency for accurate P&L calculation
+      const lev = primaryAsset.leverage || 1;
+      const costBasisRaw = totalShares > 0 ? (totalShares * avgCost / lev) : 0;
+      let costBasisInBase = costBasisRaw;
+      if (costBasisRaw > 0) {
+        try {
+          costBasisInBase = await convertToBaseCurrency(costBasisRaw, primaryAsset.currency, baseCurrency);
+        } catch {
+          costBasisInBase = costBasisRaw;
+        }
+      }
+
       setAsset({
         ...primaryAsset,
         converted_amount: totalConverted,
         current_shares: totalShares,
         average_cost: avgCost,
+        cost_basis_in_base: costBasisInBase,
       });
 
       const { data: transactionsData, error: transactionsError } = await supabase
@@ -531,8 +544,7 @@ export default function AssetDetailScreen() {
             </View>
           )}
           {asset.category === 'investment' && asset.current_shares > 0 && asset.average_cost > 0 && (() => {
-            const lev = asset.leverage || 1;
-            const costBasis = asset.current_shares * asset.average_cost / lev;
+            const costBasis = asset.cost_basis_in_base || 0;
             const pnl = asset.converted_amount - costBasis;
             const pnl_pct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
             const isUp = pnl >= 0;
