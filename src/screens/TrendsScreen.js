@@ -1,11 +1,9 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, Dimensions, ActivityIndicator,
-  TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Alert,
-  Keyboard, TouchableWithoutFeedback,
+  TouchableOpacity, Modal, Platform, Alert,
 } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
-import { BlurView } from 'expo-blur';
 import Svg, { Path, Circle, Text as SvgText } from 'react-native-svg';
 import { X, Calendar } from 'lucide-react-native';
 import { useFocusEffect } from '@react-navigation/native';
@@ -59,6 +57,60 @@ const isValidDate = (str) => {
   const d = new Date(str);
   return !isNaN(d.getTime());
 };
+
+// ── Date Wheel Picker ──
+const ITEM_HEIGHT = 44;
+const VISIBLE_ITEMS = 5;
+const PICKER_HEIGHT = ITEM_HEIGHT * VISIBLE_ITEMS; // 220
+const YEARS = Array.from({ length: 7 }, (_, i) => 2020 + i); // 2020–2026
+const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1);
+const getDaysInMonth = (year, month) => new Date(year, month, 0).getDate();
+const pad2 = (n) => String(n).padStart(2, '0');
+
+function WheelColumn({ data, selectedValue, onValueChange, formatLabel, colors, scrollTrigger }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const idx = data.indexOf(selectedValue);
+    if (ref.current && idx >= 0) {
+      const timer = setTimeout(() => {
+        ref.current?.scrollTo({ y: idx * ITEM_HEIGHT, animated: false });
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [scrollTrigger]); // re-scroll whenever trigger fires (modal open / field switch / reset)
+
+  return (
+    <ScrollView
+      ref={ref}
+      style={{ height: PICKER_HEIGHT, flex: 1 }}
+      showsVerticalScrollIndicator={false}
+      snapToInterval={ITEM_HEIGHT}
+      decelerationRate="fast"
+      onMomentumScrollEnd={(e) => {
+        const index = Math.round(e.nativeEvent.contentOffset.y / ITEM_HEIGHT);
+        const clamped = Math.max(0, Math.min(index, data.length - 1));
+        onValueChange(data[clamped]);
+      }}
+      contentContainerStyle={{ paddingVertical: ITEM_HEIGHT * 2 }}
+    >
+      {data.map((item, i) => {
+        const isSelected = item === selectedValue;
+        return (
+          <View key={i} style={{ height: ITEM_HEIGHT, justifyContent: 'center', alignItems: 'center' }}>
+            <Text style={{
+              fontSize: isSelected ? 20 : 16,
+              fontWeight: isSelected ? '700' : '400',
+              color: isSelected ? '#10b981' : colors.textSub,
+            }}>
+              {formatLabel ? formatLabel(item) : String(item)}
+            </Text>
+          </View>
+        );
+      })}
+    </ScrollView>
+  );
+}
 
 function DonutChart({ data, size = 180, strokeWidth = 28, selectedIndex, onSelect }) {
   const total = data.reduce((s, d) => s + d.value, 0);
@@ -168,8 +220,17 @@ export default function TrendsScreen() {
 
   // Custom date modal
   const [customModalVisible, setCustomModalVisible] = useState(false);
-  const [inputStart, setInputStart] = useState('');
-  const [inputEnd, setInputEnd] = useState('');
+  const [activeDateField, setActiveDateField] = useState('start'); // 'start' | 'end'
+  const [pickerScrollTrigger, setPickerScrollTrigger] = useState(0);
+  const [pickerStart, setPickerStart] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate() };
+  });
+  const [pickerEnd, setPickerEnd] = useState(() => {
+    const d = new Date();
+    return { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate() };
+  });
 
   useFocusEffect(useCallback(() => { loadData(); }, []));
 
@@ -305,12 +366,21 @@ export default function TrendsScreen() {
 
   const handlePeriodSelect = (period) => {
     if (period.days === null) {
-      // Custom: pre-fill with last selection or sensible default
-      const today = new Date().toISOString().split('T')[0];
-      const prior = new Date();
-      prior.setDate(prior.getDate() - 30);
-      setInputStart(customRange?.start || prior.toISOString().split('T')[0]);
-      setInputEnd(customRange?.end || today);
+      // Initialize picker from existing customRange or 30-day default
+      if (customRange) {
+        const [sy, sm, sd] = customRange.start.split('-').map(Number);
+        const [ey, em, ed] = customRange.end.split('-').map(Number);
+        setPickerStart({ year: sy, month: sm, day: sd });
+        setPickerEnd({ year: ey, month: em, day: ed });
+      } else {
+        const today = new Date();
+        const prior = new Date();
+        prior.setDate(prior.getDate() - 30);
+        setPickerStart({ year: prior.getFullYear(), month: prior.getMonth() + 1, day: prior.getDate() });
+        setPickerEnd({ year: today.getFullYear(), month: today.getMonth() + 1, day: today.getDate() });
+      }
+      setActiveDateField('start');
+      setPickerScrollTrigger(t => t + 1);
       setCustomModalVisible(true);
       return;
     }
@@ -320,15 +390,13 @@ export default function TrendsScreen() {
   };
 
   const applyCustomRange = () => {
-    if (!isValidDate(inputStart) || !isValidDate(inputEnd)) {
-      Alert.alert('格式錯誤', '請輸入正確的日期格式 YYYY-MM-DD');
-      return;
-    }
-    if (inputStart > inputEnd) {
+    const startStr = `${pickerStart.year}-${pad2(pickerStart.month)}-${pad2(pickerStart.day)}`;
+    const endStr = `${pickerEnd.year}-${pad2(pickerEnd.month)}-${pad2(pickerEnd.day)}`;
+    if (startStr > endStr) {
       Alert.alert('日期錯誤', '開始日期不能晚於結束日期');
       return;
     }
-    const range = { start: inputStart, end: inputEnd };
+    const range = { start: startStr, end: endStr };
     setCustomRange(range);
     setSelectedPeriod(PERIODS[4]); // 自定義
     setCustomModalVisible(false);
@@ -679,51 +747,150 @@ export default function TrendsScreen() {
         animationType="fade"
         onRequestClose={() => setCustomModalVisible(false)}
       >
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-        <KeyboardAvoidingView
-          style={styles.modalOverlay}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
-          <View style={styles.modalSheet}>
-            {/* Frosted glass background */}
-            <BlurView intensity={60} tint="light" style={StyleSheet.absoluteFill} />
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { backgroundColor: colors.card }]}>
             <View style={styles.modalContent}>
+              {/* Header */}
               <View style={styles.modalHeader}>
-                <Text style={[styles.modalTitle, { color: colors.text }]}>自定義區間</Text>
+                <Text style={[styles.modalTitle, { color: colors.text }]}>請選擇開始日期和結束日期</Text>
                 <TouchableOpacity onPress={() => setCustomModalVisible(false)}>
                   <X size={20} color={colors.textSub} />
                 </TouchableOpacity>
               </View>
 
-              <Text style={[styles.inputLabel, { color: colors.textSub }]}>開始日期</Text>
-              <TextInput
-                style={[styles.dateInput, { color: colors.text }]}
-                value={inputStart}
-                onChangeText={setInputStart}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor="#cbd5e1"
-                keyboardType="numbers-and-punctuation"
-                maxLength={10}
-              />
+              {/* Date pills – tap to switch active field */}
+              <View style={styles.datePillsRow}>
+                {[
+                  { field: 'start', label: '開始日期', d: pickerStart },
+                  { field: 'end',   label: '結束日期', d: pickerEnd  },
+                ].map(({ field, label, d }) => {
+                  const active = activeDateField === field;
+                  return (
+                    <TouchableOpacity
+                      key={field}
+                      style={[
+                        styles.datePill,
+                        { borderColor: active ? '#10b981' : colors.borderLight, backgroundColor: colors.bg },
+                        active && { borderWidth: 2 },
+                      ]}
+                      onPress={() => {
+                        setActiveDateField(field);
+                        setPickerScrollTrigger(t => t + 1);
+                      }}
+                      activeOpacity={0.75}
+                    >
+                      <Text style={[styles.datePillLabel, { color: colors.textSub }]}>{label}</Text>
+                      <Text style={[styles.datePillValue, { color: active ? '#10b981' : colors.text }]}>
+                        {d.year}-{pad2(d.month)}-{pad2(d.day)}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
 
-              <Text style={[styles.inputLabel, { color: colors.textSub }]}>結束日期</Text>
-              <TextInput
-                style={[styles.dateInput, { color: colors.text }]}
-                value={inputEnd}
-                onChangeText={setInputEnd}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor="#cbd5e1"
-                keyboardType="numbers-and-punctuation"
-                maxLength={10}
-              />
+              {/* Scroll-wheel picker */}
+              <View style={styles.wheelContainer}>
+                {/* Column header labels */}
+                <View style={styles.wheelHeaders}>
+                  {['年', '月', '日'].map(h => (
+                    <Text key={h} style={[styles.wheelHeader, { color: colors.textSub }]}>{h}</Text>
+                  ))}
+                </View>
 
-              <TouchableOpacity style={styles.applyBtn} onPress={applyCustomRange}>
-                <Text style={styles.applyBtnText}>套用</Text>
-              </TouchableOpacity>
+                {/* Selection highlight bar */}
+                <View pointerEvents="none" style={styles.wheelSelectionOverlay}>
+                  <View style={[styles.wheelSelectionBar, { borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.08)' }]} />
+                </View>
+
+                {/* The three columns */}
+                <View style={styles.wheelColumnsRow}>
+                  {/* Year */}
+                  <WheelColumn
+                    data={YEARS}
+                    selectedValue={activeDateField === 'start' ? pickerStart.year : pickerEnd.year}
+                    onValueChange={(val) => {
+                      if (activeDateField === 'start') {
+                        setPickerStart(p => {
+                          const maxDay = getDaysInMonth(val, p.month);
+                          return { ...p, year: val, day: Math.min(p.day, maxDay) };
+                        });
+                      } else {
+                        setPickerEnd(p => {
+                          const maxDay = getDaysInMonth(val, p.month);
+                          return { ...p, year: val, day: Math.min(p.day, maxDay) };
+                        });
+                      }
+                    }}
+                    colors={colors}
+                    scrollTrigger={pickerScrollTrigger}
+                  />
+                  {/* Month */}
+                  <WheelColumn
+                    data={MONTHS}
+                    selectedValue={activeDateField === 'start' ? pickerStart.month : pickerEnd.month}
+                    onValueChange={(val) => {
+                      if (activeDateField === 'start') {
+                        setPickerStart(p => {
+                          const maxDay = getDaysInMonth(p.year, val);
+                          return { ...p, month: val, day: Math.min(p.day, maxDay) };
+                        });
+                      } else {
+                        setPickerEnd(p => {
+                          const maxDay = getDaysInMonth(p.year, val);
+                          return { ...p, month: val, day: Math.min(p.day, maxDay) };
+                        });
+                      }
+                    }}
+                    formatLabel={pad2}
+                    colors={colors}
+                    scrollTrigger={pickerScrollTrigger}
+                  />
+                  {/* Day */}
+                  <WheelColumn
+                    data={Array.from(
+                      { length: getDaysInMonth(
+                        activeDateField === 'start' ? pickerStart.year  : pickerEnd.year,
+                        activeDateField === 'start' ? pickerStart.month : pickerEnd.month,
+                      ) },
+                      (_, i) => i + 1,
+                    )}
+                    selectedValue={activeDateField === 'start' ? pickerStart.day : pickerEnd.day}
+                    onValueChange={(val) => {
+                      if (activeDateField === 'start') {
+                        setPickerStart(p => ({ ...p, day: val }));
+                      } else {
+                        setPickerEnd(p => ({ ...p, day: val }));
+                      }
+                    }}
+                    formatLabel={pad2}
+                    colors={colors}
+                    scrollTrigger={pickerScrollTrigger}
+                  />
+                </View>
+              </View>
+
+              {/* Bottom buttons */}
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={[styles.resetBtn, { backgroundColor: colors.bg, borderColor: colors.borderLight }]}
+                  onPress={() => {
+                    const today = new Date();
+                    const prior = new Date();
+                    prior.setDate(prior.getDate() - 30);
+                    setPickerStart({ year: prior.getFullYear(), month: prior.getMonth() + 1, day: prior.getDate() });
+                    setPickerEnd({ year: today.getFullYear(), month: today.getMonth() + 1, day: today.getDate() });
+                    setPickerScrollTrigger(t => t + 1);
+                  }}
+                >
+                  <Text style={{ color: colors.textSub, fontSize: 15, fontWeight: '600' }}>重置</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.applyBtn} onPress={applyCustomRange}>
+                  <Text style={styles.applyBtnText}>確定</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
-        </KeyboardAvoidingView>
-        </TouchableWithoutFeedback>
+        </View>
       </Modal>
     </View>
   );
@@ -812,43 +979,65 @@ const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
     justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.3)',
+    backgroundColor: 'rgba(0,0,0,0.4)',
   },
   modalSheet: {
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     overflow: 'hidden',
-    backgroundColor: 'rgba(255,255,255,0.7)',
   },
   modalContent: {
-    padding: 28,
+    padding: 24,
     paddingBottom: 40,
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 24,
+    alignItems: 'flex-start',
+    marginBottom: 20,
   },
-  modalTitle: { fontSize: 18, fontWeight: '700' },
-  inputLabel: { fontSize: 13, marginBottom: 6, fontWeight: '500' },
-  dateInput: {
-    backgroundColor: 'rgba(255,255,255,0.8)',
-    borderWidth: 1,
-    borderColor: 'rgba(22,163,74,0.25)',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 16,
-    marginBottom: 18,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  modalTitle: { fontSize: 17, fontWeight: '700', flex: 1, marginRight: 12 },
+
+  // Date pills
+  datePillsRow: { flexDirection: 'row', gap: 12, marginBottom: 20 },
+  datePill: {
+    flex: 1, borderRadius: 14, borderWidth: 1,
+    paddingVertical: 10, paddingHorizontal: 12, alignItems: 'center',
+  },
+  datePillLabel: { fontSize: 11, fontWeight: '500', marginBottom: 4 },
+  datePillValue: { fontSize: 16, fontWeight: '700', letterSpacing: 0.5 },
+
+  // Wheel picker
+  wheelContainer: { position: 'relative', marginBottom: 20 },
+  wheelHeaders: { flexDirection: 'row', marginBottom: 6 },
+  wheelHeader: { flex: 1, textAlign: 'center', fontSize: 12, fontWeight: '600' },
+  wheelColumnsRow: { flexDirection: 'row' },
+  wheelSelectionOverlay: {
+    position: 'absolute',
+    top: 6 + 18, // header height ~24px
+    left: 0, right: 0,
+    height: PICKER_HEIGHT,
+    justifyContent: 'center',
+    pointerEvents: 'none',
+  },
+  wheelSelectionBar: {
+    height: ITEM_HEIGHT,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+  },
+
+  // Bottom buttons
+  modalButtons: { flexDirection: 'row', gap: 12 },
+  resetBtn: {
+    flex: 1, borderRadius: 14, paddingVertical: 14,
+    alignItems: 'center', borderWidth: 1,
   },
   applyBtn: {
+    flex: 1,
     backgroundColor: PRIMARY,
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
-    marginTop: 4,
     shadowColor: PRIMARY,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.35,
