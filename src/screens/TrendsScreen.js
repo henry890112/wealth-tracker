@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, Dimensions, ActivityIndicator,
-  TouchableOpacity, Modal, Platform, Alert,
+  TouchableOpacity, Modal, Platform, Alert, RefreshControl, Animated,
 } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
 import Svg, { Path, Circle, Text as SvgText } from 'react-native-svg';
@@ -217,6 +217,24 @@ export default function TrendsScreen() {
   const [customRange, setCustomRange] = useState(null); // { start, end } strings
 
   const [selectedFilter, setSelectedFilter] = useState('all');
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Refs so that stable callbacks (onRefresh, useFocusEffect) always see the
+  // latest selectedFilter and the latest loadData without needing to be
+  // recreated on every render.
+  const selectedFilterRef = useRef(selectedFilter);
+  selectedFilterRef.current = selectedFilter; // kept current every render
+
+  const loadDataRef = useRef(null); // populated after loadData is defined below
+
+  const chartOpacity = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.sequence([
+      Animated.timing(chartOpacity, { toValue: 0, duration: 150, useNativeDriver: true }),
+      Animated.timing(chartOpacity, { toValue: 1, duration: 300, useNativeDriver: true }),
+    ]).start();
+  }, [selectedFilter]);
 
   // Custom date modal
   const [customModalVisible, setCustomModalVisible] = useState(false);
@@ -232,7 +250,18 @@ export default function TrendsScreen() {
     return { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate() };
   });
 
-  useFocusEffect(useCallback(() => { loadData(); }, []));
+  // useFocusEffect: use the ref so we always call the latest loadData.
+  // The [] dep is intentional here — we only want to register the effect once;
+  // loadDataRef.current always points to the freshest version.
+  useFocusEffect(useCallback(() => { loadDataRef.current?.(); }, []));
+
+  // onRefresh: stable callback ([] deps) that reads both refs at call time,
+  // so it never resets selectedFilter when pulling to refresh.
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadDataRef.current?.(selectedFilterRef.current);
+    setRefreshing(false);
+  }, []);
 
   const loadSnapshots = useCallback(async (uid, days, range, filter = 'all') => {
     setSnapshotLoading(true);
@@ -302,7 +331,7 @@ export default function TrendsScreen() {
     }
   };
 
-  const loadData = async () => {
+  const loadData = async (filterOverride) => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -356,13 +385,19 @@ export default function TrendsScreen() {
       }
 
       // 在 upsert 完成後才讀歷史快照，確保今天的點已存入
-      await loadSnapshots(user.id, PERIODS[2].days, null, selectedFilter);
+      // Use filterOverride (supplied by onRefresh) so pull-to-refresh never
+      // silently resets the active filter chip back to 'all'.
+      const filterToLoad = filterOverride !== undefined ? filterOverride : selectedFilter;
+      await loadSnapshots(user.id, PERIODS[2].days, null, filterToLoad);
     } catch (e) {
       console.error('Error loading charts:', e);
     } finally {
       setLoading(false);
     }
   };
+
+  // Keep the ref pointing at the freshest loadData every render.
+  loadDataRef.current = loadData;
 
   const handlePeriodSelect = (period) => {
     if (period.days === null) {
@@ -550,7 +585,10 @@ export default function TrendsScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
-      <ScrollView contentContainerStyle={{ paddingBottom: 120 }}>
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: 120 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#10b981" />}
+      >
 
         {/* Category filter chips */}
         <ScrollView
@@ -632,27 +670,29 @@ export default function TrendsScreen() {
               <ActivityIndicator size="small" color={PRIMARY} />
             </View>
           ) : snapshots.length >= 2 ? (
-            <LineChart
-              data={chartData}
-              width={screenWidth - 64}
-              height={200}
-              yAxisWidth={72}
-              formatYLabel={(val) => fmtYLabel(val, chartBaseline)}
-              chartConfig={{
-                backgroundGradientFrom: colors.card,
-                backgroundGradientTo: colors.card,
-                decimalPlaces: 0,
-                color: (opacity = 1) => `rgba(22, 163, 74, ${opacity})`,
-                labelColor: (opacity = 1) => `rgba(148, 163, 184, ${opacity})`,
-                fillShadowGradient: '#16a34a',
-                fillShadowGradientOpacity: 0.12,
-                propsForDots: { r: '3', strokeWidth: '1.5', stroke: '#16a34a' },
-                propsForBackgroundLines: { stroke: colors.borderLight },
-              }}
-              withShadow
-              bezier
-              style={{ borderRadius: 8, marginLeft: -8, marginTop: 4 }}
-            />
+            <Animated.View style={{ opacity: chartOpacity }}>
+              <LineChart
+                data={chartData}
+                width={screenWidth - 64}
+                height={200}
+                yAxisWidth={72}
+                formatYLabel={(val) => fmtYLabel(val, chartBaseline)}
+                chartConfig={{
+                  backgroundGradientFrom: colors.card,
+                  backgroundGradientTo: colors.card,
+                  decimalPlaces: 0,
+                  color: (opacity = 1) => `rgba(22, 163, 74, ${opacity})`,
+                  labelColor: (opacity = 1) => `rgba(148, 163, 184, ${opacity})`,
+                  fillShadowGradient: '#16a34a',
+                  fillShadowGradientOpacity: 0.12,
+                  propsForDots: { r: '3', strokeWidth: '1.5', stroke: '#16a34a' },
+                  propsForBackgroundLines: { stroke: colors.borderLight },
+                }}
+                withShadow
+                bezier
+                style={{ borderRadius: 8, marginLeft: -8, marginTop: 4 }}
+              />
+            </Animated.View>
           ) : (
             <Text style={[styles.emptyText, { color: colors.textMuted }]}>
               {hasData ? '需要至少兩天的記錄才能顯示趨勢\n明日系統會自動記錄今日資產' : '此區間尚無數據\n系統每日自動記錄您的資產狀況'}

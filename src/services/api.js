@@ -454,8 +454,20 @@ export const fetchExchangeRate = async (fromCurrency, toCurrency) => {
       const toMissing   = toCurrency   !== 'TWD' && !rTo;
 
       if (fromMissing || toMissing) {
-        console.warn(`BOT missing ${fromMissing ? fromCurrency : toCurrency}, falling back to exchangerate-api`);
-        rate = await fetchExchangeRateFallback(fromCurrency, toCurrency);
+        console.warn(`BOT missing ${fromMissing ? fromCurrency : toCurrency}, trying Yahoo Finance`);
+        try {
+          const yUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${fromCurrency}${toCurrency}=X?interval=1m&range=1d`;
+          const yRes = await fetch(yUrl);
+          const yJson = await yRes.json();
+          const yRate = yJson?.chart?.result?.[0]?.meta?.regularMarketPrice;
+          if (yRate && yRate > 0) {
+            rate = yRate;
+          } else {
+            rate = await fetchExchangeRateFallback(fromCurrency, toCurrency);
+          }
+        } catch (_) {
+          rate = await fetchExchangeRateFallback(fromCurrency, toCurrency);
+        }
       } else if (toCurrency === 'TWD') {
         rate = rFrom; // foreign → TWD (即期賣出)
       } else if (fromCurrency === 'TWD') {

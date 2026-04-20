@@ -209,6 +209,7 @@ export default function AssetDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [twChartData, setTwChartData] = useState(null);
+  const [priceUpdatedAt, setPriceUpdatedAt] = useState(null);
 
   // Add transaction modal state
   const [modalVisible, setModalVisible] = useState(false);
@@ -301,6 +302,7 @@ export default function AssetDetailScreen() {
         average_cost: avgCost,
         cost_basis_in_base: costBasisInBase,
       });
+      setPriceUpdatedAt(new Date());
 
       const { data: transactionsData, error: transactionsError } = await supabase
         .from('transactions')
@@ -527,6 +529,11 @@ export default function AssetDetailScreen() {
               {formatCurrency(asset.converted_amount)}
             </Text>
           </View>
+          {priceUpdatedAt && (
+            <Text style={{ color: '#64748b', fontSize: 11, textAlign: 'center', marginTop: 2 }}>
+              {`價格更新於 ${String(priceUpdatedAt.getHours()).padStart(2,'0')}:${String(priceUpdatedAt.getMinutes()).padStart(2,'0')}`}
+            </Text>
+          )}
           {asset.current_shares > 0 && (
             <View style={styles.assetDetailRow}>
               <Text style={styles.assetDetailLabel}>持有股數</Text>
