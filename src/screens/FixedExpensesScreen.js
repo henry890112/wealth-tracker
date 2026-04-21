@@ -26,7 +26,7 @@ const CATEGORY_COLORS = {
   交通: '#f59e0b',
   訂閱: '#8b5cf6',
   保險: '#06b6d4',
-  貸款: '#ef4444',
+  貸款: '#E07070',
   餐飲: '#f97316',
   其他: '#6b7280',
 };
@@ -265,7 +265,7 @@ export default function FixedExpensesScreen() {
                           ) : null}
                         </View>
                         <View style={styles.cardRight}>
-                          <Text style={{ color: '#ef4444', fontSize: 18, fontWeight: '700' }}>
+                          <Text style={{ color: '#E07070', fontSize: 18, fontWeight: '700' }}>
                             {convertedAmount.toLocaleString('zh-TW', { maximumFractionDigits: 0 })}
                           </Text>
                           {item.due_day ? (
@@ -572,5 +572,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 8,
   },
-  deleteBtnText: { color: '#ef4444', fontSize: 15 },
+  deleteBtnText: { color: '#E07070', fontSize: 15 },
 });

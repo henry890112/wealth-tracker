@@ -1109,7 +1109,7 @@ export default function SearchScreen() {
                       style={[styles.categoryChip, { backgroundColor: colors.cardAlt }, category === cat.id && styles.categoryChipActive]}
                       onPress={() => setCategory(cat.id)}
                     >
-                      <Text style={[styles.categoryChipText, { color: colors.textSub }, category === cat.id && styles.categoryChipTextActive]}>
+                      <Text style={[styles.categoryChipText, { color: '#FFFFFF' }, category === cat.id && styles.categoryChipTextActive]}>
                         {cat.label}
                       </Text>
                     </TouchableOpacity>
@@ -1596,7 +1596,7 @@ const styles = StyleSheet.create({
   categoryChipText: { fontSize: 14 },
   categoryChipTextActive: { color: 'white', fontWeight: '600' },
   input: { borderWidth: 1, borderRadius: 8, padding: 12, fontSize: 16, marginBottom: 16 },
-  totalText: { fontSize: 16, fontWeight: '600', color: '#2563eb', marginBottom: 16, textAlign: 'right' },
+  totalText: { fontSize: 16, fontWeight: '600', color: PRIMARY, marginBottom: 16, textAlign: 'right' },
   addButton: { flexDirection: 'row', backgroundColor: PRIMARY, padding: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center', gap: 8 },
   addButtonDisabled: { backgroundColor: '#94a3b8' },
   addButtonText: { color: 'white', fontSize: 16, fontWeight: '600' },
