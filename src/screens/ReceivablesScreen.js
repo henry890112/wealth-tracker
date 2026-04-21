@@ -25,7 +25,7 @@ const FREQUENCY_MONTHS = { once: 0, monthly: 1, quarterly: 3, semi_annual: 6, ye
 const CATEGORY_COLORS = {
   薪資: '#3b82f6',
   租金: '#f59e0b',
-  借款: '#E07070',
+  借款: '#ef4444',
   投資回收: '#10b981',
   其他: '#6b7280',
 };
@@ -555,5 +555,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 8,
   },
-  deleteBtnText: { color: '#E07070', fontSize: 15 },
+  deleteBtnText: { color: '#ef4444', fontSize: 15 },
 });

@@ -1596,7 +1596,7 @@ const styles = StyleSheet.create({
   categoryChipText: { fontSize: 14 },
   categoryChipTextActive: { color: 'white', fontWeight: '600' },
   input: { borderWidth: 1, borderRadius: 8, padding: 12, fontSize: 16, marginBottom: 16 },
-  totalText: { fontSize: 16, fontWeight: '600', color: PRIMARY, marginBottom: 16, textAlign: 'right' },
+  totalText: { fontSize: 16, fontWeight: '600', color: '#2563eb', marginBottom: 16, textAlign: 'right' },
   addButton: { flexDirection: 'row', backgroundColor: PRIMARY, padding: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center', gap: 8 },
   addButtonDisabled: { backgroundColor: '#94a3b8' },
   addButtonText: { color: 'white', fontSize: 16, fontWeight: '600' },

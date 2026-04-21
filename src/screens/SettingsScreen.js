@@ -404,7 +404,7 @@ export default function SettingsScreen() {
             onPress={handleSignOut}
           >
             <View style={styles.optionContent}>
-              <LogOut size={20} color="#E07070" />
+              <LogOut size={20} color="#ef4444" />
               <Text style={[styles.optionText, styles.dangerText]}>登出</Text>
             </View>
           </TouchableOpacity>
@@ -497,7 +497,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   dangerText: {
-    color: '#E07070',
+    color: '#ef4444',
     fontWeight: '500',
   },
   footer: {

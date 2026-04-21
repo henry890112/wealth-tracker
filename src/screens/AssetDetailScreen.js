@@ -620,7 +620,7 @@ export default function AssetDetailScreen() {
             <Text style={styles.editButtonText}>編輯</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.deleteButton} onPress={handleDelete}>
-            <Trash2 size={18} color="#E07070" />
+            <Trash2 size={18} color="#ef4444" />
             <Text style={styles.deleteButtonText}>刪除</Text>
           </TouchableOpacity>
         </View>
