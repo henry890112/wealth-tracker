@@ -6,7 +6,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Wallet, TrendingUp, Home, DollarSign, CreditCard, Plus, RefreshCw, Eye, EyeOff } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
-import { convertToBaseCurrency, fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice } from '../services/api';
+import { convertToBaseCurrency, fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice, fetchUSStockPriceBatch, fetchCryptoPriceBatch } from '../services/api';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../lib/ThemeContext';
 
@@ -31,6 +31,18 @@ const MARKET_TYPE_CONFIG = {
 
 const formatAmount = (amount) => {
   return Math.round(amount).toLocaleString('zh-TW');
+};
+
+const formatPriceTime = (isoStr) => {
+  if (!isoStr) return null;
+  const d = new Date(isoStr);
+  if (isNaN(d.getTime())) return null;
+  const now = new Date();
+  const sameDay = d.getFullYear() === now.getFullYear()
+    && d.getMonth() === now.getMonth()
+    && d.getDate() === now.getDate();
+  const hms = `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+  return sameDay ? hms : `${d.getMonth()+1}/${d.getDate()} ${hms}`;
 };
 
 export default function DashboardScreen() {
@@ -116,12 +128,29 @@ export default function DashboardScreen() {
     );
     if (investmentAssets.length === 0) return;
 
+    // Group by market type for batch fetching
+    const twAssets     = investmentAssets.filter(a => a.market_type === 'TW');
+    const usAssets     = investmentAssets.filter(a => a.market_type === 'US');
+    const cryptoAssets = investmentAssets.filter(a => a.market_type === 'Crypto');
+
+    // Fetch US and Crypto in batch (single request each), TW in parallel individual calls
+    const [usPrices, cryptoPrices] = await Promise.all([
+      fetchUSStockPriceBatch(usAssets.map(a => a.symbol)),
+      fetchCryptoPriceBatch(cryptoAssets.map(a => a.symbol)),
+    ]);
+
+    const twPriceResults = await Promise.allSettled(
+      twAssets.map(a => fetchTWStockPrice(a.symbol))
+    );
+    const twPrices = Object.fromEntries(
+      twAssets.map((a, i) => [a.symbol, twPriceResults[i].status === 'fulfilled' ? twPriceResults[i].value : null])
+    );
+
+    const priceMap = { ...usPrices, ...cryptoPrices, ...twPrices };
+
     const updates = await Promise.allSettled(
       investmentAssets.map(async (asset) => {
-        let priceData = null;
-        if (asset.market_type === 'TW') priceData = await fetchTWStockPrice(asset.symbol);
-        else if (asset.market_type === 'US') priceData = await fetchUSStockPrice(asset.symbol);
-        else if (asset.market_type === 'Crypto') priceData = await fetchCryptoPrice(asset.symbol);
+        const priceData = priceMap[asset.symbol];
         if (!priceData?.price) return null;
 
         const lev = asset.leverage || 1;
@@ -137,7 +166,7 @@ export default function DashboardScreen() {
         const convertedCost = await convertToBaseCurrency(costBasis, asset.currency, baseCurrency);
         const pnl = convertedAmount - convertedCost;
         const pnl_pct = convertedCost > 0 ? (pnl / convertedCost) * 100 : 0;
-        return { id: asset.id, current_amount: newAmount, converted_amount: convertedAmount, pnl, pnl_pct, converted_cost: convertedCost };
+        return { id: asset.id, current_amount: newAmount, converted_amount: convertedAmount, pnl, pnl_pct, converted_cost: convertedCost, price_time: priceData.price_time || null };
       })
     );
 

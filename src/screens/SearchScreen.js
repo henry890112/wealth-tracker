@@ -261,6 +261,7 @@ export default function SearchScreen() {
   const [hotUpdatedAt, setHotUpdatedAt] = useState(null);
   const [hotLoading, setHotLoading] = useState(true);
   const [fxRates, setFxRates] = useState([]);
+  const [fxUpdatedAt, setFxUpdatedAt] = useState(null);
   const [baseCurrency, setBaseCurrency] = useState('TWD');
   const [fxModal, setFxModal] = useState(false);
   const [selectedFx, setSelectedFx] = useState(null);
@@ -344,6 +345,7 @@ export default function SearchScreen() {
         };
       });
       setFxRates(rates);
+      setFxUpdatedAt(new Date());
     } catch (e) {
       console.warn('loadFxRates error:', e.message);
     }
@@ -964,7 +966,7 @@ export default function SearchScreen() {
           <View style={[styles.fxTable, { backgroundColor: colors.card }]}>
             {/* Header row */}
             <View style={[styles.fxTableHeader, { borderBottomColor: colors.border }]}>
-              <Text style={[styles.fxHeaderCurrency, { color: colors.textMuted }]}>幣別</Text>
+              <Text style={[styles.fxHeaderCurrency, { color: colors.textMuted, flex: 1 }]}>幣別</Text>
               <Text style={[styles.fxHeaderRate, { color: colors.textMuted }]}>買外幣</Text>
               <Text style={[styles.fxHeaderSell, { color: colors.textMuted }]}>賣外幣</Text>
             </View>
@@ -1252,6 +1254,7 @@ export default function SearchScreen() {
               </View>
               <Text style={[styles.fxDetailRateSubtitle, { color: colors.textMuted }]}>
                 TWD / 1 {fxDetailFx?.code}・台灣銀行即期
+                {fxUpdatedAt ? `・更新 ${fxUpdatedAt.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}
               </Text>
             </View>
 

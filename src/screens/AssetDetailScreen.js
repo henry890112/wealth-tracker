@@ -19,7 +19,7 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import { WebView } from 'react-native-webview';
 import { Trash2, Plus, Edit2 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
-import { convertToBaseCurrency } from '../services/api';
+import { convertToBaseCurrency, fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice } from '../services/api';
 
 const CATEGORY_LABELS = {
   liquid: '流動資產',
@@ -198,6 +198,18 @@ if (allData.length > 0) {
 
 const todayString = () => new Date().toISOString().split('T')[0];
 
+const formatPriceTime = (isoStr) => {
+  if (!isoStr) return null;
+  const d = new Date(isoStr);
+  if (isNaN(d.getTime())) return null;
+  const now = new Date();
+  const sameDay = d.getFullYear() === now.getFullYear()
+    && d.getMonth() === now.getMonth()
+    && d.getDate() === now.getDate();
+  const hms = `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+  return sameDay ? hms : `${d.getMonth()+1}/${d.getDate()} ${hms}`;
+};
+
 export default function AssetDetailScreen() {
   const route = useRoute();
   const navigation = useNavigation();
@@ -209,7 +221,7 @@ export default function AssetDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [twChartData, setTwChartData] = useState(null);
-  const [priceUpdatedAt, setPriceUpdatedAt] = useState(null);
+  const [priceTime, setPriceTime] = useState(null);
 
   // Add transaction modal state
   const [modalVisible, setModalVisible] = useState(false);
@@ -302,7 +314,18 @@ export default function AssetDetailScreen() {
         average_cost: avgCost,
         cost_basis_in_base: costBasisInBase,
       });
-      setPriceUpdatedAt(new Date());
+      // Fetch live price_time for investment assets in background
+      if (primaryAsset.category === 'investment' && primaryAsset.symbol) {
+        (async () => {
+          try {
+            let priceData = null;
+            if (primaryAsset.market_type === 'TW') priceData = await fetchTWStockPrice(primaryAsset.symbol);
+            else if (primaryAsset.market_type === 'US') priceData = await fetchUSStockPrice(primaryAsset.symbol);
+            else if (primaryAsset.market_type === 'Crypto') priceData = await fetchCryptoPrice(primaryAsset.symbol);
+            if (priceData?.price_time) setPriceTime(priceData.price_time);
+          } catch {}
+        })();
+      }
 
       const { data: transactionsData, error: transactionsError } = await supabase
         .from('transactions')
@@ -529,9 +552,9 @@ export default function AssetDetailScreen() {
               {formatCurrency(asset.converted_amount)}
             </Text>
           </View>
-          {priceUpdatedAt && (
+          {priceTime && (
             <Text style={{ color: '#64748b', fontSize: 11, textAlign: 'center', marginTop: 2 }}>
-              {`價格更新於 ${String(priceUpdatedAt.getHours()).padStart(2,'0')}:${String(priceUpdatedAt.getMinutes()).padStart(2,'0')}`}
+              {`報價時間 ${formatPriceTime(priceTime)}`}
             </Text>
           )}
           {asset.current_shares > 0 && (

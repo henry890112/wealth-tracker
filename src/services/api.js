@@ -58,6 +58,9 @@ export const fetchTWStockPrice = async (symbol) => {
         const currentPrice = parseFloat(item.z);
         if (isNaN(currentPrice) || currentPrice <= 0) continue;
         const prevClose = parseFloat(item.y);
+        const twTime = item.t && item.d
+          ? new Date(`${item.d.slice(0,4)}-${item.d.slice(4,6)}-${item.d.slice(6,8)}T${item.t}`).toISOString()
+          : new Date().toISOString();
         const priceData = {
           symbol,
           price: currentPrice,
@@ -66,14 +69,43 @@ export const fetchTWStockPrice = async (symbol) => {
             : 0,
           volume: parseFloat(item.v) * 1000 || 0,
           market_type: 'TW',
+          price_time: twTime,
         };
         await cachePrice(priceData);
         return priceData;
       } catch { continue; }
     }
 
-    // Layer 2: Yahoo Finance v8/chart（不需 cookie，盤後收盤價準確）
-    // 上市用 .TW，上櫃用 .TWO，query1 / query2 各試一次
+    // Layer 2: Yahoo Finance v7/quote（盤中即時報價，比 v8/chart 日線更準確）
+    // 上市用 .TW，上櫃用 .TWO
+    for (const suffix of ['.TW', '.TWO']) {
+      for (const host of ['query1', 'query2']) {
+        try {
+          const res = await fetch(
+            `https://${host}.finance.yahoo.com/v7/finance/quote?symbols=${symbol}${suffix}`,
+            { headers: { 'User-Agent': 'Mozilla/5.0' } }
+          );
+          if (!res.ok) continue;
+          const data = await res.json();
+          const quote = data?.quoteResponse?.result?.[0];
+          if (!quote?.regularMarketPrice) continue;
+          const priceData = {
+            symbol,
+            price: quote.regularMarketPrice,
+            change_percent: quote.regularMarketChangePercent ?? 0,
+            volume: quote.regularMarketVolume ?? 0,
+            market_type: 'TW',
+            price_time: quote.regularMarketTime
+              ? new Date(quote.regularMarketTime * 1000).toISOString()
+              : new Date().toISOString(),
+          };
+          await cachePrice(priceData);
+          return priceData;
+        } catch { continue; }
+      }
+    }
+
+    // Layer 2b: Yahoo Finance v8/chart（備援，有時 v7 被擋）
     for (const suffix of ['.TW', '.TWO']) {
       for (const host of ['query1', 'query2']) {
         try {
@@ -85,19 +117,20 @@ export const fetchTWStockPrice = async (symbol) => {
           const data = await res.json();
           const meta = data?.chart?.result?.[0]?.meta;
           if (!meta?.regularMarketPrice) continue;
-          // chartPreviousClose = range 第一根收盤，不是昨天收盤！
-          // 正確昨日收盤 = closes 陣列倒數第二個有效值
           const closes = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close ?? [];
           const validCloses = closes.filter(c => c != null && !isNaN(c));
           const prevClose = validCloses.length >= 2
-            ? validCloses[validCloses.length - 2]  // 昨日收盤
-            : meta.chartPreviousClose;              // 備援
+            ? validCloses[validCloses.length - 2]
+            : meta.chartPreviousClose;
           const priceData = {
             symbol,
             price: meta.regularMarketPrice,
             change_percent: calculateChangePercent(prevClose, meta.regularMarketPrice),
             volume: meta.regularMarketVolume ?? 0,
             market_type: 'TW',
+            price_time: meta.regularMarketTime
+              ? new Date(meta.regularMarketTime * 1000).toISOString()
+              : new Date().toISOString(),
           };
           await cachePrice(priceData);
           return priceData;
@@ -122,6 +155,7 @@ export const fetchTWStockPrice = async (symbol) => {
         change_percent: calculateChangePercent(prevClose, parseFloat(latest.close)),
         volume: parseFloat(latest.Trading_Volume),
         market_type: 'TW',
+        price_time: new Date(latest.date).toISOString(),
       };
       await cachePrice(priceData);
       return priceData;
@@ -159,6 +193,9 @@ export const fetchUSStockPrice = async (symbol) => {
             change_percent: quote.regularMarketChangePercent ?? 0,
             volume: quote.regularMarketVolume ?? 0,
             market_type: 'US',
+            price_time: quote.regularMarketTime
+              ? new Date(quote.regularMarketTime * 1000).toISOString()
+              : new Date().toISOString(),
           };
           await cachePrice(priceData);
           return priceData;
@@ -186,6 +223,9 @@ export const fetchUSStockPrice = async (symbol) => {
           : calculateChangePercent(usPrevClose, meta.regularMarketPrice ?? meta.previousClose),
         volume: meta.regularMarketVolume ?? 0,
         market_type: 'US',
+        price_time: meta.regularMarketTime
+          ? new Date(meta.regularMarketTime * 1000).toISOString()
+          : new Date().toISOString(),
       };
       await cachePrice(priceData);
       return priceData;
@@ -250,8 +290,11 @@ export const fetchCryptoPrice = async (symbol) => {
             symbol: upperSymbol,
             price: parseFloat(data.lastPrice),
             change_percent: parseFloat(data.priceChangePercent),
-            volume: parseFloat(data.quoteVolume) || 0, // volume in USDT
+            volume: parseFloat(data.quoteVolume) || 0,
             market_type: 'Crypto',
+            price_time: data.closeTime
+              ? new Date(parseInt(data.closeTime)).toISOString()
+              : new Date().toISOString(),
           };
           await cachePrice(priceData);
           return priceData;
@@ -276,6 +319,7 @@ export const fetchCryptoPrice = async (symbol) => {
         change_percent: data[coinId].usd_24h_change || 0,
         volume: data[coinId].usd_24h_vol || 0,
         market_type: 'Crypto',
+        price_time: new Date().toISOString(),
       };
       await cachePrice(priceData);
       return priceData;
@@ -286,6 +330,126 @@ export const fetchCryptoPrice = async (symbol) => {
     console.error('Error fetching crypto price:', error);
     throw error;
   }
+};
+
+/**
+ * Batch fetch US stock prices via Yahoo Finance v7 (single request).
+ * Returns a map: { [symbol]: priceData }
+ * Falls back to individual calls for any symbol not found in batch result.
+ */
+export const fetchUSStockPriceBatch = async (symbols) => {
+  if (!symbols || symbols.length === 0) return {};
+
+  // Check cache first; only fetch uncached symbols
+  const result = {};
+  const toFetch = [];
+  for (const sym of symbols) {
+    const cached = await getCachedPrice(sym, 'US');
+    if (cached) result[sym] = cached;
+    else toFetch.push(sym);
+  }
+  if (toFetch.length === 0) return result;
+
+  try {
+    const res = await fetch(
+      `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${toFetch.join(',')}`
+    );
+    if (res.ok) {
+      const data = await res.json();
+      const quotes = data?.quoteResponse?.result ?? [];
+      for (const quote of quotes) {
+        if (!quote?.regularMarketPrice) continue;
+        const priceData = {
+          symbol: quote.symbol,
+          price: quote.regularMarketPrice,
+          change_percent: quote.regularMarketChangePercent ?? 0,
+          volume: quote.regularMarketVolume ?? 0,
+          market_type: 'US',
+          price_time: quote.regularMarketTime
+            ? new Date(quote.regularMarketTime * 1000).toISOString()
+            : new Date().toISOString(),
+        };
+        result[quote.symbol] = priceData;
+        cachePrice(priceData);
+      }
+    }
+  } catch { /* fall through to individual fallback */ }
+
+  // Individual fallback for any symbols still missing
+  await Promise.allSettled(
+    toFetch
+      .filter(sym => !result[sym])
+      .map(async (sym) => {
+        try {
+          const priceData = await fetchUSStockPrice(sym);
+          if (priceData) result[sym] = priceData;
+        } catch {}
+      })
+  );
+
+  return result;
+};
+
+/**
+ * Batch fetch crypto prices via Binance (single request).
+ * Returns a map: { [symbol]: priceData }
+ */
+export const fetchCryptoPriceBatch = async (symbols) => {
+  if (!symbols || symbols.length === 0) return {};
+
+  const result = {};
+  const toFetch = [];
+  for (const sym of symbols) {
+    const upper = sym.toUpperCase();
+    if (STABLECOINS.has(upper)) {
+      result[upper] = { symbol: upper, price: 1, change_percent: 0, volume: 0, market_type: 'Crypto' };
+      continue;
+    }
+    const cached = await getCachedPrice(upper, 'Crypto');
+    if (cached) result[upper] = cached;
+    else toFetch.push(upper);
+  }
+  if (toFetch.length === 0) return result;
+
+  try {
+    const binanceSymbols = toFetch.map(s => `"${s}USDT"`).join(',');
+    const res = await fetch(`${BINANCE_BASE_URL}/ticker/24hr?symbols=[${binanceSymbols}]`);
+    if (res.ok) {
+      const tickers = await res.json();
+      if (Array.isArray(tickers)) {
+        for (const t of tickers) {
+          if (!t.lastPrice || t.code) continue;
+          const sym = t.symbol.replace('USDT', '');
+          const priceData = {
+            symbol: sym,
+            price: parseFloat(t.lastPrice),
+            change_percent: parseFloat(t.priceChangePercent),
+            volume: parseFloat(t.quoteVolume),
+            market_type: 'Crypto',
+            price_time: t.closeTime
+              ? new Date(parseInt(t.closeTime)).toISOString()
+              : new Date().toISOString(),
+          };
+          result[sym] = priceData;
+          cachePrice(priceData);
+        }
+      }
+    }
+  } catch { /* fall through to individual fallback */ }
+
+  // Individual fallback for missing symbols
+  await Promise.allSettled(
+    toFetch
+      .filter(sym => !result[sym])
+      .map(async (sym) => {
+        try {
+          const priceData = await fetchCryptoPrice(sym);
+          if (priceData) result[sym] = priceData;
+        } catch {}
+      })
+  );
+
+  return result;
 };
 
 /**
@@ -905,6 +1069,7 @@ const getCachedPrice = async (symbol, marketType) => {
         change_percent: parseFloat(data.change_percent),
         volume: parseFloat(data.volume),
         market_type: data.market_type,
+        price_time: data.updated_at,
       };
     }
     return null;
