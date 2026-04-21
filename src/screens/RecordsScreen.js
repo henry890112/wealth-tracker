@@ -10,7 +10,7 @@ import { useTheme } from '../lib/ThemeContext';
 
 const TYPE_CONFIG = {
   BUY:    { label: '買入', color: '#16a34a', bg: '#dcfce7' },
-  SELL:   { label: '賣出', color: '#ef4444', bg: '#fee2e2' },
+  SELL:   { label: '賣出', color: '#E07070', bg: '#fee2e2' },
   ADJUST: { label: '調整', color: '#2563eb', bg: '#dbeafe' },
 };
 

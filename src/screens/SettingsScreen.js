@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
   Platform,
 } from 'react-native';
-import { LogOut, Globe, RefreshCw, Sun, Moon, Smartphone, Download, Upload, CloudUpload } from 'lucide-react-native';
+import { LogOut, Globe, RefreshCw, Sun, Moon, Smartphone, Download, Upload, CloudUpload, Leaf } from 'lucide-react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
@@ -30,6 +30,7 @@ const THEME_OPTIONS = [
   { id: 'system', label: '跟隨系統', Icon: Smartphone },
   { id: 'light',  label: '淺色模式', Icon: Sun        },
   { id: 'dark',   label: '深色模式', Icon: Moon       },
+  { id: 'sage',   label: '鼠尾草',   Icon: Leaf       },
 ];
 
 
@@ -403,7 +404,7 @@ export default function SettingsScreen() {
             onPress={handleSignOut}
           >
             <View style={styles.optionContent}>
-              <LogOut size={20} color="#ef4444" />
+              <LogOut size={20} color="#E07070" />
               <Text style={[styles.optionText, styles.dangerText]}>登出</Text>
             </View>
           </TouchableOpacity>
@@ -496,7 +497,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   dangerText: {
-    color: '#ef4444',
+    color: '#E07070',
     fontWeight: '500',
   },
   footer: {

@@ -47,12 +47,34 @@ export const COLORS = {
     activePillBg: 'rgba(22,163,74,0.18)',
     activePillBorder: 'rgba(22,163,74,0.35)',
   },
+  sage: {
+    bg:           '#F2EFE9',
+    card:         '#FFFFFF',
+    cardAlt:      '#6B7C5C',
+    text:         '#2C2C2C',
+    textSub:      '#7A7A6E',
+    textMuted:    '#A89F94',
+    border:       '#E0D9CE',
+    borderLight:  '#EDE8E0',
+    input:        '#FFFFFFCC',
+    inputBorder:  '#E0D9CE',
+    header:       '#F2EFE9',
+    headerText:   '#2C2C2C',
+    hotBg:        '#F5F0E8',
+    hotBorder:    '#D9CEBE',
+    tabBg:        'rgba(242,239,233,0.55)',
+    tabBorder:    'rgba(255,255,255,0.7)',
+    blurTint:     'light',
+    activePillBg: 'rgba(90,122,74,0.10)',
+    activePillBorder: 'rgba(90,122,74,0.22)',
+  },
 };
 
 const ThemeContext = createContext({
   preference: 'system',
   setPreference: () => {},
   isDark: false,
+  theme: 'light',
   colors: COLORS.light,
 });
 
@@ -62,7 +84,7 @@ export function ThemeProvider({ children }) {
 
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY).then(val => {
-      if (val === 'light' || val === 'dark' || val === 'system') {
+      if (val === 'light' || val === 'dark' || val === 'system' || val === 'sage') {
         setPreferenceState(val);
       }
     });
@@ -74,10 +96,11 @@ export function ThemeProvider({ children }) {
   };
 
   const isDark = preference === 'dark' || (preference === 'system' && systemScheme === 'dark');
-  const colors = COLORS[isDark ? 'dark' : 'light'];
+  const theme = preference === 'sage' ? 'sage' : (isDark ? 'dark' : 'light');
+  const colors = COLORS[theme];
 
   return (
-    <ThemeContext.Provider value={{ preference, setPreference, isDark, colors }}>
+    <ThemeContext.Provider value={{ preference, setPreference, isDark, theme, colors }}>
       {children}
     </ThemeContext.Provider>
   );

@@ -952,7 +952,7 @@ const styles = StyleSheet.create({
   cardTitle: { fontSize: 16, fontWeight: '600' },
   changeBadge: { fontSize: 13, fontWeight: '600', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12 },
   pos: { color: PRIMARY, backgroundColor: '#dcfce7' },
-  neg: { color: '#ef4444', backgroundColor: '#fee2e2' },
+  neg: { color: '#E07070', backgroundColor: '#fee2e2' },
 
   // ── Liquid Glass ──
   glassContainer: {
@@ -1000,7 +1000,7 @@ const styles = StyleSheet.create({
   emptyText: { textAlign: 'center', lineHeight: 22, paddingVertical: 32 },
   changeDetail: { fontSize: 13, fontWeight: '500', marginTop: 12, textAlign: 'right' },
   posText: { color: PRIMARY },
-  negText: { color: '#ef4444' },
+  negText: { color: '#E07070' },
 
   backBtn: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
   backBtnText: { fontSize: 13, fontWeight: '500' },

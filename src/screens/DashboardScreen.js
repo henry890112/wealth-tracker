@@ -17,7 +17,7 @@ const CATEGORY_CONFIG = {
   investment: { label: '投資資產', Icon: TrendingUp,  color: '#f59e0b', bg: '#fef3c7', bgDark: '#78350f33' },
   fixed:      { label: '固定資產', Icon: Home,        color: '#94a3b8', bg: '#f1f5f9', bgDark: '#33415533' },
   receivable: { label: '應收款項', Icon: DollarSign,  color: '#0d9488', bg: '#ccfbf1', bgDark: '#13403c33' },
-  liability:  { label: '負債',     Icon: CreditCard,  color: '#ef4444', bg: '#fee2e2', bgDark: '#7f1d1d33' },
+  liability:  { label: '負債',     Icon: CreditCard,  color: '#E07070', bg: '#fee2e2', bgDark: '#7f1d1d33' },
 };
 
 const ASSET_CATEGORIES = ['liquid', 'investment', 'fixed', 'receivable'];
@@ -48,7 +48,7 @@ const formatPriceTime = (isoStr) => {
 export default function DashboardScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const { colors, isDark } = useTheme();
+  const { colors, isDark, theme } = useTheme();
   const iconBg = (cfg) => isDark ? cfg.bgDark : cfg.bg;
   const [assets, setAssets] = useState([]);
   const [profile, setProfile] = useState(null);
@@ -314,14 +314,14 @@ export default function DashboardScreen() {
         }
       >
         {/* Hero */}
-        <View style={[styles.hero, { backgroundColor: colors.card }]}>
+        <View style={[styles.hero, { backgroundColor: theme === 'sage' ? colors.cardAlt : colors.card }]}>
           <View style={styles.heroHeader}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <Text style={[styles.heroLabel, { color: colors.textMuted }]}>淨資產總覽（{currency}）</Text>
+              <Text style={[styles.heroLabel, { color: theme === 'sage' ? '#FFFFFF' : colors.textMuted }]}>淨資產總覽（{currency}）</Text>
               <TouchableOpacity onPress={() => setHidden(h => !h)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                 {hidden
-                  ? <EyeOff size={16} color={colors.textMuted} />
-                  : <Eye size={16} color={colors.textMuted} />
+                  ? <EyeOff size={16} color={theme === 'sage' ? '#FFFFFF' : colors.textMuted} />
+                  : <Eye size={16} color={theme === 'sage' ? '#FFFFFF' : colors.textMuted} />
                 }
               </TouchableOpacity>
             </View>
@@ -333,11 +333,13 @@ export default function DashboardScreen() {
               <Plus size={20} color="white" />
             </TouchableOpacity>
           </View>
-          <Text style={[styles.heroAmount, netWorth < 0 && { color: '#ef4444' }]}>
+          <Text style={[styles.heroAmount, netWorth < 0 ? { color: '#E07070' } : { color: theme === 'sage' ? '#FFFFFF' : PRIMARY }]}>
             {mask(netWorth)}
           </Text>
           {monthlyChange !== null && (
-            <Text style={[styles.heroChange, monthlyChange >= 0 ? styles.posText : styles.negText]}>
+            <Text style={[styles.heroChange, monthlyChange >= 0
+              ? (theme === 'sage' ? { color: '#FFFFFF' } : styles.posText)
+              : styles.negText]}>
               {monthlyChange >= 0 ? '▲' : '▼'} {hidden ? '****' : fmt(Math.abs(monthlyChange))} 本月
             </Text>
           )}
@@ -392,7 +394,7 @@ export default function DashboardScreen() {
                   <Text style={[styles.cardLabel, { color: colors.textMuted }]}>{cfg.label}</Text>
                   <Text style={[styles.cardCount, { color: colors.textMuted }]}>{d.count} 項</Text>
                 </View>
-                <Text style={[styles.cardAmount, { color: d.total > 0 ? '#ef4444' : colors.textMuted }]}>{mask(d.total)}</Text>
+                <Text style={[styles.cardAmount, { color: d.total > 0 ? '#E07070' : colors.textMuted }]}>{mask(d.total)}</Text>
               </TouchableOpacity>
             );
           })()}
@@ -449,7 +451,7 @@ export default function DashboardScreen() {
                     <Text style={[styles.assetAmount, { color: colors.text }]}>{mask(asset.converted_amount)}</Text>
                   </View>
                   {asset.pnl !== null && (
-                    <Text style={{ fontSize: 11, fontWeight: '600', color: asset.pnl >= 0 ? '#16a34a' : '#ef4444' }}>
+                    <Text style={{ fontSize: 11, fontWeight: '600', color: asset.pnl >= 0 ? '#16a34a' : '#E07070' }}>
                       {hidden ? '****' : asset.pnl_pct !== null
                         ? `${asset.pnl >= 0 ? '+' : ''}${fmt(asset.pnl)}  (${asset.pnl >= 0 ? '+' : ''}${asset.pnl_pct.toFixed(1)}%)`
                         : `${asset.pnl >= 0 ? '+' : ''}${fmt(asset.pnl)}`}
@@ -557,7 +559,7 @@ const styles = StyleSheet.create({
   heroAmount: { fontSize: 34, fontWeight: 'bold', color: PRIMARY, marginBottom: 6 },
   heroChange: { fontSize: 14, fontWeight: '500' },
   posText: { color: PRIMARY },
-  negText: { color: '#ef4444' },
+  negText: { color: '#E07070' },
 
   gridWrap: { marginHorizontal: 16, marginBottom: 4 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 10, marginBottom: 10 },

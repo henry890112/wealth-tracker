@@ -222,7 +222,7 @@ const FxSparkline = ({ sparkPoints, todayRate, prevRate }) => {
   const range = max - min || 0.001;
   const pad = 3;
   const isUp = pts[pts.length - 1] >= pts[0];
-  const color = isUp ? '#16a34a' : '#dc2626';
+  const color = isUp ? '#16a34a' : '#E07070';
   const polyPts = pts.map((p, i) => {
     const x = pad + (i / (pts.length - 1)) * (W - pad * 2);
     const y = H - pad - ((p - min) / range) * (H - pad * 2);
@@ -855,7 +855,7 @@ export default function SearchScreen() {
     const datasets = hasBuySell
       ? [
           mkDs(h => h.buy,           o => `rgba(22,163,74,${o})`),
-          mkDs(h => h.sell || h.buy, o => `rgba(220,38,38,${o})`),
+          mkDs(h => h.sell || h.buy, o => `rgba(224,112,112,${o})`),
         ]
       : [mkDs(h => h.buy, o => `rgba(22,163,74,${o})`)];
     return { labels, datasets, baseline, hasBuySell, minRate, maxRate };
@@ -1245,7 +1245,7 @@ export default function SearchScreen() {
                 <View style={[styles.fxDetailRateDivider, { backgroundColor: colors.border }]} />
                 <View style={styles.fxDetailRateItem}>
                   <Text style={[styles.fxDetailRateLabel, { color: colors.textMuted }]}>賣出匯率</Text>
-                  <Text style={[styles.fxDetailRateBig, { color: '#dc2626' }]}>
+                  <Text style={[styles.fxDetailRateBig, { color: '#E07070' }]}>
                     {fxDetailFx?.sellRate != null
                       ? (fxDetailFx.sellRate >= 10 ? fxDetailFx.sellRate.toFixed(3) : fxDetailFx.sellRate.toFixed(4))
                       : '—'}
@@ -1345,7 +1345,7 @@ export default function SearchScreen() {
                         <Text style={[styles.fxLegendText, { color: colors.textMuted }]}>買入</Text>
                       </View>
                       <View style={styles.fxLegendItem}>
-                        <View style={[styles.fxLegendDot, { backgroundColor: '#dc2626' }]} />
+                        <View style={[styles.fxLegendDot, { backgroundColor: '#E07070' }]} />
                         <Text style={[styles.fxLegendText, { color: colors.textMuted }]}>賣出</Text>
                       </View>
                     </View>
@@ -1561,7 +1561,7 @@ const styles = StyleSheet.create({
   priceText: { fontSize: 14, fontWeight: '600', marginBottom: 1 },
   changeText: { fontSize: 12, fontWeight: '600' },
   changeUp: { color: '#16a34a' },
-  changeDown: { color: '#dc2626' },
+  changeDown: { color: '#E07070' },
   chartBtn: { padding: 4 },
   starBtn: { padding: 4 },
   recentHeader: {
@@ -1592,12 +1592,12 @@ const styles = StyleSheet.create({
   label: { fontSize: 14, fontWeight: '600', marginBottom: 8 },
   categoryScroll: { marginBottom: 16 },
   categoryChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 16, marginRight: 8 },
-  categoryChipActive: { backgroundColor: '#2563eb' },
+  categoryChipActive: { backgroundColor: PRIMARY },
   categoryChipText: { fontSize: 14 },
   categoryChipTextActive: { color: 'white', fontWeight: '600' },
   input: { borderWidth: 1, borderRadius: 8, padding: 12, fontSize: 16, marginBottom: 16 },
-  totalText: { fontSize: 16, fontWeight: '600', color: '#2563eb', marginBottom: 16, textAlign: 'right' },
-  addButton: { flexDirection: 'row', backgroundColor: '#2563eb', padding: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center', gap: 8 },
+  totalText: { fontSize: 16, fontWeight: '600', color: PRIMARY, marginBottom: 16, textAlign: 'right' },
+  addButton: { flexDirection: 'row', backgroundColor: PRIMARY, padding: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center', gap: 8 },
   addButtonDisabled: { backgroundColor: '#94a3b8' },
   addButtonText: { color: 'white', fontSize: 16, fontWeight: '600' },
   chartModalContainer: { flex: 1 },
