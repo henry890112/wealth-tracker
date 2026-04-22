@@ -557,6 +557,11 @@ export default function AssetDetailScreen() {
               {`報價時間 ${formatPriceTime(priceTime)}`}
             </Text>
           )}
+          {asset.market_type === 'US' && (
+            <Text style={{ color: '#9ca3af', fontSize: 10, textAlign: 'center', marginTop: 1 }}>
+              （延遲 15 分鐘）
+            </Text>
+          )}
           {asset.current_shares > 0 && (
             <View style={styles.assetDetailRow}>
               <Text style={styles.assetDetailLabel}>持有股數</Text>
@@ -620,7 +625,7 @@ export default function AssetDetailScreen() {
             <Text style={styles.editButtonText}>編輯</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.deleteButton} onPress={handleDelete}>
-            <Trash2 size={18} color="#ef4444" />
+            <Trash2 size={18} color="#E07070" />
             <Text style={styles.deleteButtonText}>刪除</Text>
           </TouchableOpacity>
         </View>

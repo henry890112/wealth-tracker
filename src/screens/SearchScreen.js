@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import {
   View,
   Text,
@@ -31,6 +31,8 @@ import {
   fetchTWStockPrice,
   fetchUSStockPrice,
   fetchCryptoPrice,
+  fetchUSStockPriceBatch,
+  fetchCryptoPriceBatch,
 } from '../services/api';
 import { useTheme } from '../lib/ThemeContext';
 
@@ -244,6 +246,7 @@ const FxSparkline = ({ sparkPoints, todayRate, prevRate }) => {
 
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation();
   const { colors, isDark } = useTheme();
   const [query, setQuery] = useState('');
   const [activeTab, setActiveTab] = useState('all');
@@ -293,6 +296,27 @@ export default function SearchScreen() {
   const leverageInputRef = useRef(null);
 
   useFocusEffect(useCallback(() => { loadHotPrices(); loadFxRates(); loadWatchlist(); }, []));
+
+  useEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <TouchableOpacity
+          onPress={() => setModalVisible(true)}
+          style={{
+            width: 32, height: 32, borderRadius: 16,
+            backgroundColor: '#FFFFFF',
+            alignItems: 'center', justifyContent: 'center',
+            marginRight: 4,
+            shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 4, shadowOffset: { width: 0, height: 1 },
+            elevation: 3,
+          }}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Plus size={18} color={PRIMARY} />
+        </TouchableOpacity>
+      ),
+    });
+  }, [navigation]);
 
   useEffect(() => {
     if (chartAsset && chartAsset.market_type === 'TW' && !chartAsset.isIndex) {
@@ -577,19 +601,34 @@ export default function SearchScreen() {
     await saveWatchlistToStorage(updated);
   };
 
+  // Fix 4: group symbols by market type and use batch fetch functions so US and
+  //         Crypto each require only one HTTP request instead of one per symbol.
   const fetchWatchlistPrices = async (list) => {
     if (!list || list.length === 0) return;
     setWatchlistLoading(true);
     const prices = {};
-    await Promise.all(list.map(async (item) => {
-      try {
-        let priceData = null;
-        if (item.market_type === 'TW') priceData = await fetchTWStockPrice(item.symbol);
-        else if (item.market_type === 'US') priceData = await fetchUSStockPrice(item.symbol);
-        else if (item.market_type === 'Crypto') priceData = await fetchCryptoPrice(item.symbol);
-        if (priceData) prices[item.symbol] = priceData;
-      } catch {}
-    }));
+
+    const twItems     = list.filter(i => i.market_type === 'TW');
+    const usSymbols   = list.filter(i => i.market_type === 'US').map(i => i.symbol);
+    const cryptoSymbols = list.filter(i => i.market_type === 'Crypto').map(i => i.symbol);
+
+    // US and Crypto use batch endpoints (single request each)
+    const [usBatch, cryptoBatch] = await Promise.all([
+      fetchUSStockPriceBatch(usSymbols),
+      fetchCryptoPriceBatch(cryptoSymbols),
+    ]);
+    Object.assign(prices, usBatch, cryptoBatch);
+
+    // TW stocks: no batch endpoint available, fetch in parallel
+    await Promise.allSettled(
+      twItems.map(async (item) => {
+        try {
+          const priceData = await fetchTWStockPrice(item.symbol);
+          if (priceData) prices[item.symbol] = priceData;
+        } catch {}
+      })
+    );
+
     setWatchlistPrices(prices);
     setWatchlistLoading(false);
   };
@@ -800,6 +839,9 @@ export default function SearchScreen() {
               <Text style={[styles.changeText, isUp ? styles.changeUp : styles.changeDown]}>
                 {formatChange(changePct)}
               </Text>
+            )}
+            {asset.market_type === 'US' && (
+              <Text style={{ fontSize: 10, color: '#9ca3af', marginTop: 1, textAlign: 'right' }}>延遲15分</Text>
             )}
           </View>
           {!asset.isIndex && (
@@ -1106,10 +1148,10 @@ export default function SearchScreen() {
                   {CATEGORIES.map(cat => (
                     <TouchableOpacity
                       key={cat.id}
-                      style={[styles.categoryChip, { backgroundColor: colors.cardAlt }, category === cat.id && styles.categoryChipActive]}
+                      style={[styles.categoryChip, category === cat.id && styles.categoryChipActive]}
                       onPress={() => setCategory(cat.id)}
                     >
-                      <Text style={[styles.categoryChipText, { color: '#FFFFFF' }, category === cat.id && styles.categoryChipTextActive]}>
+                      <Text style={[styles.categoryChipText, category === cat.id && styles.categoryChipTextActive]}>
                         {cat.label}
                       </Text>
                     </TouchableOpacity>
@@ -1591,10 +1633,10 @@ const styles = StyleSheet.create({
   assetInfoName: { fontSize: 14 },
   label: { fontSize: 14, fontWeight: '600', marginBottom: 8 },
   categoryScroll: { marginBottom: 16 },
-  categoryChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 16, marginRight: 8 },
-  categoryChipActive: { backgroundColor: PRIMARY },
-  categoryChipText: { fontSize: 14 },
-  categoryChipTextActive: { color: 'white', fontWeight: '600' },
+  categoryChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 16, marginRight: 8, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#16a34a' },
+  categoryChipActive: { backgroundColor: '#16a34a', borderWidth: 1, borderColor: '#16a34a' },
+  categoryChipText: { fontSize: 14, color: '#16a34a' },
+  categoryChipTextActive: { color: '#FFFFFF', fontWeight: '600' },
   input: { borderWidth: 1, borderRadius: 8, padding: 12, fontSize: 16, marginBottom: 16 },
   totalText: { fontSize: 16, fontWeight: '600', color: PRIMARY, marginBottom: 16, textAlign: 'right' },
   addButton: { flexDirection: 'row', backgroundColor: PRIMARY, padding: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center', gap: 8 },
