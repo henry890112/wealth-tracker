@@ -16,10 +16,11 @@ import {
   TouchableWithoutFeedback,
   RefreshControl,
   Dimensions,
+  PanResponder,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Search as SearchIcon, Plus, X, Flame, LineChart as LineChartIcon, Clock, Calendar, Star } from 'lucide-react-native';
+import { Search as SearchIcon, Plus, X, Flame, LineChart as LineChartIcon, Clock, Calendar, Star, Bell, BellOff } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Svg, Polyline } from 'react-native-svg';
 import { LineChart } from 'react-native-chart-kit';
@@ -35,6 +36,7 @@ import {
   fetchCryptoPriceBatch,
 } from '../services/api';
 import { useTheme } from '../lib/ThemeContext';
+import { getAlerts, saveAlert, deleteAlert, resetAlert, checkAndFireAlerts, requestNotificationPermission, registerBackgroundPriceAlerts } from '../lib/priceAlerts';
 
 const MARKET_TABS = [
   { id: 'watchlist', label: '★ 自選' },
@@ -291,32 +293,55 @@ export default function SearchScreen() {
   const [watchlistPrices, setWatchlistPrices] = useState({});
   const [watchlistLoading, setWatchlistLoading] = useState(false);
   const [searchPriceLoading, setSearchPriceLoading] = useState(false);
+  const [alerts, setAlerts] = useState({});
+  const [alertModalVisible, setAlertModalVisible] = useState(false);
+  const [alertAsset, setAlertAsset] = useState(null);
+  const [alertPrice, setAlertPrice] = useState('');
+  const [alertDirection, setAlertDirection] = useState('above');
+  // FX chart tooltip state
+  const [fxTooltipIndex, setFxTooltipIndex] = useState(null);
+  const [fxTooltipX, setFxTooltipX] = useState(0);
   const debounceRef = useRef(null);
   const priceInputRef = useRef(null);
   const leverageInputRef = useRef(null);
+  // Ref so PanResponder callbacks (created once) can always read latest chart data
+  const fxChartDataRef = useRef(null);
+  const fxPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gs) => Math.abs(gs.dx) > 4,
+      onPanResponderGrant: (evt) => {
+        const data = fxChartDataRef.current;
+        if (!data) return;
+        const totalChartW = screenWidth - 64;
+        const yAxisW = 68;
+        const plotW = totalChartW - yAxisW;
+        const touchX = evt.nativeEvent.locationX;
+        const plotX = Math.max(0, Math.min(touchX - yAxisW, plotW));
+        const len = data.datasets[0].data.length;
+        const idx = Math.min(len - 1, Math.max(0, Math.round((plotX / plotW) * (len - 1))));
+        setFxTooltipIndex(idx);
+        setFxTooltipX(touchX);
+      },
+      onPanResponderMove: (evt) => {
+        const data = fxChartDataRef.current;
+        if (!data) return;
+        const totalChartW = screenWidth - 64;
+        const yAxisW = 68;
+        const plotW = totalChartW - yAxisW;
+        const touchX = evt.nativeEvent.locationX;
+        const plotX = Math.max(0, Math.min(touchX - yAxisW, plotW));
+        const len = data.datasets[0].data.length;
+        const idx = Math.min(len - 1, Math.max(0, Math.round((plotX / plotW) * (len - 1))));
+        setFxTooltipIndex(idx);
+        setFxTooltipX(touchX);
+      },
+      onPanResponderRelease: () => setFxTooltipIndex(null),
+      onPanResponderTerminate: () => setFxTooltipIndex(null),
+    })
+  ).current;
 
-  useFocusEffect(useCallback(() => { loadHotPrices(); loadFxRates(); loadWatchlist(); }, []));
-
-  useEffect(() => {
-    navigation.setOptions({
-      headerRight: () => (
-        <TouchableOpacity
-          onPress={() => setModalVisible(true)}
-          style={{
-            width: 32, height: 32, borderRadius: 16,
-            backgroundColor: '#FFFFFF',
-            alignItems: 'center', justifyContent: 'center',
-            marginRight: 4,
-            shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 4, shadowOffset: { width: 0, height: 1 },
-            elevation: 3,
-          }}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Plus size={18} color={PRIMARY} />
-        </TouchableOpacity>
-      ),
-    });
-  }, [navigation]);
+  useFocusEffect(useCallback(() => { loadHotPrices(); loadFxRates(); loadWatchlist(); loadAlerts(); }, []));
 
   useEffect(() => {
     if (chartAsset && chartAsset.market_type === 'TW' && !chartAsset.isIndex) {
@@ -432,6 +457,16 @@ export default function SearchScreen() {
             return { date: new Date(t * 1000).toISOString().split('T')[0], buy: rate, sell: rate };
           }).filter(Boolean);
           if (range) rows = rows.filter(h => h.date >= range.start && h.date <= range.end);
+          // Apply current buy/sell spread so both chart lines differ
+          const currentBuy = fxDetailFx?.buyRate;
+          const currentSell = fxDetailFx?.sellRate;
+          const spreadRatio = (currentBuy && currentSell && currentBuy > 0)
+            ? currentSell / currentBuy
+            : 1.0;
+          rows = rows.map(h => ({
+            ...h,
+            sell: parseFloat((h.buy * spreadRatio).toFixed(6)),
+          }));
           history = rows;
         }
       }
@@ -552,6 +587,11 @@ export default function SearchScreen() {
     });
   }, []);
 
+  // Register background price-alert task once on mount
+  useEffect(() => {
+    registerBackgroundPriceAlerts();
+  }, []);
+
   const saveRecentSearch = async (q) => {
     const trimmed = q.trim();
     if (!trimmed) return;
@@ -584,6 +624,11 @@ export default function SearchScreen() {
         if (activeTab === 'watchlist') fetchWatchlistPrices(list);
       }
     } catch {}
+  };
+
+  const loadAlerts = async () => {
+    const loaded = await getAlerts();
+    setAlerts(loaded);
   };
 
   const saveWatchlistToStorage = async (list) => {
@@ -631,6 +676,10 @@ export default function SearchScreen() {
 
     setWatchlistPrices(prices);
     setWatchlistLoading(false);
+    // Check price alerts with freshly fetched prices and refresh alert state
+    await checkAndFireAlerts(prices);
+    const refreshedAlerts = await getAlerts();
+    setAlerts(refreshedAlerts);
   };
 
   // Debounced search
@@ -716,6 +765,43 @@ export default function SearchScreen() {
   const handleShowChart = (asset) => {
     setChartAsset(asset);
     setChartVisible(true);
+  };
+
+  const openAlertModal = async (asset) => {
+    const granted = await requestNotificationPermission();
+    if (!granted) {
+      Alert.alert('需要通知權限', '請在設定中允許通知，以便接收價格提醒。');
+      return;
+    }
+    const existing = alerts[asset.symbol];
+    setAlertAsset(asset);
+    setAlertPrice(existing ? String(existing.targetPrice) : '');
+    setAlertDirection(existing?.direction ?? 'above');
+    setAlertModalVisible(true);
+  };
+
+  const handleSaveAlert = async () => {
+    const target = parseFloat(alertPrice);
+    if (!target || target <= 0) {
+      Alert.alert('請輸入有效的目標價格');
+      return;
+    }
+    await saveAlert({
+      symbol: alertAsset.symbol,
+      name: alertAsset.name,
+      targetPrice: target,
+      direction: alertDirection,
+    });
+    const refreshed = await getAlerts();
+    setAlerts(refreshed);
+    setAlertModalVisible(false);
+    Alert.alert('提醒已設定', `當 ${alertAsset.name} 價格${alertDirection === 'above' ? '高於' : '低於'} ${target} 時將通知您`);
+  };
+
+  const handleDeleteAlert = async (symbol) => {
+    await deleteAlert(symbol);
+    const refreshed = await getAlerts();
+    setAlerts(refreshed);
   };
 
   const handleAddAsset = async () => {
@@ -853,6 +939,44 @@ export default function SearchScreen() {
               <LineChartIcon size={18} color={colors.textSub} />
             </TouchableOpacity>
           )}
+          {activeTab === 'watchlist' && isInWatchlist(asset.symbol) && (() => {
+            const a = alerts[asset.symbol];
+            const hasAlert = !!a;
+            const isTriggered = a?.triggered;
+            return (
+              <TouchableOpacity
+                style={styles.bellBtn}
+                onPress={() => hasAlert && isTriggered
+                  ? Alert.alert(
+                      '提醒已觸發',
+                      `目標價 ${a.targetPrice} 已觸發。是否重新設定？`,
+                      [
+                        { text: '刪除', style: 'destructive', onPress: () => handleDeleteAlert(asset.symbol) },
+                        { text: '重新設定', onPress: () => openAlertModal(asset) },
+                        { text: '取消', style: 'cancel' },
+                      ]
+                    )
+                  : hasAlert
+                    ? Alert.alert(
+                        `提醒：${asset.name}`,
+                        `目標價：${a.targetPrice}（${a.direction === 'above' ? '高於' : '低於'}）`,
+                        [
+                          { text: '刪除提醒', style: 'destructive', onPress: () => handleDeleteAlert(asset.symbol) },
+                          { text: '修改', onPress: () => openAlertModal(asset) },
+                          { text: '取消', style: 'cancel' },
+                        ]
+                      )
+                    : openAlertModal(asset)
+                }
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                {hasAlert
+                  ? <Bell size={16} color={isTriggered ? '#9ca3af' : '#16a34a'} fill={isTriggered ? 'none' : '#dcfce7'} />
+                  : <Bell size={16} color={colors.textMuted} />
+                }
+              </TouchableOpacity>
+            );
+          })()}
           <TouchableOpacity
             style={styles.starBtn}
             onPress={() => toggleWatchlist(asset)}
@@ -872,7 +996,8 @@ export default function SearchScreen() {
 
   const fxChartData = useMemo(() => {
     if (!fxDetailHistory || fxDetailHistory.length < 2) return null;
-    const hasBuySell = fxDetailHistory.some(h => h.sell != null && h.sell !== h.buy);
+    const hasBuySell = fxDetailHistory.some(h => h.sell != null && h.sell !== h.buy)
+      || (fxDetailFx?.sellRate != null && fxDetailFx?.buyRate != null && fxDetailFx.sellRate !== fxDetailFx.buyRate);
     const allBuy  = fxDetailHistory.map(h => h.buy).filter(v => v != null && !isNaN(v));
     const allSell = fxDetailHistory.map(h => h.sell || h.buy).filter(v => v != null && !isNaN(v));
     const allRates = [...allBuy, ...allSell];
@@ -902,6 +1027,9 @@ export default function SearchScreen() {
       : [mkDs(h => h.buy, o => `rgba(22,163,74,${o})`)];
     return { labels, datasets, baseline, hasBuySell, minRate, maxRate };
   }, [fxDetailHistory]);
+
+  // Keep the PanResponder ref in sync with the latest chart data
+  useEffect(() => { fxChartDataRef.current = fxChartData; }, [fxChartData]);
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
@@ -1356,30 +1484,83 @@ export default function SearchScreen() {
                 </View>
               ) : fxChartData ? (
                 <>
-                  <LineChart
-                    data={{ labels: fxChartData.labels, datasets: fxChartData.datasets }}
-                    width={screenWidth - 64}
-                    height={180}
-                    yAxisWidth={68}
-                    formatYLabel={(val) => {
-                      const abs = parseFloat(val) + fxChartData.baseline;
-                      return abs >= 10 ? abs.toFixed(2) : abs.toFixed(4);
-                    }}
-                    chartConfig={{
-                      backgroundGradientFrom: colors.card,
-                      backgroundGradientTo: colors.card,
-                      decimalPlaces: 3,
-                      color: (opacity = 1) => `rgba(22, 163, 74, ${opacity})`,
-                      labelColor: (opacity = 1) => `rgba(148, 163, 184, ${opacity})`,
-                      fillShadowGradient: '#16a34a',
-                      fillShadowGradientOpacity: 0.08,
-                      propsForDots: { r: '2.5', strokeWidth: '1.5', stroke: '#16a34a' },
-                      propsForBackgroundLines: { stroke: colors.borderLight },
-                    }}
-                    withShadow
-                    bezier
-                    style={{ borderRadius: 8, marginLeft: -8, marginTop: 4 }}
-                  />
+                  {/* Chart wrapped in PanResponder view for swipe tooltip */}
+                  <View style={{ position: 'relative' }} {...fxPanResponder.panHandlers}>
+                    <LineChart
+                      data={{ labels: fxChartData.labels, datasets: fxChartData.datasets }}
+                      width={screenWidth - 64}
+                      height={180}
+                      yAxisWidth={68}
+                      getDotColor={(datasetIndex) =>
+                        fxChartData.hasBuySell && datasetIndex === 1 ? '#E07070' : '#16a34a'
+                      }
+                      formatYLabel={(val) => {
+                        const abs = parseFloat(val) + fxChartData.baseline;
+                        return abs >= 10 ? abs.toFixed(2) : abs.toFixed(4);
+                      }}
+                      chartConfig={{
+                        backgroundGradientFrom: colors.card,
+                        backgroundGradientTo: colors.card,
+                        decimalPlaces: 3,
+                        color: (opacity = 1) => `rgba(22, 163, 74, ${opacity})`,
+                        labelColor: (opacity = 1) => `rgba(148, 163, 184, ${opacity})`,
+                        fillShadowGradient: '#16a34a',
+                        fillShadowGradientOpacity: 0.08,
+                        propsForDots: { r: '2.5', strokeWidth: '1.5' },
+                        propsForBackgroundLines: { stroke: colors.borderLight },
+                      }}
+                      withShadow
+                      bezier
+                      style={{ borderRadius: 8, marginLeft: -8, marginTop: 4 }}
+                    />
+                    {/* Swipe tooltip */}
+                    {fxTooltipIndex !== null && fxDetailHistory[fxTooltipIndex] && (() => {
+                      const item = fxDetailHistory[fxTooltipIndex];
+                      const TOOLTIP_W = 132;
+                      const chartW = screenWidth - 64;
+                      const tooltipLeft = Math.min(
+                        Math.max(fxTooltipX - TOOLTIP_W / 2, 4),
+                        chartW - TOOLTIP_W - 4,
+                      );
+                      const d = new Date(item.date + 'T00:00:00');
+                      const dateLabel = `${d.getFullYear()}/${d.getMonth() + 1}/${String(d.getDate()).padStart(2, '0')}`;
+                      const fmtR = (r) => r == null ? '—' : r >= 10 ? r.toFixed(3) : r.toFixed(4);
+                      return (
+                        <View
+                          pointerEvents="none"
+                          style={{
+                            position: 'absolute',
+                            top: 14,
+                            left: tooltipLeft,
+                            width: TOOLTIP_W,
+                            backgroundColor: isDark ? 'rgba(28,28,40,0.96)' : 'rgba(255,255,255,0.97)',
+                            borderRadius: 8,
+                            paddingVertical: 6,
+                            paddingHorizontal: 10,
+                            borderWidth: 1,
+                            borderColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.09)',
+                            shadowColor: '#000',
+                            shadowOffset: { width: 0, height: 2 },
+                            shadowOpacity: 0.18,
+                            shadowRadius: 5,
+                            elevation: 6,
+                          }}
+                        >
+                          <Text style={{ color: colors.textMuted, fontSize: 11, marginBottom: 3 }}>
+                            {dateLabel}
+                          </Text>
+                          <Text style={{ color: '#16a34a', fontSize: 12, fontWeight: '600' }}>
+                            買入: {fmtR(item.buy)}
+                          </Text>
+                          {fxChartData.hasBuySell && item.sell != null && (
+                            <Text style={{ color: '#E07070', fontSize: 12, fontWeight: '600' }}>
+                              賣出: {fmtR(item.sell)}
+                            </Text>
+                          )}
+                        </View>
+                      );
+                    })()}
+                  </View>
                   {fxChartData.hasBuySell && (
                     <View style={styles.fxChartLegend}>
                       <View style={styles.fxLegendItem}>
@@ -1471,6 +1652,84 @@ export default function SearchScreen() {
           </Modal>
 
         </View>
+      </Modal>
+
+      {/* Price Alert Modal */}
+      <Modal visible={alertModalVisible} transparent animationType="slide" onRequestClose={() => setAlertModalVisible(false)}>
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
+              <View style={styles.modalHeader}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Bell size={20} color="#16a34a" />
+                  <Text style={[styles.modalTitle, { color: colors.text }]}>設定價格提醒</Text>
+                </View>
+                <TouchableOpacity onPress={() => setAlertModalVisible(false)}>
+                  <X size={24} color={colors.textSub} />
+                </TouchableOpacity>
+              </View>
+
+              {alertAsset && (
+                <View style={[styles.assetInfo, { backgroundColor: colors.input, marginBottom: 20 }]}>
+                  <Text style={[styles.assetInfoSymbol, { color: colors.text }]}>{alertAsset.symbol}</Text>
+                  <Text style={[styles.assetInfoName, { color: colors.textSub }]}>{alertAsset.name}</Text>
+                </View>
+              )}
+
+              {/* Re-enable button — shown when the alert has already triggered */}
+              {alertAsset && alerts[alertAsset.symbol]?.triggered && (
+                <TouchableOpacity
+                  style={[styles.addButton, { backgroundColor: '#f59e0b', marginBottom: 16 }]}
+                  onPress={async () => {
+                    await resetAlert(alertAsset.symbol);
+                    await loadAlerts();
+                  }}
+                >
+                  <Bell size={18} color="white" />
+                  <Text style={styles.addButtonText}>重新啟用警報</Text>
+                </TouchableOpacity>
+              )}
+
+              {/* Direction toggle */}
+              <Text style={[styles.label, { color: colors.text }]}>觸發條件</Text>
+              <View style={styles.alertDirectionRow}>
+                <TouchableOpacity
+                  style={[styles.alertDirectionBtn, alertDirection === 'above' && styles.alertDirectionBtnActive]}
+                  onPress={() => setAlertDirection('above')}
+                >
+                  <Text style={[styles.alertDirectionText, alertDirection === 'above' && styles.alertDirectionTextActive]}>
+                    高於 ↑
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.alertDirectionBtn, alertDirection === 'below' && styles.alertDirectionBtnActiveRed]}
+                  onPress={() => setAlertDirection('below')}
+                >
+                  <Text style={[styles.alertDirectionText, alertDirection === 'below' && styles.alertDirectionTextActive]}>
+                    低於 ↓
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Target price input */}
+              <Text style={[styles.label, { color: colors.text, marginTop: 4 }]}>目標價格</Text>
+              <TextInput
+                style={[styles.input, { backgroundColor: colors.input, borderColor: colors.inputBorder, color: colors.text }]}
+                placeholder="輸入目標價格"
+                placeholderTextColor={colors.textMuted}
+                value={alertPrice}
+                onChangeText={setAlertPrice}
+                keyboardType="decimal-pad"
+                autoFocus
+              />
+
+              <TouchableOpacity style={styles.addButton} onPress={handleSaveAlert}>
+                <Bell size={18} color="white" />
+                <Text style={styles.addButtonText}>儲存提醒</Text>
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        </TouchableWithoutFeedback>
       </Modal>
 
       {/* Chart Modal */}
@@ -1606,6 +1865,17 @@ const styles = StyleSheet.create({
   changeDown: { color: '#E07070' },
   chartBtn: { padding: 4 },
   starBtn: { padding: 4 },
+  bellBtn: { padding: 4 },
+  alertDirectionRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
+  alertDirectionBtn: {
+    flex: 1, paddingVertical: 10, borderRadius: 8,
+    borderWidth: 1, borderColor: '#d1d5db',
+    alignItems: 'center',
+  },
+  alertDirectionBtnActive: { backgroundColor: '#16a34a', borderColor: '#16a34a' },
+  alertDirectionBtnActiveRed: { backgroundColor: '#E07070', borderColor: '#E07070' },
+  alertDirectionText: { fontSize: 15, fontWeight: '600', color: '#6b7280' },
+  alertDirectionTextActive: { color: 'white' },
   recentHeader: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingHorizontal: 16, paddingVertical: 10,
