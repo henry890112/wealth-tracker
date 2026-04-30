@@ -1,23 +1,29 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
-  RefreshControl, ActivityIndicator,
+  RefreshControl, ActivityIndicator, useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Wallet, TrendingUp, Home, DollarSign, CreditCard, Plus, RefreshCw, Eye, EyeOff } from 'lucide-react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import Svg, { Circle, Polyline } from 'react-native-svg';
 import { supabase } from '../lib/supabase';
-import { convertToBaseCurrency, fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice, fetchUSStockPriceBatch, fetchCryptoPriceBatch } from '../services/api';
+import { convertToBaseCurrency, fetchExchangeRatesBatch, fetchTWStockPrice, fetchTWStockPriceBatch, fetchUSStockPriceBatch, fetchCryptoPriceBatch } from '../services/api';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../lib/ThemeContext';
 
-const PRIMARY = '#16a34a';
+const DASHBOARD_CACHE_KEY = '@wt_dashboard_cache';
+
+const PRIMARY = '#F7A600';
+const GREEN   = '#0DBD8B';
+const RED     = '#F03030';
 
 const CATEGORY_CONFIG = {
-  liquid:     { label: '流動資產', Icon: Wallet,      color: '#16a34a', bg: '#dcfce7', bgDark: '#14532d33' },
-  investment: { label: '投資資產', Icon: TrendingUp,  color: '#f59e0b', bg: '#fef3c7', bgDark: '#78350f33' },
+  liquid:     { label: '流動資產', Icon: Wallet,      color: '#0DBD8B', bg: '#dcfce7', bgDark: 'rgba(13,189,139,0.12)' },
+  investment: { label: '投資資產', Icon: TrendingUp,  color: '#F7A600', bg: '#fef3c7', bgDark: '#78350f33' },
   fixed:      { label: '固定資產', Icon: Home,        color: '#94a3b8', bg: '#f1f5f9', bgDark: '#33415533' },
   receivable: { label: '應收款項', Icon: DollarSign,  color: '#0d9488', bg: '#ccfbf1', bgDark: '#13403c33' },
-  liability:  { label: '負債',     Icon: CreditCard,  color: '#E07070', bg: '#fee2e2', bgDark: '#7f1d1d33' },
+  liability:  { label: '負債',     Icon: CreditCard,  color: '#F03030', bg: '#fee2e2', bgDark: 'rgba(240,48,48,0.12)' },
 };
 
 const ASSET_CATEGORIES = ['liquid', 'investment', 'fixed', 'receivable'];
@@ -29,65 +35,172 @@ const MARKET_TYPE_CONFIG = {
   other:  { label: '其他', color: '#94a3b8' },
 };
 
-const formatAmount = (amount) => {
-  return Math.round(amount).toLocaleString('zh-TW');
+const DONUT_COLORS = {
+  investment: '#F7A600',
+  liquid:     '#0DBD8B',
+  fixed:      '#6B7280',
+  receivable: '#94A3B8',
 };
 
-const formatPriceTime = (isoStr) => {
-  if (!isoStr) return null;
-  const d = new Date(isoStr);
-  if (isNaN(d.getTime())) return null;
-  const now = new Date();
-  const sameDay = d.getFullYear() === now.getFullYear()
-    && d.getMonth() === now.getMonth()
-    && d.getDate() === now.getDate();
-  const hms = `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
-  return sameDay ? hms : `${d.getMonth()+1}/${d.getDate()} ${hms}`;
+const formatAmount = (amount) => Math.round(amount).toLocaleString('zh-TW');
+
+// ─── Sparkline ───────────────────────────────────────────────────────────────
+const Sparkline = ({ data, width, height = 40, color = GREEN }) => {
+  const w = width || 100;
+  if (!data || data.length < 2) {
+    return (
+      <Svg width={w} height={height}>
+        <Polyline
+          points={`0,${height / 2} ${w},${height / 2}`}
+          fill="none"
+          stroke={color}
+          strokeWidth={1.5}
+          strokeOpacity={0.35}
+        />
+      </Svg>
+    );
+  }
+  const minVal = Math.min(...data);
+  const maxVal = Math.max(...data);
+  const range  = maxVal - minVal || 1;
+  const pad    = 4;
+  const pts    = data
+    .map((v, i) => {
+      const x = (i / (data.length - 1)) * w;
+      const y = pad + ((maxVal - v) / range) * (height - pad * 2);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(' ');
+  return (
+    <Svg width={w} height={height}>
+      <Polyline
+        points={pts}
+        fill="none"
+        stroke={color}
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
 };
 
+// ─── Donut Chart ─────────────────────────────────────────────────────────────
+const DonutChart = ({ data, size = 110, strokeWidth = 18, bgColor = '#2D3451' }) => {
+  const radius       = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const cx           = size / 2;
+  const cy           = size / 2;
+  const total        = data.reduce((s, d) => s + (d.value || 0), 0);
+
+  let cumPct = 0;
+  const segments = data
+    .map((seg) => {
+      const pct = total > 0 ? (seg.value / total) * 100 : 0;
+      if (pct <= 0.3) return null;
+      const dashVisible = (pct / 100) * circumference;
+      const dashGap     = circumference - dashVisible;
+      const rotation    = cumPct * 3.6 - 90;
+      cumPct += pct;
+      return { color: seg.color, dashVisible, dashGap, rotation };
+    })
+    .filter(Boolean);
+
+  return (
+    <Svg width={size} height={size}>
+      <Circle cx={cx} cy={cy} r={radius} stroke={bgColor} strokeWidth={strokeWidth} fill="none" />
+      {segments.map((seg, i) => (
+        <Circle
+          key={i}
+          cx={cx} cy={cy} r={radius}
+          stroke={seg.color}
+          strokeWidth={strokeWidth}
+          fill="none"
+          strokeDasharray={`${seg.dashVisible} ${seg.dashGap}`}
+          strokeDashoffset={0}
+          transform={`rotate(${seg.rotation} ${cx} ${cy})`}
+        />
+      ))}
+    </Svg>
+  );
+};
+
+// ─── Main Screen ─────────────────────────────────────────────────────────────
 export default function DashboardScreen() {
-  const navigation = useNavigation();
-  const insets = useSafeAreaInsets();
-  const { colors, isDark, theme } = useTheme();
-  const iconBg = (cfg) => isDark ? cfg.bgDark : cfg.bg;
-  const [assets, setAssets] = useState([]);
-  const [profile, setProfile] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [netWorth, setNetWorth] = useState(0);
-  const [monthlyChange, setMonthlyChange] = useState(null);
-  const [selectedCategory, setSelectedCategory] = useState(null);
-  const [lastUpdated, setLastUpdated] = useState(null);
-  const [hidden, setHidden] = useState(false);
-  const [sortOrder, setSortOrder] = useState('default'); // 'default' | 'desc' | 'asc'
+  const navigation          = useNavigation();
+  const insets              = useSafeAreaInsets();
+  const { colors, isDark }  = useTheme();
+  const { width: SW }       = useWindowDimensions();
 
-  const cycleSortOrder = () => {
-    setSortOrder(prev => prev === 'default' ? 'desc' : prev === 'desc' ? 'asc' : 'default');
+  const [assets,             setAssets]             = useState([]);
+  const [profile,            setProfile]            = useState(null);
+  const [loading,            setLoading]            = useState(true);
+  const [refreshing,         setRefreshing]         = useState(false);
+  const [netWorth,           setNetWorth]           = useState(0);
+  const [monthlyChange,      setMonthlyChange]      = useState(null);
+  const [selectedCategory,   setSelectedCategory]   = useState(null);
+  const [lastUpdated,        setLastUpdated]        = useState(null);
+  const [hidden,             setHidden]             = useState(false);
+  const [sortOrder,          setSortOrder]          = useState('default');
+  const [isRefreshing,       setIsRefreshing]       = useState(false);
+  const [categorySnapshots,  setCategorySnapshots]  = useState({});
+
+  const lastLoadedRef = useRef(0);
+
+  // ── theme tokens ─────────────────────────────────────────────────────────
+  const C = {
+    bg:       isDark ? '#0F1117'  : colors.bg,
+    card:     isDark ? '#1E2436'  : colors.card,
+    border:   isDark ? '#2D3451'  : '#E5E7EB',
+    text:     isDark ? '#FFFFFF'  : colors.text,
+    textSub:  isDark ? '#A0AEC0'  : colors.textSub  || '#6B7280',
+    textMuted:isDark ? '#6B7280'  : colors.textMuted || '#9CA3AF',
+    donutBg:  isDark ? '#2D3451'  : '#E5E7EB',
   };
 
-  // Merge assets with the same symbol (investments) or name (others) within the same category
+  const cardWidth = (SW - 16 * 2 - 10) / 2;
+
+  // ── cache load ───────────────────────────────────────────────────────────
+  useEffect(() => {
+    (async () => {
+      try {
+        const cached = await AsyncStorage.getItem(DASHBOARD_CACHE_KEY);
+        if (cached) {
+          const { assets: ca, netWorth: cnw } = JSON.parse(cached);
+          setAssets(ca);
+          setNetWorth(cnw);
+          setLoading(false);
+          setIsRefreshing(true);
+        }
+      } catch (e) {
+        console.log('dashboard cache read error:', e);
+      }
+    })();
+  }, []);
+
+  const cycleSortOrder = () =>
+    setSortOrder(prev => prev === 'default' ? 'desc' : prev === 'desc' ? 'asc' : 'default');
+
+  // ── derived data ─────────────────────────────────────────────────────────
   const mergedAssets = useMemo(() => {
     const map = new Map();
     for (const asset of assets) {
       const key = asset.category === 'investment' && asset.symbol
         ? `inv:${asset.symbol}:${asset.market_type || ''}:${asset.currency || ''}:${asset.category}`
         : `${asset.category}:${asset.name}:${asset.currency || ''}`;
-
       if (!map.has(key)) {
         map.set(key, { ...asset, _allIds: [asset.id] });
       } else {
-        const existing = map.get(key);
-        existing._allIds.push(asset.id);
-        existing.converted_amount += asset.converted_amount;
-        existing.current_shares = (existing.current_shares || 0) + (asset.current_shares || 0);
-        if (existing.pnl !== null && asset.pnl !== null) {
-          existing.pnl += asset.pnl;
-          existing.converted_cost = (existing.converted_cost || 0) + (asset.converted_cost || 0);
-          existing.pnl_pct = existing.converted_cost > 0 ? (existing.pnl / existing.converted_cost) * 100 : null;
+        const ex = map.get(key);
+        ex._allIds.push(asset.id);
+        ex.converted_amount += asset.converted_amount;
+        ex.current_shares = (ex.current_shares || 0) + (asset.current_shares || 0);
+        if (ex.pnl !== null && asset.pnl !== null) {
+          ex.pnl += asset.pnl;
+          ex.converted_cost = (ex.converted_cost || 0) + (asset.converted_cost || 0);
+          ex.pnl_pct = ex.converted_cost > 0 ? (ex.pnl / ex.converted_cost) * 100 : null;
         } else if (asset.pnl !== null) {
-          existing.pnl = asset.pnl;
-          existing.converted_cost = asset.converted_cost;
-          existing.pnl_pct = asset.pnl_pct;
+          ex.pnl = asset.pnl; ex.converted_cost = asset.converted_cost; ex.pnl_pct = asset.pnl_pct;
         }
       }
     }
@@ -97,88 +210,97 @@ export default function DashboardScreen() {
   const categoryTotals = useMemo(() => {
     const totals = {};
     for (const cat of [...ASSET_CATEGORIES, 'liability']) {
-      const catAssets = mergedAssets.filter(a => a.category === cat);
-      totals[cat] = {
-        total: catAssets.reduce((sum, a) => sum + a.converted_amount, 0),
-        count: catAssets.length,
-      };
+      const list = mergedAssets.filter(a => a.category === cat);
+      totals[cat] = { total: list.reduce((s, a) => s + a.converted_amount, 0), count: list.length };
     }
     return totals;
   }, [mergedAssets]);
 
-  const filteredAssets = useMemo(() => {
-    if (!selectedCategory) return mergedAssets;
-    return mergedAssets.filter(a => a.category === selectedCategory);
-  }, [mergedAssets, selectedCategory]);
+  const filteredAssets = useMemo(() =>
+    selectedCategory ? mergedAssets.filter(a => a.category === selectedCategory) : mergedAssets,
+  [mergedAssets, selectedCategory]);
 
   const sortedFilteredAssets = useMemo(() => {
     if (sortOrder === 'default') return filteredAssets;
     return [...filteredAssets].sort((a, b) =>
-      sortOrder === 'desc'
-        ? b.converted_amount - a.converted_amount
-        : a.converted_amount - b.converted_amount
+      sortOrder === 'desc' ? b.converted_amount - a.converted_amount : a.converted_amount - b.converted_amount
     );
   }, [filteredAssets, sortOrder]);
 
-  useFocusEffect(useCallback(() => { loadData(); }, []));
+  const donutData = useMemo(() => [
+    { label: '投資資產', value: categoryTotals.investment?.total || 0, color: DONUT_COLORS.investment },
+    { label: '流動資產', value: categoryTotals.liquid?.total     || 0, color: DONUT_COLORS.liquid },
+    { label: '固定資產', value: categoryTotals.fixed?.total      || 0, color: DONUT_COLORS.fixed },
+    { label: '其他資產', value: categoryTotals.receivable?.total || 0, color: DONUT_COLORS.receivable },
+  ], [categoryTotals]);
 
-  const refreshLivePrices = async (assetsData, baseCurrency) => {
-    const investmentAssets = (assetsData || []).filter(
-      a => a.symbol && a.category === 'investment' && a.current_shares > 0
-    );
-    if (investmentAssets.length === 0) return;
+  const totalAssets = useMemo(() =>
+    ASSET_CATEGORIES.reduce((s, cat) => s + (categoryTotals[cat]?.total || 0), 0),
+  [categoryTotals]);
 
-    // Group by market type for batch fetching
-    const twAssets     = investmentAssets.filter(a => a.market_type === 'TW');
-    const usAssets     = investmentAssets.filter(a => a.market_type === 'US');
-    const cryptoAssets = investmentAssets.filter(a => a.market_type === 'Crypto');
+  const monthlyChangePct = useMemo(() => {
+    if (monthlyChange === null || netWorth === 0) return null;
+    const prev = netWorth - monthlyChange;
+    return prev === 0 ? null : (monthlyChange / Math.abs(prev)) * 100;
+  }, [monthlyChange, netWorth]);
 
-    // Fetch US and Crypto in batch (single request each), TW in parallel individual calls
-    const [usPrices, cryptoPrices] = await Promise.all([
-      fetchUSStockPriceBatch(usAssets.map(a => a.symbol)),
-      fetchCryptoPriceBatch(cryptoAssets.map(a => a.symbol)),
+  const unrealizedPnl = useMemo(() => {
+    const invAssets = mergedAssets.filter(a => a.pnl !== null);
+    const gain = invAssets.filter(a => a.pnl > 0).reduce((s, a) => s + a.pnl, 0);
+    const loss = invAssets.filter(a => a.pnl < 0).reduce((s, a) => s + Math.abs(a.pnl), 0);
+    return { gain, loss, net: gain - loss };
+  }, [mergedAssets]);
+
+  const liquidSparkline     = categorySnapshots['liquid'] || [];
+  const investmentSparkline = useMemo(() => {
+    const tw     = categorySnapshots['TW']     || [];
+    const us     = categorySnapshots['US']     || [];
+    const crypto = categorySnapshots['Crypto'] || [];
+    const maxLen = Math.max(tw.length, us.length, crypto.length);
+    if (maxLen === 0) return [];
+    return Array.from({ length: maxLen }, (_, i) => (tw[i] || 0) + (us[i] || 0) + (crypto[i] || 0));
+  }, [categorySnapshots]);
+
+  // ── focus effect ─────────────────────────────────────────────────────────
+  useFocusEffect(useCallback(() => {
+    if (Date.now() - lastLoadedRef.current < 60000) return;
+    loadData();
+  }, []));
+
+  // ── live prices ──────────────────────────────────────────────────────────
+  const refreshLivePrices = async (assetsData, baseCurrency, ratesMap = null) => {
+    const inv = (assetsData || []).filter(a => a.symbol && a.category === 'investment' && a.current_shares > 0);
+    if (inv.length === 0) return;
+    const twA = inv.filter(a => a.market_type === 'TW');
+    const usA = inv.filter(a => a.market_type === 'US');
+    const crA = inv.filter(a => a.market_type === 'Crypto');
+    const [usPrices, crPrices, twPrices] = await Promise.all([
+      fetchUSStockPriceBatch(usA.map(a => a.symbol)),
+      fetchCryptoPriceBatch(crA.map(a => a.symbol)),
+      fetchTWStockPriceBatch(twA.map(a => a.symbol)),
     ]);
-
-    const twPriceResults = await Promise.allSettled(
-      twAssets.map(a => fetchTWStockPrice(a.symbol))
-    );
-    const twPrices = Object.fromEntries(
-      twAssets.map((a, i) => [a.symbol, twPriceResults[i].status === 'fulfilled' ? twPriceResults[i].value : null])
-    );
-
-    const priceMap = { ...usPrices, ...cryptoPrices, ...twPrices };
+    const priceMap  = { ...usPrices, ...crPrices, ...twPrices };
 
     const updates = await Promise.allSettled(
-      investmentAssets.map(async (asset) => {
-        const priceData = priceMap[asset.symbol];
-        if (!priceData?.price) return null;
-
+      inv.map(async (asset) => {
+        const pd = priceMap[asset.symbol];
+        if (!pd?.price) return null;
         const lev = asset.leverage || 1;
-        const borrowed = asset.current_shares * (asset.average_cost || 0) * (lev - 1) / lev;
-        const newAmount = priceData.price * asset.current_shares - borrowed;
-
-        await supabase.from('assets')
-          .update({ current_amount: newAmount, updated_at: new Date().toISOString() })
-          .eq('id', asset.id);
-
-        const convertedAmount = await convertToBaseCurrency(newAmount, asset.currency, baseCurrency);
-        const costBasis = asset.current_shares * (asset.average_cost || 0) / lev;
-        const convertedCost = await convertToBaseCurrency(costBasis, asset.currency, baseCurrency);
-        const pnl = convertedAmount - convertedCost;
-        const pnl_pct = convertedCost > 0 ? (pnl / convertedCost) * 100 : 0;
-        return { id: asset.id, current_amount: newAmount, converted_amount: convertedAmount, pnl, pnl_pct, converted_cost: convertedCost, price_time: priceData.price_time || null };
+        const borrowed   = asset.current_shares * (asset.average_cost || 0) * (lev - 1) / lev;
+        const newAmount  = pd.price * asset.current_shares - borrowed;
+        await supabase.from('assets').update({ current_amount: newAmount, updated_at: new Date().toISOString() }).eq('id', asset.id);
+        const ca   = await convertToBaseCurrency(newAmount, asset.currency, baseCurrency, ratesMap);
+        const cost = asset.current_shares * (asset.average_cost || 0) / lev;
+        const cc   = await convertToBaseCurrency(cost, asset.currency, baseCurrency, ratesMap);
+        const pnl  = ca - cc;
+        return { id: asset.id, current_amount: newAmount, converted_amount: ca, pnl, pnl_pct: cc > 0 ? (pnl / cc) * 100 : 0, converted_cost: cc, price_time: pd.price_time || null };
       })
     );
-
-    const changed = updates
-      .filter(r => r.status === 'fulfilled' && r.value)
-      .map(r => r.value);
-
+    const changed = updates.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
     if (changed.length === 0) return;
-
     const map = Object.fromEntries(changed.map(c => [c.id, c]));
     setAssets(prev => {
-      const next = prev.map(a => map[a.id] ? { ...a, ...map[a.id] } : a);
+      const next  = prev.map(a => map[a.id] ? { ...a, ...map[a.id] } : a);
       const total = next.filter(a => a.category !== 'liability').reduce((s, a) => s + a.converted_amount, 0);
       const liab  = next.filter(a => a.category === 'liability').reduce((s, a) => s + a.converted_amount, 0);
       setNetWorth(total - liab);
@@ -186,142 +308,142 @@ export default function DashboardScreen() {
     });
   };
 
+  // ── load data ────────────────────────────────────────────────────────────
   const loadData = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const { data: profileData } = await supabase
-        .from('profiles').select('*').eq('id', user.id).single();
+      const { data: profileData } = await supabase.from('profiles').select('*').eq('id', user.id).single();
       setProfile(profileData);
 
       const { data: assetsData, error } = await supabase
-        .from('assets').select('*').eq('user_id', user.id)
-        .order('category', { ascending: true });
+        .from('assets').select('*').eq('user_id', user.id).order('category', { ascending: true });
       if (error) throw error;
 
-      const baseCurrency = profileData?.base_currency || 'TWD';
+      const baseCurrency     = profileData?.base_currency || 'TWD';
+      const uniqueCurrencies = [...new Set(assetsData.map(a => a.currency).filter(Boolean))];
+      const ratesMap         = await fetchExchangeRatesBatch(uniqueCurrencies, baseCurrency);
+
       const converted = await Promise.all(
         assetsData.map(async (asset) => {
-          const convertedAmount = await convertToBaseCurrency(
-            parseFloat(asset.current_amount), asset.currency, baseCurrency
-          );
-          let pnl = null;
-          let pnl_pct = null;
-          let converted_cost = null;
+          const ca = await convertToBaseCurrency(parseFloat(asset.current_amount), asset.currency, baseCurrency, ratesMap);
+          let pnl = null, pnl_pct = null, converted_cost = null;
           if (asset.category === 'investment' && asset.current_shares > 0 && asset.average_cost > 0) {
             const lev = asset.leverage || 1;
             const costBasis = asset.current_shares * asset.average_cost / lev;
-            converted_cost = await convertToBaseCurrency(costBasis, asset.currency, baseCurrency);
-            pnl = convertedAmount - converted_cost;
+            converted_cost  = await convertToBaseCurrency(costBasis, asset.currency, baseCurrency, ratesMap);
+            pnl     = ca - converted_cost;
             pnl_pct = converted_cost > 0 ? (pnl / converted_cost) * 100 : 0;
           }
-          return { ...asset, converted_amount: convertedAmount, pnl, pnl_pct, converted_cost };
+          return { ...asset, converted_amount: ca, pnl, pnl_pct, converted_cost };
         })
       );
       setAssets(converted);
+      refreshLivePrices(assetsData, baseCurrency, ratesMap);
 
-      // Background: fetch live prices for investment assets with symbols
-      refreshLivePrices(assetsData, profileData?.base_currency || 'TWD');
-
-      const assetsTotal = converted
-        .filter(a => a.category !== 'liability')
-        .reduce((sum, a) => sum + a.converted_amount, 0);
-      const liabTotal = converted
-        .filter(a => a.category === 'liability')
-        .reduce((sum, a) => sum + a.converted_amount, 0);
+      const assetsTotal    = converted.filter(a => a.category !== 'liability').reduce((s, a) => s + a.converted_amount, 0);
+      const liabTotal      = converted.filter(a => a.category === 'liability').reduce((s, a) => s + a.converted_amount, 0);
       const currentNetWorth = assetsTotal - liabTotal;
       setNetWorth(currentNetWorth);
       setLastUpdated(new Date());
 
-      // Monthly change: compare to first snapshot of this month
-      const startOfMonth = new Date();
-      startOfMonth.setDate(1);
+      try {
+        await AsyncStorage.setItem(DASHBOARD_CACHE_KEY, JSON.stringify({ assets: converted, netWorth: currentNetWorth, lastUpdated: Date.now() }));
+      } catch (e) { console.log('dashboard cache write error:', e); }
+
+      // Monthly change
+      const startOfMonth = new Date(); startOfMonth.setDate(1);
       const { data: monthSnap } = await supabase
         .from('daily_snapshots').select('net_worth_base')
         .eq('user_id', user.id)
         .gte('snapshot_date', startOfMonth.toISOString().split('T')[0])
-        .order('snapshot_date', { ascending: true })
-        .limit(1)
-        .maybeSingle();
-      if (monthSnap) {
-        setMonthlyChange(currentNetWorth - parseFloat(monthSnap.net_worth_base));
-      }
+        .order('snapshot_date', { ascending: true }).limit(1).maybeSingle();
+      if (monthSnap) setMonthlyChange(currentNetWorth - parseFloat(monthSnap.net_worth_base));
 
       await supabase.rpc('create_daily_snapshot', { p_user_id: user.id });
 
-      // 同步存分類快照
+      // Category snapshots write
       try {
         const today = new Date().toISOString().split('T')[0];
-        const getCategoryKey = (a) => {
-          const mt = a.market_type || '';
-          const cat = a.category || '';
-          if (mt === 'TW' || cat === '台股') return 'TW';
-          if (mt === 'US' || cat === '美股') return 'US';
-          if (mt === 'Crypto' || cat === '虛幣') return 'Crypto';
-          if (cat === '外幣' || mt === 'liquid') return 'liquid';
+        const getCatKey = (a) => {
+          if (a.market_type === 'TW')     return 'TW';
+          if (a.market_type === 'US')     return 'US';
+          if (a.market_type === 'Crypto') return 'Crypto';
+          if (a.category === 'liquid')    return 'liquid';
+          if (a.category === 'fixed')     return 'fixed';
+          if (a.category === 'receivable') return 'receivable';
           return 'other';
         };
         const totals = {};
-        (converted || []).forEach(a => {
-          const key = getCategoryKey(a);
-          totals[key] = (totals[key] || 0) + Number(a.converted_amount || 0);
-        });
-        const rows = Object.entries(totals).map(([category, value]) => ({
-          user_id: user.id,
-          date: today,
-          category,
-          value,
-        }));
-        if (rows.length > 0) {
-          await supabase.from('category_snapshots').upsert(rows, { onConflict: 'user_id,date,category' });
+        converted.forEach(a => { const k = getCatKey(a); totals[k] = (totals[k] || 0) + Number(a.converted_amount || 0); });
+        const rows = Object.entries(totals).map(([category, value]) => ({ user_id: user.id, date: today, category, value }));
+        if (rows.length > 0) await supabase.from('category_snapshots').upsert(rows, { onConflict: 'user_id,date,category' });
+      } catch (e) { console.log('category snapshot write error:', e); }
+
+      // Category snapshots read (sparklines)
+      try {
+        const ago = new Date(); ago.setDate(ago.getDate() - 30);
+        const { data: snapData } = await supabase
+          .from('category_snapshots').select('date, category, value')
+          .eq('user_id', user.id).gte('date', ago.toISOString().split('T')[0])
+          .order('date', { ascending: true });
+        if (snapData) {
+          const grouped = {};
+          snapData.forEach(r => { if (!grouped[r.category]) grouped[r.category] = []; grouped[r.category].push(Number(r.value)); });
+          setCategorySnapshots(grouped);
         }
-      } catch (e) {
-        console.log('category snapshot error:', e);
-      }
+      } catch (e) { console.log('category snapshots read error:', e); }
+
+      lastLoadedRef.current = Date.now();
     } catch (error) {
       console.error('Error loading data:', error);
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setIsRefreshing(false);
     }
   };
 
-  const onRefresh = useCallback(() => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    loadData();
+    if (lastLoadedRef?.current) lastLoadedRef.current = 0;
+    await loadData();
+    setRefreshing(false);
   }, []);
 
   const currency = profile?.base_currency || 'TWD';
-  const fmt = (v) => formatAmount(v);
+  const fmt  = (v) => formatAmount(v);
   const mask = (v) => hidden ? '****' : fmt(v);
 
   if (loading) {
     return (
-      <View style={[styles.loading, { paddingTop: insets.top, backgroundColor: colors.bg }]}>
+      <View style={[styles.loading, { paddingTop: insets.top, backgroundColor: C.bg }]}>
         <ActivityIndicator size="large" color={PRIMARY} />
       </View>
     );
   }
 
+  // ── render ───────────────────────────────────────────────────────────────
   return (
-    <View style={{ flex: 1, backgroundColor: colors.bg }}>
+    <View style={{ flex: 1, backgroundColor: C.bg }}>
       <ScrollView
         style={styles.container}
         contentContainerStyle={{ paddingTop: insets.top + 8, paddingBottom: 160 }}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={PRIMARY} />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={GREEN} colors={[GREEN]} />
         }
       >
-        {/* Hero */}
-        <View style={[styles.hero, { backgroundColor: theme === 'sage' ? colors.cardAlt : colors.card }]}>
+
+        {/* ── HERO ──────────────────────────────────────────────────────── */}
+        <View style={[styles.hero]}>
           <View style={styles.heroHeader}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <Text style={[styles.heroLabel, { color: theme === 'sage' ? '#FFFFFF' : colors.textMuted }]}>淨資產總覽（{currency}）</Text>
+              <Text style={[styles.heroLabel, { color: C.textSub }]}>淨資產總覽（{currency}）</Text>
               <TouchableOpacity onPress={() => setHidden(h => !h)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                 {hidden
-                  ? <EyeOff size={16} color={theme === 'sage' ? '#FFFFFF' : colors.textMuted} />
-                  : <Eye size={16} color={theme === 'sage' ? '#FFFFFF' : colors.textMuted} />
+                  ? <EyeOff size={16} color={C.textSub} />
+                  : <Eye    size={16} color={C.textSub} />
                 }
               </TouchableOpacity>
             </View>
@@ -330,135 +452,288 @@ export default function DashboardScreen() {
               onPress={() => navigation.navigate('AddAsset')}
               activeOpacity={0.85}
             >
-              <Plus size={20} color="white" />
+              <Plus size={20} color={PRIMARY} />
             </TouchableOpacity>
           </View>
-          <Text style={[styles.heroAmount, netWorth < 0 ? { color: '#E07070' } : { color: theme === 'sage' ? '#FFFFFF' : PRIMARY }]}>
+
+          <Text style={[styles.heroAmount, { color: netWorth < 0 ? RED : C.text }]}>
             {mask(netWorth)}
           </Text>
+
           {monthlyChange !== null && (
-            <Text style={[styles.heroChange, monthlyChange >= 0
-              ? (theme === 'sage' ? { color: '#FFFFFF' } : styles.posText)
-              : styles.negText]}>
-              {monthlyChange >= 0 ? '▲' : '▼'} {hidden ? '****' : fmt(Math.abs(monthlyChange))} 本月
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 }}>
+              <Text style={[styles.heroChange, { color: monthlyChange >= 0 ? GREEN : RED }]}>
+                {monthlyChange >= 0 ? '▲' : '▼'}{' '}
+                {hidden ? '****' : fmt(Math.abs(monthlyChange))}
+                {monthlyChangePct !== null
+                  ? ` (${monthlyChange >= 0 ? '' : '-'}${Math.abs(monthlyChangePct).toFixed(2)}%)`
+                  : ''}
+              </Text>
+              <Text style={[styles.heroChangeSub, { color: C.textMuted }]}>本月</Text>
+            </View>
           )}
         </View>
 
-        {/* Category cards 2x2 */}
-        <View style={styles.gridWrap}>
-          <View style={styles.grid}>
-            {ASSET_CATEGORIES.map(cat => {
-              const cfg = CATEGORY_CONFIG[cat];
-              const Icon = cfg.Icon;
-              const d = categoryTotals[cat] || { total: 0, count: 0 };
-              const sel = selectedCategory === cat;
-              return (
-                <TouchableOpacity
-                  key={cat}
-                  style={[styles.card, { backgroundColor: colors.card }, sel && styles.cardSel]}
-                  onPress={() => setSelectedCategory(sel ? null : cat)}
-                  activeOpacity={0.75}
-                >
-                  {/* Icon + count on same row */}
-                  <View style={styles.cardTopRow}>
-                    <View style={[styles.iconCircle, { backgroundColor: iconBg(cfg) }]}>
-                      <Icon size={20} color={cfg.color} />
-                    </View>
-                    <Text style={[styles.cardCount, { color: colors.textMuted }]}>{d.count} 項</Text>
-                  </View>
-                  <Text style={[styles.cardLabel, { color: colors.textMuted }]}>{cfg.label}</Text>
-                  <Text style={[styles.cardAmount, { color: colors.text }]} numberOfLines={1}>{mask(d.total)}</Text>
-                </TouchableOpacity>
-              );
-            })}
+        {/* ── ALLOCATION CARD ───────────────────────────────────────────── */}
+        <View style={[styles.sectionCard, { backgroundColor: C.card, marginHorizontal: 16, marginBottom: 12 }]}>
+          <Text style={[styles.sectionTitle, { color: C.text }]}>資產配置</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <View style={{ marginRight: 20 }}>
+              <DonutChart data={donutData} size={112} strokeWidth={20} bgColor={C.donutBg} />
+            </View>
+            <View style={{ flex: 1, gap: 10 }}>
+              {donutData.map((item) => {
+                const pct      = totalAssets > 0 ? (item.value / totalAssets * 100).toFixed(1) : '0.0';
+                const catKey   = Object.keys(CATEGORY_CONFIG).find(k => CATEGORY_CONFIG[k].label === item.label);
+                const isActive = catKey && selectedCategory === catKey;
+                return (
+                  <TouchableOpacity
+                    key={item.label}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                    onPress={() => catKey && setSelectedCategory(isActive ? null : catKey)}
+                    activeOpacity={0.65}
+                    hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                  >
+                    <View style={{
+                      width: 9, height: 9, borderRadius: 5, backgroundColor: item.color,
+                      ...(isActive ? { width: 12, height: 12, borderRadius: 6 } : {}),
+                    }} />
+                    <Text style={[styles.legendLabel, { color: isActive ? item.color : C.textSub, flex: 1, fontWeight: isActive ? '700' : '400' }]}>
+                      {item.label}
+                    </Text>
+                    <Text style={[styles.legendPct, { color: isActive ? item.color : C.text }]}>{pct}%</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
           </View>
-
-          {/* Liability full-width */}
-          {(() => {
-            const cat = 'liability';
-            const cfg = CATEGORY_CONFIG[cat];
-            const Icon = cfg.Icon;
-            const d = categoryTotals[cat] || { total: 0, count: 0 };
-            const sel = selectedCategory === cat;
-            return (
-              <TouchableOpacity
-                style={[styles.liabCard, { backgroundColor: colors.card }, sel && styles.cardSel]}
-                onPress={() => setSelectedCategory(sel ? null : cat)}
-                activeOpacity={0.75}
-              >
-                <View style={[styles.iconCircle, { backgroundColor: iconBg(cfg), marginRight: 12 }]}>
-                  <Icon size={22} color={cfg.color} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.cardLabel, { color: colors.textMuted }]}>{cfg.label}</Text>
-                  <Text style={[styles.cardCount, { color: colors.textMuted }]}>{d.count} 項</Text>
-                </View>
-                <Text style={[styles.cardAmount, { color: d.total > 0 ? '#E07070' : colors.textMuted }]}>{mask(d.total)}</Text>
-              </TouchableOpacity>
-            );
-          })()}
         </View>
 
-        {/* Filter bar */}
-        <View style={[styles.filterBar, { backgroundColor: colors.card }]}>
+        {/* ── 2-COL: LIQUID + INVESTMENT ────────────────────────────────── */}
+        <View style={[styles.twoColRow, { marginHorizontal: 16, marginBottom: 10 }]}>
+
+          {/* Liquid */}
+          <TouchableOpacity
+            style={[
+              styles.sparkCard,
+              { backgroundColor: C.card, width: cardWidth },
+              selectedCategory === 'liquid' && { borderWidth: 1.5, borderColor: GREEN },
+            ]}
+            onPress={() => setSelectedCategory(selectedCategory === 'liquid' ? null : 'liquid')}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.sparkCardLabel, { color: GREEN }]}>流動資產</Text>
+            <Text style={[styles.sparkCardAmount, { color: C.text }]} numberOfLines={1}>
+              {mask(categoryTotals.liquid?.total || 0)}
+            </Text>
+            {monthlyChange !== null ? (
+              <Text style={[styles.sparkCardChange, { color: monthlyChange >= 0 ? GREEN : RED }]}>
+                {monthlyChange >= 0 ? '▲' : '▼'}{' '}
+                {monthlyChangePct !== null ? `${Math.abs(monthlyChangePct).toFixed(2)}%` : '--'}
+              </Text>
+            ) : (
+              <Text style={[styles.sparkCardChange, { color: C.textMuted }]}>— --</Text>
+            )}
+            <View style={{ marginTop: 10, overflow: 'hidden' }}>
+              <Sparkline data={liquidSparkline} width={cardWidth - 28} height={40} color={GREEN} />
+            </View>
+          </TouchableOpacity>
+
+          {/* Investment */}
+          <TouchableOpacity
+            style={[
+              styles.sparkCard,
+              { backgroundColor: C.card, width: cardWidth },
+              selectedCategory === 'investment' && { borderWidth: 1.5, borderColor: PRIMARY },
+            ]}
+            onPress={() => setSelectedCategory(selectedCategory === 'investment' ? null : 'investment')}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.sparkCardLabel, { color: PRIMARY }]}>投資資產</Text>
+            <Text style={[styles.sparkCardAmount, { color: C.text }]} numberOfLines={1}>
+              {mask(categoryTotals.investment?.total || 0)}
+            </Text>
+            {(() => {
+              const invList = mergedAssets.filter(a => a.category === 'investment' && a.pnl !== null);
+              const invPnl  = invList.reduce((s, a) => s + a.pnl, 0);
+              const invCost = invList.filter(a => a.converted_cost != null).reduce((s, a) => s + a.converted_cost, 0);
+              const invPct  = invCost > 0 ? (invPnl / invCost * 100) : null;
+              const col     = invPnl >= 0 ? GREEN : RED;
+              return (
+                <Text style={[styles.sparkCardChange, { color: col }]}>
+                  {invPnl !== 0 ? (invPnl >= 0 ? '▲' : '▼') : '—'}{' '}
+                  {invPct !== null ? `${Math.abs(invPct).toFixed(2)}%` : '--'}
+                </Text>
+              );
+            })()}
+            <View style={{ marginTop: 10, overflow: 'hidden' }}>
+              <Sparkline data={investmentSparkline} width={cardWidth - 28} height={40} color={PRIMARY} />
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        {/* ── 2-COL: FIXED + RECEIVABLE ─────────────────────────────────── */}
+        <View style={[styles.twoColRow, { marginHorizontal: 16, marginBottom: 10 }]}>
+
+          <TouchableOpacity
+            style={[
+              styles.simpleCard,
+              { backgroundColor: C.card, width: cardWidth },
+              selectedCategory === 'fixed' && { borderWidth: 1.5, borderColor: '#94a3b8' },
+            ]}
+            onPress={() => setSelectedCategory(selectedCategory === 'fixed' ? null : 'fixed')}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.simpleCardLabel, { color: C.textSub }]}>固定資產</Text>
+            <Text style={[styles.simpleCardAmount, { color: C.text }]} numberOfLines={1}>
+              {mask(categoryTotals.fixed?.total || 0)}
+            </Text>
+            <Text style={[styles.simpleCardChange, { color: C.textMuted }]}>— 0%</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.simpleCard,
+              { backgroundColor: C.card, width: cardWidth },
+              selectedCategory === 'receivable' && { borderWidth: 1.5, borderColor: '#0d9488' },
+            ]}
+            onPress={() => setSelectedCategory(selectedCategory === 'receivable' ? null : 'receivable')}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.simpleCardLabel, { color: C.textSub }]}>應收款項</Text>
+            <Text style={[styles.simpleCardAmount, { color: C.text }]} numberOfLines={1}>
+              {mask(categoryTotals.receivable?.total || 0)}
+            </Text>
+            <Text style={[styles.simpleCardChange, { color: C.textMuted }]}>— 0%</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* ── LIABILITY ─────────────────────────────────────────────────── */}
+        <TouchableOpacity
+          style={[styles.liabilityCard, { backgroundColor: C.card, marginHorizontal: 16, marginBottom: 10 }]}
+          onPress={() => setSelectedCategory(selectedCategory === 'liability' ? null : 'liability')}
+          activeOpacity={0.75}
+        >
+          <View style={[styles.liabIconCircle, { backgroundColor: isDark ? 'rgba(240,48,48,0.15)' : '#fee2e2' }]}>
+            <CreditCard size={20} color={RED} />
+          </View>
+          <Text style={[styles.liabLabel, { color: C.text }]}>負債總額</Text>
+          <View style={{ flex: 1 }} />
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={[styles.liabAmount, { color: (categoryTotals.liability?.total || 0) > 0 ? RED : C.textSub }]}>
+              {mask(categoryTotals.liability?.total || 0)}
+            </Text>
+            <Text style={[styles.liabChange, { color: RED }]}>▼ 0%</Text>
+          </View>
+        </TouchableOpacity>
+
+        {/* ── UNREALIZED PNL ────────────────────────────────────────────── */}
+        <View style={[styles.sectionCard, { backgroundColor: C.card, marginHorizontal: 16, marginBottom: 14 }]}>
+          <Text style={[styles.sectionTitle, { color: C.text }]}>未實現損益</Text>
+
+          <View style={styles.perfRow}>
+            <Text style={[styles.perfLabel, { color: C.textSub }]}>投資獲利</Text>
+            <Text style={[styles.perfValue, { color: GREEN }]}>
+              {hidden ? '****' : `+${fmt(unrealizedPnl.gain)}`}
+            </Text>
+          </View>
+          <View style={[styles.perfDivider, { backgroundColor: C.border }]} />
+
+          <View style={styles.perfRow}>
+            <Text style={[styles.perfLabel, { color: C.textSub }]}>投資虧損</Text>
+            <Text style={[styles.perfValue, { color: unrealizedPnl.loss > 0 ? RED : C.textSub }]}>
+              {hidden ? '****' : `-${fmt(unrealizedPnl.loss)}`}
+            </Text>
+          </View>
+          <View style={[styles.perfDivider, { backgroundColor: C.border }]} />
+
+          <View style={styles.perfRow}>
+            <Text style={[styles.perfLabel, { color: C.textSub }]}>淨損益</Text>
+            <Text style={[styles.perfValue, { color: unrealizedPnl.net >= 0 ? GREEN : RED }]}>
+              {hidden ? '****' : `${unrealizedPnl.net >= 0 ? '+' : ''}${fmt(unrealizedPnl.net)}`}
+            </Text>
+          </View>
+        </View>
+
+        {/* ── FILTER BAR ────────────────────────────────────────────────── */}
+        <View style={[styles.filterBar, { backgroundColor: C.card }]}>
           {selectedCategory ? (
             <>
-              <Text style={[styles.filterText, { color: colors.textSub }]}>篩選中</Text>
+              <Text style={[styles.filterText, { color: C.textSub }]}>
+                篩選：{CATEGORY_CONFIG[selectedCategory]?.label}
+              </Text>
               <TouchableOpacity onPress={() => setSelectedCategory(null)} style={styles.clearBtn}>
-                <Text style={styles.clearText}>清除</Text>
+                <Text style={[styles.clearText, { color: PRIMARY }]}>清除</Text>
               </TouchableOpacity>
             </>
           ) : null}
           <View style={{ flex: 1 }} />
-          <RefreshCw size={12} color={colors.textMuted} />
-          <Text style={[styles.filterCount, { color: colors.textMuted }]}> {sortedFilteredAssets.length} 項</Text>
+          <RefreshCw size={12} color={C.textMuted} />
+          <Text style={[styles.filterCount, { color: C.textMuted }]}> {sortedFilteredAssets.length} 項</Text>
           <TouchableOpacity onPress={cycleSortOrder} style={styles.sortBtn} activeOpacity={0.7}>
-            <Text style={[styles.sortText, { color: sortOrder !== 'default' ? PRIMARY : colors.textMuted }]}>
+            <Text style={[styles.sortText, { color: sortOrder !== 'default' ? PRIMARY : C.textMuted }]}>
               {sortOrder === 'default' ? '排序' : sortOrder === 'desc' ? '金額↓' : '金額↑'}
             </Text>
           </TouchableOpacity>
         </View>
 
-        {/* Price update time */}
-        {lastUpdated && (
-          <Text style={[styles.updateTime, { color: colors.textMuted }]}>
-            報價更新：{lastUpdated.toLocaleTimeString('zh-TW')}
-          </Text>
-        )}
+        {/* update time */}
+        <View style={styles.updateRow}>
+          {lastUpdated && (
+            <Text style={[styles.updateTime, { color: C.textMuted }]}>
+              報價更新：{lastUpdated.toLocaleTimeString('zh-TW')}
+            </Text>
+          )}
+          {isRefreshing && (
+            <>
+              <ActivityIndicator size="small" color={PRIMARY} />
+              <Text style={[styles.refreshingText, { color: C.textMuted }]}>更新中</Text>
+            </>
+          )}
+        </View>
 
-        {/* Asset list */}
+        {/* ── ASSET LIST ────────────────────────────────────────────────── */}
         {sortedFilteredAssets.length > 0 ? (
           (() => {
             const renderAssetRows = (list) => list.map((asset, idx) => (
               <TouchableOpacity
                 key={asset.id}
-                style={[styles.assetRow, { borderBottomColor: colors.borderLight }, idx === list.length - 1 && { borderBottomWidth: 0 }]}
+                style={[
+                  styles.assetRow,
+                  { borderBottomColor: C.border },
+                  idx === list.length - 1 && { borderBottomWidth: 0 },
+                ]}
                 onPress={() => navigation.navigate('AssetDetail', { assetId: asset.id, allIds: asset._allIds || [asset.id] })}
                 activeOpacity={0.7}
               >
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.assetName, { color: colors.text }]}>{asset.name}</Text>
-                  <Text style={[styles.assetMeta, { color: colors.textMuted }]}>{asset.currency}</Text>
+                  <Text style={[styles.assetName, { color: C.text }]}>{asset.name}</Text>
+                  <Text style={[styles.assetMeta, { color: C.textMuted }]}>{asset.currency}</Text>
                 </View>
                 <View style={{ alignItems: 'flex-end' }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                     {asset.leverage > 1 && (
-                      <Text style={{ fontSize: 11, color: '#f59e0b', fontWeight: '700', backgroundColor: '#fef3c7', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 }}>
+                      <Text style={{
+                        fontSize: 11, color: '#f59e0b', fontWeight: '700',
+                        backgroundColor: isDark ? '#78350f33' : '#fef3c7',
+                        paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4,
+                      }}>
                         {asset.leverage}x
                       </Text>
                     )}
-                    <Text style={[styles.assetAmount, { color: colors.text }]}>{mask(asset.converted_amount)}</Text>
+                    <Text style={[styles.assetAmount, { color: C.text }]}>{mask(asset.converted_amount)}</Text>
                   </View>
                   {asset.pnl !== null && (
-                    <Text style={{ fontSize: 11, fontWeight: '600', color: asset.pnl >= 0 ? '#16a34a' : '#E07070' }}>
+                    <Text style={{ fontSize: 11, fontWeight: '600', color: asset.pnl >= 0 ? GREEN : RED }}>
                       {hidden ? '****' : asset.pnl_pct !== null
                         ? `${asset.pnl >= 0 ? '+' : ''}${fmt(asset.pnl)}  (${asset.pnl >= 0 ? '+' : ''}${asset.pnl_pct.toFixed(1)}%)`
                         : `${asset.pnl >= 0 ? '+' : ''}${fmt(asset.pnl)}`}
                     </Text>
                   )}
                   {asset.current_shares > 0 && (
-                    <Text style={[styles.assetShares, { color: colors.textMuted }]}>{asset.current_shares.toLocaleString()} 股</Text>
+                    <Text style={[styles.assetShares, { color: C.textMuted }]}>
+                      {asset.current_shares.toLocaleString()} 股
+                    </Text>
                   )}
                 </View>
               </TouchableOpacity>
@@ -468,22 +743,21 @@ export default function DashboardScreen() {
               const total = list.reduce((s, a) => s + a.converted_amount, 0);
               return (
                 <View key={key} style={{ marginBottom: 8 }}>
-                  <View style={[styles.groupHeader, { backgroundColor: colors.card }]}>
+                  <View style={[styles.groupHeader, { backgroundColor: C.card }]}>
                     <View style={[styles.groupDot, { backgroundColor: color }]} />
                     <Text style={[styles.groupLabel, { color }]}>{label}</Text>
-                    <Text style={[styles.groupTotal, { color: colors.textSub }]}>{mask(total)}</Text>
+                    <Text style={[styles.groupTotal, { color: C.textSub }]}>{mask(total)}</Text>
                   </View>
-                  <View style={[styles.assetList, { backgroundColor: colors.card }]}>
+                  <View style={[styles.assetList, { backgroundColor: C.card }]}>
                     {renderAssetRows(list)}
                   </View>
                 </View>
               );
             };
 
-            // No filter: group by category
             if (!selectedCategory) {
               const CAT_ORDER = ['liquid', 'investment', 'fixed', 'receivable', 'liability'];
-              const groups = {};
+              const groups    = {};
               sortedFilteredAssets.forEach(a => {
                 if (!groups[a.category]) groups[a.category] = [];
                 groups[a.category].push(a);
@@ -494,10 +768,9 @@ export default function DashboardScreen() {
               });
             }
 
-            // Investment selected: group by market_type
             if (selectedCategory === 'investment') {
               const MT_ORDER = ['TW', 'US', 'Crypto', 'other'];
-              const groups = {};
+              const groups   = {};
               sortedFilteredAssets.forEach(a => {
                 const mt = a.market_type || 'other';
                 if (!groups[mt]) groups[mt] = [];
@@ -509,149 +782,132 @@ export default function DashboardScreen() {
               });
             }
 
-            // Other single category: flat list
             return (
-              <View style={[styles.assetList, { backgroundColor: colors.card }]}>
+              <View style={[styles.assetList, { backgroundColor: C.card }]}>
                 {renderAssetRows(sortedFilteredAssets)}
               </View>
             );
           })()
         ) : (
           <View style={styles.empty}>
-            <Text style={[styles.emptyText, { color: colors.textSub }]}>尚無資產</Text>
-            <Text style={[styles.emptySub, { color: colors.textMuted }]}>點擊下方 + 新增您的資產</Text>
+            <Text style={[styles.emptyText, { color: C.textSub }]}>尚無資產</Text>
+            <Text style={[styles.emptySub, { color: C.textMuted }]}>點擊右上角 + 新增您的資產</Text>
           </View>
         )}
-      </ScrollView>
 
+      </ScrollView>
     </View>
   );
 }
 
+// ─── Styles ──────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  loading:   { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
-  hero: {
-    marginHorizontal: 16,
-    marginBottom: 12,
-    padding: 20,
-    borderRadius: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  heroHeader: {
-    flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'space-between', marginBottom: 8,
-  },
-  heroLabel: { fontSize: 13 },
+  // Hero
+  hero: { paddingHorizontal: 20, paddingBottom: 24, marginBottom: 4 },
+  heroHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
+  heroLabel:  { fontSize: 13, fontWeight: '500' },
   addBtn: {
-    width: 32, height: 32, borderRadius: 16,
-    backgroundColor: PRIMARY,
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: '#FFFFFF',
     justifyContent: 'center', alignItems: 'center',
-    shadowColor: PRIMARY,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.35, shadowRadius: 6, elevation: 4,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 6, elevation: 4,
   },
-  heroAmount: { fontSize: 34, fontWeight: 'bold', color: PRIMARY, marginBottom: 6 },
-  heroChange: { fontSize: 14, fontWeight: '500' },
-  posText: { color: PRIMARY },
-  negText: { color: '#E07070' },
+  heroAmount:    { fontSize: 44, fontWeight: 'bold', letterSpacing: -1 },
+  heroChange:    { fontSize: 15, fontWeight: '600' },
+  heroChangeSub: { fontSize: 13 },
 
-  gridWrap: { marginHorizontal: 16, marginBottom: 4 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 10, marginBottom: 10 },
-  card: {
-    width: '48.5%',
-    borderRadius: 12,
-    padding: 14,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-    borderWidth: 2,
-    borderColor: 'transparent',
+  // Section card (allocation, monthly perf)
+  sectionCard: {
+    borderRadius: 16, padding: 16,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8, elevation: 3,
   },
-  cardSel: { borderColor: PRIMARY },
-  liabCard: {
-    borderRadius: 12,
-    padding: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-    borderWidth: 2,
-    borderColor: 'transparent',
-  },
-  cardTopRow: {
-    flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'space-between', marginBottom: 10,
-  },
-  iconCircle: {
-    width: 40, height: 40, borderRadius: 20,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  cardLabel: { fontSize: 11, marginBottom: 4 },
-  cardAmount: { fontSize: 18, fontWeight: '700' },
-  cardCount: { fontSize: 11 },
+  sectionTitle: { fontSize: 15, fontWeight: '700', marginBottom: 14 },
 
+  // Donut legend
+  legendLabel: { fontSize: 13 },
+  legendPct:   { fontSize: 13, fontWeight: '700' },
+
+  // Two-column row
+  twoColRow: { flexDirection: 'row', justifyContent: 'space-between' },
+
+  // Sparkline card
+  sparkCard: {
+    borderRadius: 16, padding: 14,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8, elevation: 3,
+  },
+  sparkCardLabel:  { fontSize: 12, fontWeight: '600', marginBottom: 6 },
+  sparkCardAmount: { fontSize: 17, fontWeight: '700', marginBottom: 3 },
+  sparkCardChange: { fontSize: 12, fontWeight: '500' },
+
+  // Simple card (fixed, receivable)
+  simpleCard: {
+    borderRadius: 16, padding: 14,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8, elevation: 3,
+  },
+  simpleCardLabel:  { fontSize: 12, marginBottom: 4 },
+  simpleCardAmount: { fontSize: 17, fontWeight: '700', marginBottom: 3 },
+  simpleCardChange: { fontSize: 12 },
+
+  // Liability row
+  liabilityCard: {
+    borderRadius: 16, padding: 14,
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8, elevation: 3,
+  },
+  liabIconCircle: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
+  liabLabel:  { fontSize: 15, fontWeight: '600' },
+  liabAmount: { fontSize: 17, fontWeight: '700' },
+  liabChange: { fontSize: 12, fontWeight: '500' },
+
+  // Monthly performance
+  perfRow:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10 },
+  perfLabel:   { fontSize: 14 },
+  perfValue:   { fontSize: 15, fontWeight: '700' },
+  perfDivider: { height: StyleSheet.hairlineWidth },
+
+  // Filter bar
   filterBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginHorizontal: 16,
-    marginTop: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 8,
-    gap: 6,
+    flexDirection: 'row', alignItems: 'center',
+    marginHorizontal: 16, marginTop: 4, marginBottom: 4,
+    paddingHorizontal: 14, paddingVertical: 10,
+    borderRadius: 10, gap: 6,
   },
-  filterText: { fontSize: 13 },
-  clearBtn: { paddingHorizontal: 4 },
-  clearText: { fontSize: 13, color: PRIMARY, fontWeight: '600' },
-  filterCount: { fontSize: 12 },
-  sortBtn: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, marginLeft: 4 },
-  sortText: { fontSize: 12, fontWeight: '600' },
+  filterText:   { fontSize: 13 },
+  clearBtn:     { paddingHorizontal: 4 },
+  clearText:    { fontSize: 13, fontWeight: '600' },
+  filterCount:  { fontSize: 12 },
+  sortBtn:      { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, marginLeft: 4 },
+  sortText:     { fontSize: 12, fontWeight: '600' },
 
-  updateTime: {
-    fontSize: 11,
-    marginHorizontal: 20, marginTop: 10, marginBottom: 4,
-  },
+  // Update time
+  updateRow:       { flexDirection: 'row', alignItems: 'center', marginHorizontal: 20, marginTop: 6, marginBottom: 4, gap: 6 },
+  updateTime:      { fontSize: 11 },
+  refreshingText:  { fontSize: 11 },
 
+  // Asset list
   groupHeader: {
     flexDirection: 'row', alignItems: 'center',
     marginHorizontal: 16, marginTop: 8, marginBottom: 4,
-    paddingHorizontal: 14, paddingVertical: 8,
-    borderRadius: 10, gap: 6,
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, gap: 6,
   },
-  groupDot: { width: 8, height: 8, borderRadius: 4 },
+  groupDot:   { width: 8, height: 8, borderRadius: 4 },
   groupLabel: { fontSize: 13, fontWeight: '700', flex: 1 },
   groupTotal: { fontSize: 13, fontWeight: '500' },
 
   assetList: {
-    marginHorizontal: 16, marginTop: 0,
-    borderRadius: 12, overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05, shadowRadius: 4, elevation: 2,
+    marginHorizontal: 16, borderRadius: 12, overflow: 'hidden',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2,
   },
-  assetRow: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 16, paddingVertical: 14,
-    borderBottomWidth: 1,
-  },
-  assetName: { fontSize: 15, fontWeight: '500', marginBottom: 2 },
-  assetMeta: { fontSize: 12 },
+  assetRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1 },
+  assetName:   { fontSize: 15, fontWeight: '500', marginBottom: 2 },
+  assetMeta:   { fontSize: 12 },
   assetAmount: { fontSize: 16, fontWeight: '600' },
   assetShares: { fontSize: 12, marginTop: 2 },
 
-  empty: { alignItems: 'center', padding: 48 },
+  empty:     { alignItems: 'center', padding: 48 },
   emptyText: { fontSize: 16, fontWeight: '600', marginBottom: 8 },
-  emptySub: { fontSize: 13 },
-
+  emptySub:  { fontSize: 13 },
 });

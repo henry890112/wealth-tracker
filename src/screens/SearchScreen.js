@@ -22,8 +22,7 @@ import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Search as SearchIcon, Plus, X, Flame, LineChart as LineChartIcon, Clock, Calendar, Star, Bell, BellOff } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Svg, Polyline } from 'react-native-svg';
-import { LineChart } from 'react-native-chart-kit';
+import { Svg, Polyline, Circle, Line, Path, Defs, LinearGradient, Stop, Text as SvgText } from 'react-native-svg';
 import { supabase } from '../lib/supabase';
 import {
   searchAssets,
@@ -187,7 +186,7 @@ if (allData.length > 0) {
 </html>`;
 };
 
-const PRIMARY = '#16a34a';
+const PRIMARY = '#F7A600';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -226,7 +225,7 @@ const FxSparkline = ({ sparkPoints, todayRate, prevRate }) => {
   const range = max - min || 0.001;
   const pad = 3;
   const isUp = pts[pts.length - 1] >= pts[0];
-  const color = isUp ? '#16a34a' : '#E07070';
+  const color = isUp ? '#0DBD8B' : '#F03030';
   const polyPts = pts.map((p, i) => {
     const x = pad + (i / (pts.length - 1)) * (W - pad * 2);
     const y = H - pad - ((p - min) / range) * (H - pad * 2);
@@ -245,6 +244,190 @@ const FxSparkline = ({ sparkPoints, todayRate, prevRate }) => {
     </Svg>
   );
 };
+
+// ── FX Dual-Line Gradient Chart ──
+function buildLinePath(pts) {
+  if (pts.length === 0) return '';
+  return pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
+}
+
+function FxLineChart({ history, isDark: dark, hasBuySell }) {
+  const CHART_W = screenWidth - 64;
+  const CHART_H = 180;
+  const PAD_TOP = 16;
+  const PAD_BOTTOM = 26;
+  const PAD_H = 6;
+  const plotW = CHART_W - PAD_H * 2;
+  const plotH = CHART_H - PAD_TOP - PAD_BOTTOM;
+
+  const [touchIdx, setTouchIdx] = useState(null);
+  const histRef = useRef(history);
+  histRef.current = history;
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (e) => {
+        const x = e.nativeEvent.locationX;
+        const n = histRef.current.length;
+        if (n < 2) return;
+        setTouchIdx(Math.round(Math.max(0, Math.min(1, (x - PAD_H) / plotW)) * (n - 1)));
+      },
+      onPanResponderMove: (e) => {
+        const x = e.nativeEvent.locationX;
+        const n = histRef.current.length;
+        if (n < 2) return;
+        setTouchIdx(Math.round(Math.max(0, Math.min(1, (x - PAD_H) / plotW)) * (n - 1)));
+      },
+      onPanResponderRelease: () => setTouchIdx(null),
+      onPanResponderTerminate: () => setTouchIdx(null),
+    })
+  ).current;
+
+  if (!history || history.length < 2) return null;
+
+  // Y range
+  const buyVals = history.map(h => h.buy).filter(v => v != null && !isNaN(v));
+  const sellVals = hasBuySell ? history.map(h => h.sell).filter(v => v != null && !isNaN(v)) : [];
+  const allVals = [...buyVals, ...sellVals];
+  const minVal = Math.min(...allVals);
+  const maxVal = Math.max(...allVals);
+  const vRange = maxVal - minVal || Math.abs(minVal) * 0.05 || 0.01;
+  const vPad = vRange * 0.15;
+  const yMin = minVal - vPad;
+  const yMax = maxVal + vPad;
+
+  const toX = (i) => PAD_H + (i / (history.length - 1)) * plotW;
+  const toY = (v) => PAD_TOP + plotH * (1 - (v - yMin) / (yMax - yMin));
+
+  const buyPts  = history.map((h, i) => ({ x: toX(i), y: toY(h.buy),  val: h.buy }));
+  const sellPts = hasBuySell ? history.map((h, i) => ({ x: toX(i), y: toY(h.sell ?? h.buy), val: h.sell })) : [];
+
+  const buyLinePath  = buildLinePath(buyPts);
+  const sellLinePath = hasBuySell ? buildLinePath(sellPts) : '';
+  const bottomY = PAD_TOP + plotH;
+  const buyAreaPath = `${buyLinePath} L ${buyPts[buyPts.length - 1].x.toFixed(2)} ${bottomY} L ${buyPts[0].x.toFixed(2)} ${bottomY} Z`;
+
+  // X-axis labels (up to 5)
+  const nLabels = Math.min(5, history.length);
+  const xLabels = Array.from({ length: nLabels }, (_, k) => {
+    const idx = Math.round((k / (nLabels - 1)) * (history.length - 1));
+    const d = new Date(history[idx].date + 'T00:00:00');
+    return { x: toX(idx), label: `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')}` };
+  });
+
+  // Max/min labels
+  const maxI = buyVals.indexOf(Math.max(...buyVals));
+  const minI = buyVals.indexOf(Math.min(...buyVals));
+  const fmtL = (v) => (v >= 10 ? v.toFixed(3) : v.toFixed(4));
+  const maxLX = Math.max(4, Math.min(toX(maxI), CHART_W - 80));
+  const maxLY = Math.max(PAD_TOP + 12, toY(maxVal) - 6);
+  const minLX = Math.max(4, Math.min(toX(minI), CHART_W - 80));
+  const minLY = Math.min(PAD_TOP + plotH - 4, toY(minVal) + 14);
+
+  // Theme
+  const chartBg       = dark ? '#0f1117' : 'transparent';
+  const labelColor    = dark ? '#9ca3af' : '#6b7280';
+  const xLabelColor   = dark ? '#4b5563' : '#6b7280';
+  const crosshairLine = dark ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.18)';
+  const dotBg         = dark ? '#0f1117' : '#ffffff';
+  const tooltipBg     = dark ? 'rgba(10,10,20,0.93)' : 'rgba(255,255,255,0.96)';
+  const tooltipBorder = dark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.09)';
+  const gradStop1Opacity = dark ? 0.45 : 0.35;
+  const gradStop2Color   = dark ? '#0f1117' : '#f0fdf4';
+
+  const touchPt     = touchIdx != null ? buyPts[touchIdx]  : null;
+  const touchSellPt = (touchIdx != null && hasBuySell) ? sellPts[touchIdx] : null;
+  const touchItem   = touchIdx != null ? history[touchIdx] : null;
+  const tooltipLeft = touchPt ? Math.min(Math.max(touchPt.x - 55, 4), CHART_W - 140) : 0;
+  const fmtR = (r) => r == null ? '—' : r >= 10 ? r.toFixed(3) : r.toFixed(4);
+
+  return (
+    <View
+      style={{ borderRadius: 12, overflow: 'hidden', backgroundColor: chartBg, marginTop: 4 }}
+      {...panResponder.panHandlers}
+    >
+      <Svg width={CHART_W} height={CHART_H} style={{ overflow: 'hidden', backgroundColor: 'transparent' }}>
+        <Defs>
+          <LinearGradient id="fxBuyAreaGrad" x1="0" y1="0" x2="0" y2={CHART_H} gradientUnits="userSpaceOnUse">
+            <Stop offset="0" stopColor="#0DBD8B" stopOpacity={gradStop1Opacity} />
+            <Stop offset="1" stopColor={gradStop2Color} stopOpacity={1} />
+          </LinearGradient>
+        </Defs>
+
+        {/* Buy area fill */}
+        <Path d={buyAreaPath} fill="url(#fxBuyAreaGrad)" stroke="none" />
+
+        {/* Buy line */}
+        <Path d={buyLinePath} fill="none" stroke="#0DBD8B" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+
+        {/* Sell line (no fill) */}
+        {hasBuySell && sellLinePath ? (
+          <Path d={sellLinePath} fill="none" stroke="#F03030" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        ) : null}
+
+        {/* X-axis labels */}
+        {xLabels.map((lbl, i) => (
+          <SvgText key={i} x={lbl.x} y={CHART_H - 5} textAnchor="middle" fill={xLabelColor} fontSize="10">
+            {lbl.label}
+          </SvgText>
+        ))}
+
+        {/* Max / Min labels */}
+        <SvgText x={maxLX} y={maxLY} fill={labelColor} fontSize="11" fontWeight="500">{fmtL(maxVal)}</SvgText>
+        <SvgText x={minLX} y={minLY} fill={labelColor} fontSize="11" fontWeight="500">{fmtL(minVal)}</SvgText>
+
+        {/* Crosshair */}
+        {touchPt && (
+          <>
+            <Line
+              x1={touchPt.x} y1={PAD_TOP}
+              x2={touchPt.x} y2={bottomY}
+              stroke={crosshairLine} strokeWidth="1" strokeDasharray="4 4"
+            />
+            <Circle cx={touchPt.x} cy={touchPt.y} r={7} fill={dotBg} stroke="#0DBD8B" strokeWidth="2.5" />
+            <Circle cx={touchPt.x} cy={touchPt.y} r={3} fill="#0DBD8B" />
+            {hasBuySell && touchSellPt && (
+              <>
+                <Circle cx={touchSellPt.x} cy={touchSellPt.y} r={7} fill={dotBg} stroke="#F03030" strokeWidth="2.5" />
+                <Circle cx={touchSellPt.x} cy={touchSellPt.y} r={3} fill="#F03030" />
+              </>
+            )}
+          </>
+        )}
+      </Svg>
+
+      {/* Tooltip */}
+      {touchPt && touchItem && (
+        <View
+          pointerEvents="none"
+          style={{
+            position: 'absolute', top: 8, left: tooltipLeft,
+            backgroundColor: tooltipBg, borderRadius: 8,
+            paddingHorizontal: 10, paddingVertical: 6,
+            borderWidth: 1, borderColor: tooltipBorder,
+            minWidth: 132,
+            shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.18, shadowRadius: 5, elevation: 6,
+          }}
+        >
+          <Text style={{ color: '#6b7280', fontSize: 11, marginBottom: 3 }}>
+            {touchItem.date.replace(/-/g, '/')}
+          </Text>
+          <Text style={{ color: '#0DBD8B', fontSize: 12, fontWeight: '600' }}>
+            買入: {fmtR(touchItem.buy)}
+          </Text>
+          {hasBuySell && touchItem.sell != null && (
+            <Text style={{ color: '#F03030', fontSize: 12, fontWeight: '600' }}>
+              賣出: {fmtR(touchItem.sell)}
+            </Text>
+          )}
+        </View>
+      )}
+    </View>
+  );
+}
 
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
@@ -298,48 +481,9 @@ export default function SearchScreen() {
   const [alertAsset, setAlertAsset] = useState(null);
   const [alertPrice, setAlertPrice] = useState('');
   const [alertDirection, setAlertDirection] = useState('above');
-  // FX chart tooltip state
-  const [fxTooltipIndex, setFxTooltipIndex] = useState(null);
-  const [fxTooltipX, setFxTooltipX] = useState(0);
   const debounceRef = useRef(null);
   const priceInputRef = useRef(null);
   const leverageInputRef = useRef(null);
-  // Ref so PanResponder callbacks (created once) can always read latest chart data
-  const fxChartDataRef = useRef(null);
-  const fxPanResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, gs) => Math.abs(gs.dx) > 4,
-      onPanResponderGrant: (evt) => {
-        const data = fxChartDataRef.current;
-        if (!data) return;
-        const totalChartW = screenWidth - 64;
-        const yAxisW = 68;
-        const plotW = totalChartW - yAxisW;
-        const touchX = evt.nativeEvent.locationX;
-        const plotX = Math.max(0, Math.min(touchX - yAxisW, plotW));
-        const len = data.datasets[0].data.length;
-        const idx = Math.min(len - 1, Math.max(0, Math.round((plotX / plotW) * (len - 1))));
-        setFxTooltipIndex(idx);
-        setFxTooltipX(touchX);
-      },
-      onPanResponderMove: (evt) => {
-        const data = fxChartDataRef.current;
-        if (!data) return;
-        const totalChartW = screenWidth - 64;
-        const yAxisW = 68;
-        const plotW = totalChartW - yAxisW;
-        const touchX = evt.nativeEvent.locationX;
-        const plotX = Math.max(0, Math.min(touchX - yAxisW, plotW));
-        const len = data.datasets[0].data.length;
-        const idx = Math.min(len - 1, Math.max(0, Math.round((plotX / plotW) * (len - 1))));
-        setFxTooltipIndex(idx);
-        setFxTooltipX(touchX);
-      },
-      onPanResponderRelease: () => setFxTooltipIndex(null),
-      onPanResponderTerminate: () => setFxTooltipIndex(null),
-    })
-  ).current;
 
   useFocusEffect(useCallback(() => { loadHotPrices(); loadFxRates(); loadWatchlist(); loadAlerts(); }, []));
 
@@ -401,9 +545,10 @@ export default function SearchScreen() {
   };
 
 
-  const fetchFxHistory = async (code, days, range) => {
+  const fetchFxHistory = async (code, days, range, fxOverride) => {
     setFxDetailLoading(true);
     setFxDetailHistory([]);
+    const activeFx = fxOverride ?? fxDetailFx;
     try {
       let history = null;
 
@@ -458,8 +603,8 @@ export default function SearchScreen() {
           }).filter(Boolean);
           if (range) rows = rows.filter(h => h.date >= range.start && h.date <= range.end);
           // Apply current buy/sell spread so both chart lines differ
-          const currentBuy = fxDetailFx?.buyRate;
-          const currentSell = fxDetailFx?.sellRate;
+          const currentBuy = activeFx?.buyRate;
+          const currentSell = activeFx?.sellRate;
           const spreadRatio = (currentBuy && currentSell && currentBuy > 0)
             ? currentSell / currentBuy
             : 1.0;
@@ -468,6 +613,21 @@ export default function SearchScreen() {
             sell: parseFloat((h.buy * spreadRatio).toFixed(6)),
           }));
           history = rows;
+        }
+      }
+
+      // 對齊最後一筆與即時匯率
+      const todayStr = new Date().toISOString().slice(0, 10);
+      if (history && history.length > 0 && activeFx?.buyRate != null && activeFx?.sellRate != null) {
+        const lastDate = history[history.length - 1].date;
+        if (lastDate === todayStr || lastDate?.startsWith(todayStr)) {
+          history[history.length - 1] = {
+            ...history[history.length - 1],
+            buy: activeFx.buyRate,
+            sell: activeFx.sellRate,
+          };
+        } else {
+          history.push({ date: todayStr, buy: activeFx.buyRate, sell: activeFx.sellRate });
         }
       }
 
@@ -487,7 +647,7 @@ export default function SearchScreen() {
     setFxDetailCustomRange(null);
     setFxDetailHistory([]);
     setFxDetailVisible(true);
-    fetchFxHistory(fx.code, 30, null);
+    fetchFxHistory(fx.code, 30, null, fx);
   };
 
   const handleFxPeriodSelect = (period) => {
@@ -971,7 +1131,7 @@ export default function SearchScreen() {
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
                 {hasAlert
-                  ? <Bell size={16} color={isTriggered ? '#9ca3af' : '#16a34a'} fill={isTriggered ? 'none' : '#dcfce7'} />
+                  ? <Bell size={16} color={isTriggered ? '#9ca3af' : '#F7A600'} fill={isTriggered ? 'none' : 'rgba(247,166,0,0.20)'} />
                   : <Bell size={16} color={colors.textMuted} />
                 }
               </TouchableOpacity>
@@ -1002,8 +1162,12 @@ export default function SearchScreen() {
     const allSell = fxDetailHistory.map(h => h.sell || h.buy).filter(v => v != null && !isNaN(v));
     const allRates = [...allBuy, ...allSell];
     if (!allRates.length) return null;
-    const minRate = Math.min(...allRates);
-    const maxRate = Math.max(...allRates);
+    // 期間最高/最低：hasBuySell 時用賣出價，否則 fallback 到買入價
+    const periodVals = hasBuySell
+      ? fxDetailHistory.map(h => h.sell).filter(v => v != null && !isNaN(v))
+      : allBuy;
+    const minRate = Math.min(...periodVals);
+    const maxRate = Math.max(...periodVals);
     const rng = maxRate - minRate;
     const padding = rng > 0 ? rng * 0.15 : Math.abs(minRate) * 0.05 || 0.01;
     const baseline = Math.max(0, minRate - padding);
@@ -1027,9 +1191,6 @@ export default function SearchScreen() {
       : [mkDs(h => h.buy, o => `rgba(22,163,74,${o})`)];
     return { labels, datasets, baseline, hasBuySell, minRate, maxRate };
   }, [fxDetailHistory]);
-
-  // Keep the PanResponder ref in sync with the latest chart data
-  useEffect(() => { fxChartDataRef.current = fxChartData; }, [fxChartData]);
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
@@ -1415,7 +1576,7 @@ export default function SearchScreen() {
                 <View style={[styles.fxDetailRateDivider, { backgroundColor: colors.border }]} />
                 <View style={styles.fxDetailRateItem}>
                   <Text style={[styles.fxDetailRateLabel, { color: colors.textMuted }]}>賣出匯率</Text>
-                  <Text style={[styles.fxDetailRateBig, { color: '#E07070' }]}>
+                  <Text style={[styles.fxDetailRateBig, { color: '#F03030' }]}>
                     {fxDetailFx?.sellRate != null
                       ? (fxDetailFx.sellRate >= 10 ? fxDetailFx.sellRate.toFixed(3) : fxDetailFx.sellRate.toFixed(4))
                       : '—'}
@@ -1484,83 +1645,12 @@ export default function SearchScreen() {
                 </View>
               ) : fxChartData ? (
                 <>
-                  {/* Chart wrapped in PanResponder view for swipe tooltip */}
-                  <View style={{ position: 'relative' }} {...fxPanResponder.panHandlers}>
-                    <LineChart
-                      data={{ labels: fxChartData.labels, datasets: fxChartData.datasets }}
-                      width={screenWidth - 64}
-                      height={180}
-                      yAxisWidth={68}
-                      getDotColor={(datasetIndex) =>
-                        fxChartData.hasBuySell && datasetIndex === 1 ? '#E07070' : '#16a34a'
-                      }
-                      formatYLabel={(val) => {
-                        const abs = parseFloat(val) + fxChartData.baseline;
-                        return abs >= 10 ? abs.toFixed(2) : abs.toFixed(4);
-                      }}
-                      chartConfig={{
-                        backgroundGradientFrom: colors.card,
-                        backgroundGradientTo: colors.card,
-                        decimalPlaces: 3,
-                        color: (opacity = 1) => `rgba(22, 163, 74, ${opacity})`,
-                        labelColor: (opacity = 1) => `rgba(148, 163, 184, ${opacity})`,
-                        fillShadowGradient: '#16a34a',
-                        fillShadowGradientOpacity: 0.08,
-                        propsForDots: { r: '2.5', strokeWidth: '1.5' },
-                        propsForBackgroundLines: { stroke: colors.borderLight },
-                      }}
-                      withShadow
-                      bezier
-                      style={{ borderRadius: 8, marginLeft: -8, marginTop: 4 }}
-                    />
-                    {/* Swipe tooltip */}
-                    {fxTooltipIndex !== null && fxDetailHistory[fxTooltipIndex] && (() => {
-                      const item = fxDetailHistory[fxTooltipIndex];
-                      const TOOLTIP_W = 132;
-                      const chartW = screenWidth - 64;
-                      const tooltipLeft = Math.min(
-                        Math.max(fxTooltipX - TOOLTIP_W / 2, 4),
-                        chartW - TOOLTIP_W - 4,
-                      );
-                      const d = new Date(item.date + 'T00:00:00');
-                      const dateLabel = `${d.getFullYear()}/${d.getMonth() + 1}/${String(d.getDate()).padStart(2, '0')}`;
-                      const fmtR = (r) => r == null ? '—' : r >= 10 ? r.toFixed(3) : r.toFixed(4);
-                      return (
-                        <View
-                          pointerEvents="none"
-                          style={{
-                            position: 'absolute',
-                            top: 14,
-                            left: tooltipLeft,
-                            width: TOOLTIP_W,
-                            backgroundColor: isDark ? 'rgba(28,28,40,0.96)' : 'rgba(255,255,255,0.97)',
-                            borderRadius: 8,
-                            paddingVertical: 6,
-                            paddingHorizontal: 10,
-                            borderWidth: 1,
-                            borderColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.09)',
-                            shadowColor: '#000',
-                            shadowOffset: { width: 0, height: 2 },
-                            shadowOpacity: 0.18,
-                            shadowRadius: 5,
-                            elevation: 6,
-                          }}
-                        >
-                          <Text style={{ color: colors.textMuted, fontSize: 11, marginBottom: 3 }}>
-                            {dateLabel}
-                          </Text>
-                          <Text style={{ color: '#16a34a', fontSize: 12, fontWeight: '600' }}>
-                            買入: {fmtR(item.buy)}
-                          </Text>
-                          {fxChartData.hasBuySell && item.sell != null && (
-                            <Text style={{ color: '#E07070', fontSize: 12, fontWeight: '600' }}>
-                              賣出: {fmtR(item.sell)}
-                            </Text>
-                          )}
-                        </View>
-                      );
-                    })()}
-                  </View>
+                  {/* FX gradient dual-line chart */}
+                  <FxLineChart
+                    history={fxDetailHistory}
+                    isDark={isDark}
+                    hasBuySell={fxChartData.hasBuySell}
+                  />
                   {fxChartData.hasBuySell && (
                     <View style={styles.fxChartLegend}>
                       <View style={styles.fxLegendItem}>
@@ -1568,7 +1658,7 @@ export default function SearchScreen() {
                         <Text style={[styles.fxLegendText, { color: colors.textMuted }]}>買入</Text>
                       </View>
                       <View style={styles.fxLegendItem}>
-                        <View style={[styles.fxLegendDot, { backgroundColor: '#E07070' }]} />
+                        <View style={[styles.fxLegendDot, { backgroundColor: '#F03030' }]} />
                         <Text style={[styles.fxLegendText, { color: colors.textMuted }]}>賣出</Text>
                       </View>
                     </View>
@@ -1661,7 +1751,7 @@ export default function SearchScreen() {
             <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
               <View style={styles.modalHeader}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <Bell size={20} color="#16a34a" />
+                  <Bell size={20} color="#F7A600" />
                   <Text style={[styles.modalTitle, { color: colors.text }]}>設定價格提醒</Text>
                 </View>
                 <TouchableOpacity onPress={() => setAlertModalVisible(false)}>
@@ -1861,8 +1951,8 @@ const styles = StyleSheet.create({
   priceBlock: { alignItems: 'flex-end' },
   priceText: { fontSize: 14, fontWeight: '600', marginBottom: 1 },
   changeText: { fontSize: 12, fontWeight: '600' },
-  changeUp: { color: '#16a34a' },
-  changeDown: { color: '#E07070' },
+  changeUp: { color: '#00C851' },
+  changeDown: { color: '#F03030' },
   chartBtn: { padding: 4 },
   starBtn: { padding: 4 },
   bellBtn: { padding: 4 },
@@ -1872,8 +1962,8 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: '#d1d5db',
     alignItems: 'center',
   },
-  alertDirectionBtnActive: { backgroundColor: '#16a34a', borderColor: '#16a34a' },
-  alertDirectionBtnActiveRed: { backgroundColor: '#E07070', borderColor: '#E07070' },
+  alertDirectionBtnActive: { backgroundColor: '#F7A600', borderColor: '#F7A600' },
+  alertDirectionBtnActiveRed: { backgroundColor: '#F03030', borderColor: '#F03030' },
   alertDirectionText: { fontSize: 15, fontWeight: '600', color: '#6b7280' },
   alertDirectionTextActive: { color: 'white' },
   recentHeader: {
@@ -1903,9 +1993,9 @@ const styles = StyleSheet.create({
   assetInfoName: { fontSize: 14 },
   label: { fontSize: 14, fontWeight: '600', marginBottom: 8 },
   categoryScroll: { marginBottom: 16 },
-  categoryChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 16, marginRight: 8, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#16a34a' },
-  categoryChipActive: { backgroundColor: '#16a34a', borderWidth: 1, borderColor: '#16a34a' },
-  categoryChipText: { fontSize: 14, color: '#16a34a' },
+  categoryChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 16, marginRight: 8, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#F7A600' },
+  categoryChipActive: { backgroundColor: '#F7A600', borderWidth: 1, borderColor: '#F7A600' },
+  categoryChipText: { fontSize: 14, color: '#F7A600' },
   categoryChipTextActive: { color: '#FFFFFF', fontWeight: '600' },
   input: { borderWidth: 1, borderRadius: 8, padding: 12, fontSize: 16, marginBottom: 16 },
   totalText: { fontSize: 16, fontWeight: '600', color: PRIMARY, marginBottom: 16, textAlign: 'right' },
@@ -1944,7 +2034,7 @@ const styles = StyleSheet.create({
   fxDetailEmptyText: { textAlign: 'center', paddingVertical: 32, fontSize: 14 },
   fxDetailRecordBtn: {
     marginHorizontal: 16, marginTop: 16, marginBottom: 8,
-    backgroundColor: '#16a34a', padding: 16, borderRadius: 12, alignItems: 'center',
+    backgroundColor: '#F7A600', padding: 16, borderRadius: 12, alignItems: 'center',
   },
   fxDetailRecordBtnText: { color: 'white', fontSize: 16, fontWeight: '700' },
   fxPeriodRow: { flexDirection: 'row', gap: 6, marginBottom: 12, flexWrap: 'wrap' },
@@ -1953,7 +2043,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10, paddingVertical: 5,
     borderRadius: 20, borderWidth: 1,
   },
-  fxPeriodBtnActive: { backgroundColor: '#16a34a', borderColor: '#16a34a' },
+  fxPeriodBtnActive: { backgroundColor: '#F7A600', borderColor: '#F7A600' },
   fxPeriodLabel: { fontSize: 12, fontWeight: '500' },
   fxPeriodLabelActive: { color: 'white', fontWeight: '700' },
   fxChartLegend: { flexDirection: 'row', justifyContent: 'center', gap: 16, marginTop: 8 },

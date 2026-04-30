@@ -8,6 +8,18 @@ const BOT_CSV_URL = 'https://rate.bot.com.tw/xrt/flcsv/0/day';
 // Cache duration in milliseconds (1 minute)
 const CACHE_DURATION = 60 * 1000;
 
+// ── L1 in-memory price cache (Fix 5) ──────────────────────────────────────
+// Avoids a Supabase round-trip when the same price is requested again within
+// the same session.  Key: `${symbol}::${marketType}`, value: { data, timestamp }
+const _priceMemCache = new Map();
+
+// ── TW stock list cache (Fix 2) ───────────────────────────────────────────
+// The full TaiwanStockInfo list is ~10 kB and changes at most daily.
+// Caching it for 1 hour avoids re-fetching on every search keystroke.
+let _twStockCache = null;
+let _twStockCacheTime = 0;
+const TW_STOCK_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
 const BINANCE_BASE_URL = 'https://api.binance.com/api/v3';
 const STABLECOINS = new Set(['USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'FDUSD']);
 
@@ -307,7 +319,10 @@ export const fetchCryptoPrice = async (symbol) => {
     const response = await fetch(
       `${COINGECKO_BASE_URL}/simple/price?ids=${coinId}&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true`
     );
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      console.warn(`CoinGecko HTTP ${response.status} for ${upperSymbol} — skipping`);
+      return null;
+    }
     const text = await response.text();
     let data;
     try { data = JSON.parse(text); } catch { throw new Error('Invalid JSON from CoinGecko'); }
@@ -330,6 +345,18 @@ export const fetchCryptoPrice = async (symbol) => {
     console.error('Error fetching crypto price:', error);
     throw error;
   }
+};
+
+/**
+ * Batch fetch TW stock prices via parallel individual calls.
+ * Returns a map: { [symbol]: priceData | null }
+ */
+export const fetchTWStockPriceBatch = async (symbols) => {
+  if (!symbols || symbols.length === 0) return {};
+  const results = await Promise.allSettled(symbols.map(s => fetchTWStockPrice(s)));
+  return Object.fromEntries(
+    symbols.map((s, i) => [s, results[i].status === 'fulfilled' ? results[i].value : null])
+  );
 };
 
 /**
@@ -437,17 +464,16 @@ export const fetchCryptoPriceBatch = async (symbols) => {
     }
   } catch { /* fall through to individual fallback */ }
 
-  // Individual fallback for missing symbols
-  await Promise.allSettled(
-    toFetch
-      .filter(sym => !result[sym])
-      .map(async (sym) => {
-        try {
-          const priceData = await fetchCryptoPrice(sym);
-          if (priceData) result[sym] = priceData;
-        } catch {}
-      })
-  );
+  // Individual fallback for missing symbols — sequential with 200ms delay to avoid CoinGecko 429
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const missingSymbols = toFetch.filter(sym => !result[sym]);
+  for (const sym of missingSymbols) {
+    try {
+      const priceData = await fetchCryptoPrice(sym);
+      if (priceData) result[sym] = priceData;
+    } catch (e) {}
+    await sleep(200);
+  }
 
   return result;
 };
@@ -687,33 +713,41 @@ export const searchAssets = async (query, marketType = 'all') => {
 };
 
 /**
- * Search Taiwan stocks via FinMind
+ * Search Taiwan stocks via FinMind.
+ * Fix 2: The full stock list is cached in memory for 1 hour so repeated searches
+ * don't re-download the entire TaiwanStockInfo dataset.
  */
 const searchTWStocks = async (query) => {
   try {
-    const response = await fetch(`${FINMIND_BASE_URL}/data?dataset=TaiwanStockInfo`);
-    const data = await response.json();
-
-    if (data.status === 200 && data.data) {
-      const seen = new Set();
-      return data.data
-        .filter(stock =>
-          stock.stock_id.includes(query) ||
-          stock.stock_name.includes(query)
-        )
-        .filter(stock => {
-          if (seen.has(stock.stock_id)) return false;
-          seen.add(stock.stock_id);
-          return true;
-        })
-        .slice(0, 20)
-        .map(stock => ({
-          symbol: stock.stock_id,
-          name: stock.stock_name,
-          market_type: 'TW',
-        }));
+    // Populate or refresh the module-level cache
+    if (!_twStockCache || Date.now() - _twStockCacheTime >= TW_STOCK_CACHE_TTL) {
+      const response = await fetch(`${FINMIND_BASE_URL}/data?dataset=TaiwanStockInfo`);
+      const data = await response.json();
+      if (data.status === 200 && data.data) {
+        _twStockCache = data.data;
+        _twStockCacheTime = Date.now();
+      }
     }
-    return [];
+
+    if (!_twStockCache) return [];
+
+    const seen = new Set();
+    return _twStockCache
+      .filter(stock =>
+        stock.stock_id.includes(query) ||
+        stock.stock_name.includes(query)
+      )
+      .filter(stock => {
+        if (seen.has(stock.stock_id)) return false;
+        seen.add(stock.stock_id);
+        return true;
+      })
+      .slice(0, 20)
+      .map(stock => ({
+        symbol: stock.stock_id,
+        name: stock.stock_name,
+        market_type: 'TW',
+      }));
   } catch (error) {
     console.error('Error searching TW stocks:', error);
     return [];
@@ -1035,13 +1069,98 @@ export const fetchHistoricalPrices = async (symbol, marketType) => {
 };
 
 /**
- * Convert amount to base currency
+ * Batch-fetch exchange rates for multiple currencies → baseCurrency in one shot.
+ * Fix 1: replaces the N individual fetchExchangeRate calls that each query
+ * Supabase + BOT CSV.  Strategy:
+ *  1. One Supabase query for all pairs at once.
+ *  2. One BOT CSV fetch for any still-missing pairs.
+ *  3. Individual fallback only for exotic currencies absent from BOT.
+ *
+ * Returns { USD: 32.5, JPY: 0.22, … } (rate × amount = baseCurrency amount)
  */
-export const convertToBaseCurrency = async (amount, fromCurrency, baseCurrency) => {
+export const fetchExchangeRatesBatch = async (currencies, baseCurrency) => {
+  const unique = [...new Set(currencies)].filter(c => c && c !== baseCurrency);
+  if (unique.length === 0) return {};
+
+  const ratesMap = {};
+
+  // 1. Single Supabase query for all pairs
+  try {
+    const { data: cached } = await supabase
+      .from('exchange_rates')
+      .select('*')
+      .in('from_currency', unique)
+      .eq('to_currency', baseCurrency);
+
+    const nowMs = Date.now();
+    for (const row of cached || []) {
+      if ((nowMs - new Date(row.updated_at).getTime()) < CACHE_DURATION) {
+        ratesMap[row.from_currency] = parseFloat(row.rate);
+      }
+    }
+  } catch { /* proceed to fetch */ }
+
+  const missing = unique.filter(c => ratesMap[c] == null);
+  if (missing.length === 0) return ratesMap;
+
+  // 2. Fetch BOT CSV once for all missing currencies
+  try {
+    const botRates = await fetchBOTRates(); // single HTTP request
+    const upserts = [];
+
+    for (const currency of missing) {
+      let rate = null;
+      if (baseCurrency === 'TWD') {
+        rate = botRates[currency]?.sellSpot ?? null;
+      } else if (currency === 'TWD') {
+        const rTo = botRates[baseCurrency]?.sellSpot;
+        rate = rTo ? 1 / rTo : null;
+      } else {
+        const rFrom = botRates[currency]?.sellSpot;
+        const rTo   = botRates[baseCurrency]?.sellSpot;
+        rate = (rFrom && rTo) ? rFrom / rTo : null;
+      }
+
+      if (rate != null) {
+        ratesMap[currency] = rate;
+        upserts.push({
+          from_currency: currency,
+          to_currency: baseCurrency,
+          rate,
+          updated_at: new Date().toISOString(),
+        });
+      }
+    }
+
+    if (upserts.length > 0) {
+      supabase.from('exchange_rates').upsert(upserts, { onConflict: 'from_currency,to_currency' });
+    }
+  } catch { /* fall through to individual fallbacks */ }
+
+  // 3. Individual fallback for any exotic currencies still missing
+  const stillMissing = missing.filter(c => ratesMap[c] == null);
+  if (stillMissing.length > 0) {
+    await Promise.allSettled(
+      stillMissing.map(async (currency) => {
+        try { ratesMap[currency] = await fetchExchangeRate(currency, baseCurrency); } catch {}
+      })
+    );
+  }
+
+  return ratesMap;
+};
+
+/**
+ * Convert amount to base currency.
+ * Fix 1: accepts an optional pre-fetched ratesMap to skip the Supabase lookup.
+ */
+export const convertToBaseCurrency = async (amount, fromCurrency, baseCurrency, ratesMap = null) => {
   if (fromCurrency === baseCurrency) return amount;
 
   try {
-    const rate = await fetchExchangeRate(fromCurrency, baseCurrency);
+    const rate = (ratesMap && ratesMap[fromCurrency] != null)
+      ? ratesMap[fromCurrency]
+      : await fetchExchangeRate(fromCurrency, baseCurrency);
     return amount * rate;
   } catch (error) {
     console.error('Error converting currency:', error);
@@ -1052,6 +1171,13 @@ export const convertToBaseCurrency = async (amount, fromCurrency, baseCurrency) 
 // --- Helpers ---
 
 const getCachedPrice = async (symbol, marketType) => {
+  // Fix 5: check L1 in-memory cache before hitting Supabase
+  const memKey = `${symbol}::${marketType}`;
+  const memEntry = _priceMemCache.get(memKey);
+  if (memEntry && (Date.now() - memEntry.timestamp) < CACHE_DURATION) {
+    return memEntry.data;
+  }
+
   try {
     const { data, error } = await supabase
       .from('price_cache')
@@ -1063,7 +1189,7 @@ const getCachedPrice = async (symbol, marketType) => {
     if (error || !data) return null;
 
     if (isRecentCache(data.updated_at)) {
-      return {
+      const priceData = {
         symbol: data.symbol,
         price: parseFloat(data.price),
         change_percent: parseFloat(data.change_percent),
@@ -1071,6 +1197,9 @@ const getCachedPrice = async (symbol, marketType) => {
         market_type: data.market_type,
         price_time: data.updated_at,
       };
+      // Populate L1 cache from Supabase hit
+      _priceMemCache.set(memKey, { data: priceData, timestamp: Date.now() });
+      return priceData;
     }
     return null;
   } catch {
@@ -1080,6 +1209,10 @@ const getCachedPrice = async (symbol, marketType) => {
 
 const cachePrice = async (priceData) => {
   try {
+    // Fix 5: write to L1 in-memory cache immediately (no round-trip needed)
+    const memKey = `${priceData.symbol}::${priceData.market_type}`;
+    _priceMemCache.set(memKey, { data: priceData, timestamp: Date.now() });
+
     await supabase
       .from('price_cache')
       .upsert({

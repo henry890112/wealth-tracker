@@ -25,7 +25,7 @@ const FREQUENCY_MONTHS = { once: 0, monthly: 1, quarterly: 3, semi_annual: 6, ye
 const CATEGORY_COLORS = {
   薪資: '#3b82f6',
   租金: '#f59e0b',
-  借款: '#ef4444',
+  借款: '#E07070',
   投資回收: '#10b981',
   其他: '#6b7280',
 };
@@ -212,7 +212,7 @@ export default function ReceivablesScreen() {
       </View>
 
       {loading ? (
-        <ActivityIndicator size="large" color="#16a34a" style={{ marginTop: 40 }} />
+        <ActivityIndicator size="large" color="#F7A600" style={{ marginTop: 40 }} />
       ) : (
         <ScrollView
           contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 100 }}
@@ -344,11 +344,11 @@ export default function ReceivablesScreen() {
                         <TouchableOpacity
                           key={cur}
                           style={[styles.chip,
-                            { borderColor: form.currency === cur ? '#16a34a' : c.border,
+                            { borderColor: form.currency === cur ? '#F7A600' : c.border,
                               backgroundColor: form.currency === cur ? 'rgba(22,163,74,0.12)' : c.input }]}
                           onPress={() => setForm(f => ({ ...f, currency: cur }))}
                         >
-                          <Text style={[styles.chipText, { color: form.currency === cur ? '#16a34a' : c.textSub }]}>
+                          <Text style={[styles.chipText, { color: form.currency === cur ? '#F7A600' : c.textSub }]}>
                             {cur}
                           </Text>
                         </TouchableOpacity>
@@ -364,11 +364,11 @@ export default function ReceivablesScreen() {
                     <TouchableOpacity
                       key={f.key}
                       style={[styles.chip,
-                        { borderColor: form.frequency === f.key ? '#16a34a' : c.border,
+                        { borderColor: form.frequency === f.key ? '#F7A600' : c.border,
                           backgroundColor: form.frequency === f.key ? 'rgba(22,163,74,0.12)' : c.input }]}
                       onPress={() => setForm(p => ({ ...p, frequency: f.key }))}
                     >
-                      <Text style={[styles.chipText, { color: form.frequency === f.key ? '#16a34a' : c.textSub }]}>
+                      <Text style={[styles.chipText, { color: form.frequency === f.key ? '#F7A600' : c.textSub }]}>
                         {f.label}
                       </Text>
                     </TouchableOpacity>
@@ -382,11 +382,11 @@ export default function ReceivablesScreen() {
                     <TouchableOpacity
                       key={cat}
                       style={[styles.chip,
-                        { borderColor: form.category === cat ? '#16a34a' : c.border,
+                        { borderColor: form.category === cat ? '#F7A600' : c.border,
                           backgroundColor: form.category === cat ? 'rgba(22,163,74,0.12)' : c.input }]}
                       onPress={() => setForm(f => ({ ...f, category: cat }))}
                     >
-                      <Text style={[styles.chipText, { color: form.category === cat ? '#16a34a' : c.textSub }]}>
+                      <Text style={[styles.chipText, { color: form.category === cat ? '#F7A600' : c.textSub }]}>
                         {cat}
                       </Text>
                     </TouchableOpacity>
@@ -494,7 +494,7 @@ const styles = StyleSheet.create({
     width: 54,
     height: 54,
     borderRadius: 27,
-    backgroundColor: '#16a34a',
+    backgroundColor: '#F7A600',
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
@@ -541,7 +541,7 @@ const styles = StyleSheet.create({
   chipText: { fontSize: 13 },
 
   saveBtn: {
-    backgroundColor: '#16a34a',
+    backgroundColor: '#F7A600',
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
@@ -555,5 +555,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 8,
   },
-  deleteBtnText: { color: '#ef4444', fontSize: 15 },
+  deleteBtnText: { color: '#E07070', fontSize: 15 },
 });

@@ -26,7 +26,7 @@ const CATEGORY_COLORS = {
   交通: '#f59e0b',
   訂閱: '#8b5cf6',
   保險: '#06b6d4',
-  貸款: '#ef4444',
+  貸款: '#F03030',
   餐飲: '#f97316',
   其他: '#6b7280',
 };
@@ -214,7 +214,7 @@ export default function FixedExpensesScreen() {
       </View>
 
       {loading ? (
-        <ActivityIndicator size="large" color="#16a34a" style={{ marginTop: 40 }} />
+        <ActivityIndicator size="large" color="#F7A600" style={{ marginTop: 40 }} />
       ) : (
         <ScrollView
           contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 100 }}
@@ -265,7 +265,7 @@ export default function FixedExpensesScreen() {
                           ) : null}
                         </View>
                         <View style={styles.cardRight}>
-                          <Text style={{ color: '#ef4444', fontSize: 18, fontWeight: '700' }}>
+                          <Text style={{ color: '#F03030', fontSize: 18, fontWeight: '700' }}>
                             {convertedAmount.toLocaleString('zh-TW', { maximumFractionDigits: 0 })}
                           </Text>
                           {item.due_day ? (
@@ -348,11 +348,11 @@ export default function FixedExpensesScreen() {
                         <TouchableOpacity
                           key={cur}
                           style={[styles.chip, form.currency === cur && styles.chipActive,
-                            { borderColor: form.currency === cur ? '#16a34a' : c.border,
+                            { borderColor: form.currency === cur ? '#F7A600' : c.border,
                               backgroundColor: form.currency === cur ? 'rgba(22,163,74,0.12)' : c.input }]}
                           onPress={() => setForm(f => ({ ...f, currency: cur }))}
                         >
-                          <Text style={[styles.chipText, { color: form.currency === cur ? '#16a34a' : c.textSub }]}>
+                          <Text style={[styles.chipText, { color: form.currency === cur ? '#F7A600' : c.textSub }]}>
                             {cur}
                           </Text>
                         </TouchableOpacity>
@@ -379,11 +379,11 @@ export default function FixedExpensesScreen() {
                     <TouchableOpacity
                       key={f.key}
                       style={[styles.chip, form.frequency === f.key && styles.chipActive,
-                        { borderColor: form.frequency === f.key ? '#16a34a' : c.border,
+                        { borderColor: form.frequency === f.key ? '#F7A600' : c.border,
                           backgroundColor: form.frequency === f.key ? 'rgba(22,163,74,0.12)' : c.input }]}
                       onPress={() => setForm(p => ({ ...p, frequency: f.key }))}
                     >
-                      <Text style={[styles.chipText, { color: form.frequency === f.key ? '#16a34a' : c.textSub }]}>
+                      <Text style={[styles.chipText, { color: form.frequency === f.key ? '#F7A600' : c.textSub }]}>
                         {f.label}
                       </Text>
                     </TouchableOpacity>
@@ -397,11 +397,11 @@ export default function FixedExpensesScreen() {
                     <TouchableOpacity
                       key={cat}
                       style={[styles.chip, form.category === cat && styles.chipActive,
-                        { borderColor: form.category === cat ? '#16a34a' : c.border,
+                        { borderColor: form.category === cat ? '#F7A600' : c.border,
                           backgroundColor: form.category === cat ? 'rgba(22,163,74,0.12)' : c.input }]}
                       onPress={() => setForm(f => ({ ...f, category: cat }))}
                     >
-                      <Text style={[styles.chipText, { color: form.category === cat ? '#16a34a' : c.textSub }]}>
+                      <Text style={[styles.chipText, { color: form.category === cat ? '#F7A600' : c.textSub }]}>
                         {cat}
                       </Text>
                     </TouchableOpacity>
@@ -510,7 +510,7 @@ const styles = StyleSheet.create({
     width: 54,
     height: 54,
     borderRadius: 27,
-    backgroundColor: '#16a34a',
+    backgroundColor: '#F7A600',
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
@@ -558,7 +558,7 @@ const styles = StyleSheet.create({
   chipText: { fontSize: 13 },
 
   saveBtn: {
-    backgroundColor: '#16a34a',
+    backgroundColor: '#F7A600',
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
@@ -572,5 +572,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 8,
   },
-  deleteBtnText: { color: '#ef4444', fontSize: 15 },
+  deleteBtnText: { color: '#F03030', fontSize: 15 },
 });

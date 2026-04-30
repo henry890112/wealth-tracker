@@ -374,8 +374,8 @@ export default function SettingsScreen() {
             onPress={handleExportCSV}
           >
             <View style={styles.optionContent}>
-              <Download size={20} color="#16a34a" />
-              <Text style={[styles.optionText, { color: '#16a34a', fontWeight: '500' }]}>匯出 CSV</Text>
+              <Download size={20} color="#F7A600" />
+              <Text style={[styles.optionText, { color: '#F7A600', fontWeight: '500' }]}>匯出 CSV</Text>
             </View>
           </TouchableOpacity>
 
@@ -384,8 +384,8 @@ export default function SettingsScreen() {
             onPress={handleBackupToCloud}
           >
             <View style={styles.optionContent}>
-              <CloudUpload size={20} color="#16a34a" />
-              <Text style={[styles.optionText, { color: '#16a34a', fontWeight: '500' }]}>備份到 iCloud</Text>
+              <CloudUpload size={20} color="#F7A600" />
+              <Text style={[styles.optionText, { color: '#F7A600', fontWeight: '500' }]}>備份到 iCloud</Text>
             </View>
           </TouchableOpacity>
 
@@ -404,7 +404,7 @@ export default function SettingsScreen() {
             onPress={handleSignOut}
           >
             <View style={styles.optionContent}>
-              <LogOut size={20} color="#ef4444" />
+              <LogOut size={20} color="#E07070" />
               <Text style={[styles.optionText, styles.dangerText]}>登出</Text>
             </View>
           </TouchableOpacity>
@@ -497,7 +497,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   dangerText: {
-    color: '#ef4444',
+    color: '#E07070',
     fontWeight: '500',
   },
   footer: {

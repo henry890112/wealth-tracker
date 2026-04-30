@@ -11,14 +11,14 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/ThemeContext';
 
-const PRIMARY = '#16a34a';
+const PRIMARY = '#F7A600';
 
 const CATEGORIES = [
-  { key: 'liquid',     label: '流動資產', color: '#16a34a', bg: '#dcfce7', desc: '現金、銀行存款、活存' },
+  { key: 'liquid',     label: '流動資產', color: '#0DBD8B', bg: '#dcfce7', desc: '現金、銀行存款、活存' },
   { key: 'investment', label: '投資資產', color: '#f59e0b', bg: '#fef3c7', desc: '股票、基金、虛擬貨幣' },
   { key: 'fixed',      label: '固定資產', color: '#94a3b8', bg: '#f1f5f9', desc: '不動產、車輛、設備' },
   { key: 'receivable', label: '應收款項', color: '#0d9488', bg: '#ccfbf1', desc: '借給他人的款項' },
-  { key: 'liability',  label: '負債',     color: '#ef4444', bg: '#fee2e2', desc: '貸款、信用卡、債務' },
+  { key: 'liability',  label: '負債',     color: '#F03030', bg: '#fee2e2', desc: '貸款、信用卡、債務' },
 ];
 
 const CURRENCIES = ['TWD', 'USD', 'EUR', 'JPY', 'CNY', 'HKD', 'GBP', 'AUD'];

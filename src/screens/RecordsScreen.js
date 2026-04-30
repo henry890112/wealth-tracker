@@ -9,8 +9,8 @@ import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/ThemeContext';
 
 const TYPE_CONFIG = {
-  BUY:    { label: '買入', color: '#16a34a', bg: '#dcfce7' },
-  SELL:   { label: '賣出', color: '#ef4444', bg: '#fee2e2' },
+  BUY:    { label: '買入', color: '#0DBD8B', bg: 'rgba(13,189,139,0.12)' },
+  SELL:   { label: '賣出', color: '#F03030', bg: 'rgba(240,48,48,0.12)' },
   ADJUST: { label: '調整', color: '#2563eb', bg: '#dbeafe' },
 };
 
@@ -86,7 +86,7 @@ export default function RecordsScreen() {
   if (loading) {
     return (
       <View style={[styles.loading, { backgroundColor: colors.bg }]}>
-        <ActivityIndicator size="large" color="#16a34a" />
+        <ActivityIndicator size="large" color="#F7A600" />
       </View>
     );
   }
@@ -116,7 +116,7 @@ export default function RecordsScreen() {
     <View style={[{ flex: 1 }, { backgroundColor: colors.bg }]}>
       {/* Filter bar */}
       <View style={[styles.filterBar, { backgroundColor: colors.card, borderBottomColor: colors.borderLight }]}>
-        {renderChip(TYPE_FILTERS,   typeFilter,   setTypeFilter,   '#16a34a')}
+        {renderChip(TYPE_FILTERS,   typeFilter,   setTypeFilter,   '#F7A600')}
         {renderChip(MARKET_FILTERS, marketFilter, setMarketFilter, '#2563eb')}
         {assetFilters.length > 2 && renderChip(assetFilters, assetFilter, setAssetFilter, '#7c3aed')}
       </View>

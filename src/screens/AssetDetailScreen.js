@@ -38,8 +38,8 @@ const CATEGORIES = [
 ];
 
 const TRANSACTION_TYPE_COLORS = {
-  BUY: '#10b981',
-  SELL: '#E07070',
+  BUY: '#0DBD8B',
+  SELL: '#F03030',
   ADJUST: '#f59e0b',
 };
 
@@ -586,7 +586,7 @@ export default function AssetDetailScreen() {
             return (
               <View style={styles.assetDetailRow}>
                 <Text style={styles.assetDetailLabel}>當前損益</Text>
-                <Text style={[styles.assetDetailValue, { color: isUp ? '#16a34a' : '#E07070', fontWeight: '700' }]}>
+                <Text style={[styles.assetDetailValue, { color: isUp ? '#0DBD8B' : '#F03030', fontWeight: '700' }]}>
                   {isUp ? '+' : ''}{profile?.base_currency || 'TWD'} {Math.round(pnl).toLocaleString('zh-TW')}
                   {'  '}({isUp ? '+' : ''}{pnl_pct.toFixed(2)}%)
                 </Text>
@@ -625,7 +625,7 @@ export default function AssetDetailScreen() {
             <Text style={styles.editButtonText}>編輯</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.deleteButton} onPress={handleDelete}>
-            <Trash2 size={18} color="#E07070" />
+            <Trash2 size={18} color="#F03030" />
             <Text style={styles.deleteButtonText}>刪除</Text>
           </TouchableOpacity>
         </View>
@@ -1019,14 +1019,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'white',
     borderWidth: 1,
-    borderColor: '#E07070',
+    borderColor: '#F03030',
     paddingHorizontal: 14,
     paddingVertical: 12,
     borderRadius: 8,
     gap: 5,
   },
   deleteButtonText: {
-    color: '#E07070',
+    color: '#F03030',
     fontSize: 14,
     fontWeight: '600',
   },

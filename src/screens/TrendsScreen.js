@@ -2,9 +2,12 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, Dimensions, ActivityIndicator,
   TouchableOpacity, Modal, Platform, Alert, RefreshControl, Animated,
+  PanResponder,
 } from 'react-native';
-import { LineChart } from 'react-native-chart-kit';
-import Svg, { Path, Circle, Text as SvgText } from 'react-native-svg';
+import Svg, {
+  Path, Circle, Text as SvgText,
+  Defs, LinearGradient, Stop, Line as SvgLine,
+} from 'react-native-svg';
 import { X, Calendar } from 'lucide-react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../lib/supabase';
@@ -12,7 +15,7 @@ import { convertToBaseCurrency } from '../services/api';
 import { useTheme } from '../lib/ThemeContext';
 
 const { width: screenWidth } = Dimensions.get('window');
-const PRIMARY = '#16a34a';
+const PRIMARY = '#F7A600';
 
 const PERIODS = [
   { label: '7d',   days: 7 },
@@ -23,7 +26,7 @@ const PERIODS = [
 ];
 
 const CATEGORY_CONFIG = {
-  liquid:     { label: '流動資產', color: '#16a34a' },
+  liquid:     { label: '流動資產', color: '#0DBD8B' },
   investment: { label: '投資資產', color: '#f59e0b' },
   fixed:      { label: '固定資產', color: '#94a3b8' },
   receivable: { label: '應收款項', color: '#0d9488' },
@@ -39,12 +42,14 @@ const MARKET_TYPE_CONFIG = {
 const DRILL_PALETTE = ['#6366f1', '#ec4899', '#14b8a6', '#f97316', '#8b5cf6', '#06b6d4'];
 
 const FILTER_OPTIONS = [
-  { label: '全部',  key: 'all' },
-  { label: '台股',  key: 'TW' },
-  { label: '美股',  key: 'US' },
-  { label: '虛幣',  key: 'Crypto' },
-  { label: '外幣',  key: 'liquid' },
-  { label: '其他',  key: 'other' },
+  { label: '全部',    key: 'all' },
+  { label: '台股',    key: 'TW' },
+  { label: '美股',    key: 'US' },
+  { label: '虛幣',    key: 'Crypto' },
+  { label: '外幣',    key: 'liquid' },
+  { label: '固定資產', key: 'fixed' },
+  { label: '應收款項', key: 'receivable' },
+  { label: '其他',    key: 'other' },
 ];
 
 const formatAmount = (amount) => {
@@ -109,6 +114,210 @@ function WheelColumn({ data, selectedValue, onValueChange, formatLabel, colors, 
         );
       })}
     </ScrollView>
+  );
+}
+
+// ── Straight Polyline Path ──
+function buildSmoothPath(pts) {
+  if (pts.length === 0) return '';
+  return pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
+}
+
+// ── Amber Gradient Area Chart with Crosshair Tooltip ──
+function TrendLineChart({ snapshots, currency }) {
+  const { isDark } = useTheme();
+  const CHART_W = screenWidth - 64;
+  const CHART_H = 200;
+  const PAD_TOP = 16;
+  const PAD_BOTTOM = 26;
+  const PAD_H = 6;
+  const plotW = CHART_W - PAD_H * 2;
+  const plotH = CHART_H - PAD_TOP - PAD_BOTTOM;
+
+  const [touchIdx, setTouchIdx] = useState(null);
+  const snapshotsRef = useRef(snapshots);
+  snapshotsRef.current = snapshots;
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (e) => {
+        const x = e.nativeEvent.locationX;
+        const n = snapshotsRef.current.length;
+        if (n < 2) return;
+        const idx = Math.round(Math.max(0, Math.min(1, (x - PAD_H) / plotW)) * (n - 1));
+        setTouchIdx(idx);
+      },
+      onPanResponderMove: (e) => {
+        const x = e.nativeEvent.locationX;
+        const n = snapshotsRef.current.length;
+        if (n < 2) return;
+        const idx = Math.round(Math.max(0, Math.min(1, (x - PAD_H) / plotW)) * (n - 1));
+        setTouchIdx(idx);
+      },
+      onPanResponderRelease: () => setTouchIdx(null),
+      onPanResponderTerminate: () => setTouchIdx(null),
+    })
+  ).current;
+
+  if (snapshots.length < 2) return null;
+
+  const values = snapshots.map(s => parseFloat(s.net_worth_base));
+  const minVal = Math.min(...values);
+  const maxVal = Math.max(...values);
+  const maxIdx = values.indexOf(maxVal);
+  const minIdx = values.indexOf(minVal);
+  const vRange = maxVal - minVal || Math.abs(minVal) * 0.1 || 1;
+  const vPad = vRange * 0.15;
+  const yMin = minVal - vPad;
+  const yMax = maxVal + vPad;
+
+  const toX = (i) => PAD_H + (i / (snapshots.length - 1)) * plotW;
+  const toY = (val) => PAD_TOP + plotH * (1 - (val - yMin) / (yMax - yMin));
+
+  const pts = snapshots.map((s, i) => ({
+    x: toX(i),
+    y: toY(parseFloat(s.net_worth_base)),
+    date: s.snapshot_date,
+    value: parseFloat(s.net_worth_base),
+  }));
+
+  const linePath = buildSmoothPath(pts);
+  const bottomY = PAD_TOP + plotH;
+  const areaPath = `${linePath} L ${pts[pts.length - 1].x} ${bottomY} L ${pts[0].x} ${bottomY} Z`;
+
+  // 5 evenly spaced X labels
+  const nLabels = Math.min(5, snapshots.length);
+  const xLabels = Array.from({ length: nLabels }, (_, k) => {
+    const idx = Math.round(k / (nLabels - 1) * (snapshots.length - 1));
+    const d = new Date(snapshots[idx].snapshot_date);
+    return {
+      x: toX(idx),
+      label: `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')}`,
+    };
+  });
+
+  const touchPt = touchIdx != null ? pts[touchIdx] : null;
+  const tooltipLeft = touchPt
+    ? Math.min(Math.max(touchPt.x - 55, 4), CHART_W - 116)
+    : 0;
+
+  // ── Theme-dependent colours ──
+  const chartBg        = isDark ? '#0f1117' : 'transparent';
+  const labelColor     = isDark ? '#9ca3af' : '#6b7280';
+  const xLabelColor    = isDark ? '#4b5563' : '#6b7280';
+  const crosshairDotBg = isDark ? '#0f1117' : '#ffffff';
+  const crosshairLine  = isDark ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.18)';
+  const tooltipBg      = isDark ? 'rgba(10,10,20,0.93)' : 'rgba(255,255,255,0.96)';
+  const tooltipBorder  = isDark ? 'rgba(245,158,11,0.35)' : 'rgba(245,158,11,0.4)';
+  const tooltipDateColor = '#6b7280';
+
+  const gradId = `trendAreaGrad_main`;
+
+  return (
+    <View
+      style={{ borderRadius: 12, overflow: 'hidden', backgroundColor: isDark ? '#0f1117' : 'transparent', marginTop: 8 }}
+      {...panResponder.panHandlers}
+    >
+      <Svg width={CHART_W} height={CHART_H} style={{ overflow: 'hidden', backgroundColor: 'transparent' }}>
+        <Defs>
+          <LinearGradient id={gradId} x1="0" y1="0" x2="0" y2={CHART_H} gradientUnits="userSpaceOnUse">
+            <Stop offset="0" stopColor="#f59e0b" stopOpacity={isDark ? 0.5 : 0.4} />
+            <Stop offset="1" stopColor={isDark ? '#0f1117' : '#fff7ed'} stopOpacity={1} />
+          </LinearGradient>
+        </Defs>
+
+        {/* Gradient area fill */}
+        <Path d={areaPath} fill={`url(#${gradId})`} stroke="none" />
+
+        {/* Line */}
+        <Path
+          d={linePath}
+          fill="none"
+          stroke="#f59e0b"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+
+        {/* X-axis date labels */}
+        {xLabels.map((lbl, i) => (
+          <SvgText
+            key={i}
+            x={lbl.x}
+            y={CHART_H - 5}
+            textAnchor="middle"
+            fill={xLabelColor}
+            fontSize="10"
+          >
+            {lbl.label}
+          </SvgText>
+        ))}
+
+        {/* Max / Min value labels */}
+        {(() => {
+          const maxLabelX = Math.max(4, Math.min(toX(maxIdx), CHART_W - 100));
+          const maxLabelY = Math.max(PAD_TOP + 12, toY(maxVal) - 6);
+          const minLabelX = Math.max(4, Math.min(toX(minIdx), CHART_W - 100));
+          const minLabelY = Math.min(PAD_TOP + plotH - 4, toY(minVal) + 14);
+          const fmtLabel = (v) => `${Math.round(v).toLocaleString('zh-TW')} ${currency}`;
+          return (
+            <>
+              <SvgText x={maxLabelX} y={maxLabelY} fill={labelColor} fontSize="11" fontWeight="500">
+                {fmtLabel(maxVal)}
+              </SvgText>
+              <SvgText x={minLabelX} y={minLabelY} fill={labelColor} fontSize="11" fontWeight="500">
+                {fmtLabel(minVal)}
+              </SvgText>
+            </>
+          );
+        })()}
+
+        {/* Crosshair + dot */}
+        {touchPt && (
+          <>
+            <SvgLine
+              x1={touchPt.x} y1={PAD_TOP}
+              x2={touchPt.x} y2={bottomY}
+              stroke={crosshairLine}
+              strokeWidth="1"
+              strokeDasharray="4 4"
+            />
+            <Circle cx={touchPt.x} cy={touchPt.y} r={7} fill={crosshairDotBg} stroke="#f59e0b" strokeWidth="2.5" />
+            <Circle cx={touchPt.x} cy={touchPt.y} r={3} fill="#f59e0b" />
+          </>
+        )}
+      </Svg>
+
+      {/* Tooltip */}
+      {touchPt && (
+        <View
+          style={{
+            position: 'absolute',
+            top: Math.max(2, touchPt.y - 48),
+            left: tooltipLeft,
+            backgroundColor: tooltipBg,
+            borderRadius: 8,
+            paddingHorizontal: 10,
+            paddingVertical: 6,
+            borderWidth: 1,
+            borderColor: tooltipBorder,
+            minWidth: 112,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: isDark ? 0 : 0.08,
+            shadowRadius: 6,
+          }}
+          pointerEvents="none"
+        >
+          <Text style={{ color: tooltipDateColor, fontSize: 10, marginBottom: 2 }}>{touchPt.date}</Text>
+          <Text style={{ color: '#f59e0b', fontSize: 13, fontWeight: '700' }}>
+            {Math.round(touchPt.value).toLocaleString('zh-TW')}
+          </Text>
+        </View>
+      )}
+    </View>
   );
 }
 
@@ -311,6 +520,8 @@ export default function TrendsScreen() {
       if (a.market_type === 'US') return 'US';
       if (a.market_type === 'Crypto') return 'Crypto';
       if (a.category === 'liquid') return 'liquid';
+      if (a.category === 'fixed') return 'fixed';
+      if (a.category === 'receivable') return 'receivable';
       return 'other';
     };
     const totals = {};
@@ -447,40 +658,6 @@ export default function TrendsScreen() {
 
   const hasData = snapshots.length > 0;
 
-  const getChartData = () => {
-    if (!hasData) return { data: { labels: [''], datasets: [{ data: [0] }] }, baseline: 0 };
-    const values = snapshots.map(s => Math.round(parseFloat(s.net_worth_base)));
-    const minVal = Math.min(...values);
-    const maxVal = Math.max(...values);
-    const range = maxVal - minVal;
-    // Add 15% padding above and below so the line never touches the edges
-    const padding = range > 0 ? range * 0.15 : Math.abs(minVal) * 0.1 || 100;
-    const baseline = Math.max(0, minVal - padding);
-
-    const step = Math.max(1, Math.ceil(snapshots.length / 6));
-    const labels = snapshots
-      .filter((_, i) => i % step === 0 || i === snapshots.length - 1)
-      .map(s => {
-        const d = new Date(s.snapshot_date);
-        return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')}`;
-      });
-    return {
-      data: {
-        labels,
-        datasets: [{
-          data: values.map(v => v - baseline),
-          color: (opacity = 1) => `rgba(22, 163, 74, ${opacity})`,
-          strokeWidth: 2,
-        }],
-      },
-      baseline,
-    };
-  };
-
-  const fmtYLabel = (val, baseline) => {
-    const abs = parseFloat(val) + baseline;
-    return Math.round(abs).toLocaleString('zh-TW');
-  };
 
   let changeText = null;
   if (hasData && snapshots.length >= 2) {
@@ -551,10 +728,15 @@ export default function TrendsScreen() {
       case 'liquid':
         filtered = detailedAssets.filter(a => a.category === 'liquid');
         break;
+      case 'fixed':
+        filtered = detailedAssets.filter(a => a.category === 'fixed');
+        break;
+      case 'receivable':
+        filtered = detailedAssets.filter(a => a.category === 'receivable');
+        break;
       case 'other':
         filtered = detailedAssets.filter(a =>
-          a.category === 'fixed' || a.category === 'receivable' ||
-          (a.category === 'investment' && a.market_type === 'other')
+          a.category === 'investment' && !['TW', 'US', 'Crypto'].includes(a.market_type)
         );
         break;
       default:
@@ -579,7 +761,6 @@ export default function TrendsScreen() {
       ? getDrilldownData(drilldownCategory)
       : categoryTotals;
   const donutTotal = currentDonutData.reduce((s, d) => s + d.value, 0);
-  const { data: chartData, baseline: chartBaseline } = getChartData();
 
   const selectedFilterLabel = FILTER_OPTIONS.find(o => o.key === selectedFilter)?.label || '全部';
 
@@ -671,27 +852,7 @@ export default function TrendsScreen() {
             </View>
           ) : snapshots.length >= 2 ? (
             <Animated.View style={{ opacity: chartOpacity }}>
-              <LineChart
-                data={chartData}
-                width={screenWidth - 64}
-                height={200}
-                yAxisWidth={72}
-                formatYLabel={(val) => fmtYLabel(val, chartBaseline)}
-                chartConfig={{
-                  backgroundGradientFrom: colors.card,
-                  backgroundGradientTo: colors.card,
-                  decimalPlaces: 0,
-                  color: (opacity = 1) => `rgba(22, 163, 74, ${opacity})`,
-                  labelColor: (opacity = 1) => `rgba(148, 163, 184, ${opacity})`,
-                  fillShadowGradient: '#16a34a',
-                  fillShadowGradientOpacity: 0.12,
-                  propsForDots: { r: '3', strokeWidth: '1.5', stroke: '#16a34a' },
-                  propsForBackgroundLines: { stroke: colors.borderLight },
-                }}
-                withShadow
-                bezier
-                style={{ borderRadius: 8, marginLeft: -8, marginTop: 4 }}
-              />
+              <TrendLineChart snapshots={snapshots} currency={currency} />
             </Animated.View>
           ) : (
             <Text style={[styles.emptyText, { color: colors.textMuted }]}>
@@ -951,16 +1112,16 @@ const styles = StyleSheet.create({
   cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
   cardTitle: { fontSize: 16, fontWeight: '600' },
   changeBadge: { fontSize: 13, fontWeight: '600', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12 },
-  pos: { color: PRIMARY, backgroundColor: '#dcfce7' },
-  neg: { color: '#E07070', backgroundColor: '#fee2e2' },
+  pos: { color: '#0DBD8B', backgroundColor: 'rgba(13,189,139,0.12)' },
+  neg: { color: '#F03030', backgroundColor: 'rgba(240,48,48,0.12)' },
 
   // ── Liquid Glass ──
   glassContainer: {
     borderRadius: 14,
     overflow: 'hidden',
-    backgroundColor: 'rgba(22, 163, 74, 0.08)',
+    backgroundColor: 'rgba(247,166,0,0.08)',
     borderWidth: 1,
-    borderColor: 'rgba(22, 163, 74, 0.15)',
+    borderColor: 'rgba(247,166,0,0.15)',
     marginBottom: 14,
     // subtle inner shadow illusion
     shadowColor: PRIMARY,
@@ -999,8 +1160,8 @@ const styles = StyleSheet.create({
 
   emptyText: { textAlign: 'center', lineHeight: 22, paddingVertical: 32 },
   changeDetail: { fontSize: 13, fontWeight: '500', marginTop: 12, textAlign: 'right' },
-  posText: { color: PRIMARY },
-  negText: { color: '#E07070' },
+  posText: { color: '#00C851' },
+  negText: { color: '#F03030' },
 
   backBtn: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
   backBtnText: { fontSize: 13, fontWeight: '500' },

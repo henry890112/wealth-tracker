@@ -111,7 +111,7 @@ export default function AuthScreen() {
             onPress={() => setIsSignUp(!isSignUp)}
             disabled={loading}
           >
-            <Text style={[styles.linkText, { color: '#16a34a' }]}>
+            <Text style={[styles.linkText, { color: '#F7A600' }]}>
               {isSignUp ? '已有帳號？登入' : '沒有帳號？註冊'}
             </Text>
           </TouchableOpacity>
@@ -140,11 +140,11 @@ const styles = StyleSheet.create({
     width: 72,
     height: 72,
     borderRadius: 20,
-    backgroundColor: '#16a34a',
+    backgroundColor: '#F7A600',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 16,
-    shadowColor: '#16a34a',
+    shadowColor: '#F7A600',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 12,
@@ -187,7 +187,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   button: {
-    backgroundColor: '#16a34a',
+    backgroundColor: '#F7A600',
     borderRadius: 10,
     padding: 16,
     alignItems: 'center',
