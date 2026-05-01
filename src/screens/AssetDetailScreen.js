@@ -111,7 +111,14 @@ const InstitutionalSection = ({ chipData, marginData, loading, colors }) => {
     );
   }
 
-  if (!chipData && !marginData) return null;
+  if (!chipData && !marginData) {
+    return (
+      <View style={[instStyles.section, { backgroundColor: cardBg }]}>
+        <Text style={[instStyles.sectionTitle, { color: textPrimary }]}>籌碼分析</Text>
+        <Text style={[instStyles.subTitle, { color: textSecondary, marginTop: 8 }]}>暫無資料</Text>
+      </View>
+    );
+  }
 
   const rows = chipData ? [
     { label: '外資', values: chipData.foreign },

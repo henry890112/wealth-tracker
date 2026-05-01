@@ -1075,7 +1075,7 @@ export const fetchHistoricalPrices = async (symbol, marketType) => {
  */
 export const fetchTWStockInstitutional = async (symbol, startDate) => {
   try {
-    const url = `${FINMIND_BASE_URL}/data?dataset=TaiwanStockInstitutionalInvestors&data_id=${symbol}&start_date=${startDate}`;
+    const url = `${FINMIND_BASE_URL}/data?dataset=TaiwanStockInstitutionalInvestorsBuySell&data_id=${symbol}&start_date=${startDate}`;
     const res = await fetch(url);
     const json = await res.json();
     if (json.status !== 200 || !json.data?.length) return null;
@@ -1086,9 +1086,9 @@ export const fetchTWStockInstitutional = async (symbol, startDate) => {
       if (!byDate[d]) byDate[d] = { foreign: 0, trust: 0, dealer: 0 };
       const name = row.name || '';
       const diff = (row.buy - row.sell) / 1000; // 張 = 千股
-      if (/外資/.test(name)) byDate[d].foreign += diff;
-      else if (/投信/.test(name)) byDate[d].trust += diff;
-      else if (/自營/.test(name)) byDate[d].dealer += diff;
+      if (name === 'Foreign_Investor' || name === 'Foreign_Dealer_Self') byDate[d].foreign += diff;
+      else if (name === 'Investment_Trust') byDate[d].trust += diff;
+      else if (name === 'Dealer_self' || name === 'Dealer_Hedging') byDate[d].dealer += diff;
     }
 
     const sortedDates = Object.keys(byDate).sort().slice(-5);
@@ -1105,12 +1105,12 @@ export const fetchTWStockInstitutional = async (symbol, startDate) => {
 
 /**
  * 融資融券最新餘額
- * Dataset: TaiwanStockMarginPurchaseShortsale
- * Returns { date, marginBalance, shortBalance, offsetBalance }
+ * Dataset: TaiwanStockMarginPurchaseShortSale
+ * Returns { date, marginBalance, shortBalance, offsetBalance } 單位：張
  */
 export const fetchTWStockMargin = async (symbol, startDate) => {
   try {
-    const url = `${FINMIND_BASE_URL}/data?dataset=TaiwanStockMarginPurchaseShortsale&data_id=${symbol}&start_date=${startDate}`;
+    const url = `${FINMIND_BASE_URL}/data?dataset=TaiwanStockMarginPurchaseShortSale&data_id=${symbol}&start_date=${startDate}`;
     const res = await fetch(url);
     const json = await res.json();
     if (json.status !== 200 || !json.data?.length) return null;
@@ -1118,9 +1118,9 @@ export const fetchTWStockMargin = async (symbol, startDate) => {
     const latest = json.data[json.data.length - 1];
     return {
       date: latest.date,
-      marginBalance: Math.round((latest.MarginPurchaseBalance || latest.margin_purchase_balance || 0) / 1000),
-      shortBalance: Math.round((latest.ShortSaleBalance || latest.short_sale_balance || 0) / 1000),
-      offsetBalance: Math.round((latest.OffsetLoanAndShort || latest.offset_loan_and_short || 0) / 1000),
+      marginBalance: latest.MarginPurchaseTodayBalance || 0,
+      shortBalance: latest.ShortSaleTodayBalance || 0,
+      offsetBalance: latest.OffsetLoanAndShort || 0,
     };
   } catch (e) {
     return null;
