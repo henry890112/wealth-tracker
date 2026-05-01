@@ -14,12 +14,14 @@ import {
   TouchableWithoutFeedback,
   KeyboardAvoidingView,
   Platform,
+  Dimensions,
 } from 'react-native';
+import { Svg, Polyline, Text as SvgText } from 'react-native-svg';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { WebView } from 'react-native-webview';
 import { Trash2, Plus, Edit2 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
-import { convertToBaseCurrency, fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice, fetchTWStockInstitutional, fetchTWStockMargin } from '../services/api';
+import { convertToBaseCurrency, fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice, fetchTWStockInstitutional, fetchTWStockMargin, fetchTWStockHoldingSharesPer, fetchTWStockMarginUsage } from '../services/api';
 
 const CATEGORY_LABELS = {
   liquid: '流動資產',
@@ -200,6 +202,65 @@ const instStyles = StyleSheet.create({
   marginValue: { fontSize: 13, fontWeight: '600' },
 });
 
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+const ChipLineChart = ({ data, label, unit, color, colors }) => {
+  const cardBg = colors?.card || '#1e2235';
+  const textPrimary = colors?.text || '#f1f5f9';
+  const textSecondary = colors?.subtext || '#94a3b8';
+
+  if (!data || data.length < 2) return null;
+
+  const PAD_L = 38, PAD_R = 8, PAD_T = 12, PAD_B = 22;
+  const svgWidth = SCREEN_WIDTH - 64;
+  const svgHeight = 120;
+  const innerW = svgWidth - PAD_L - PAD_R;
+  const innerH = svgHeight - PAD_T - PAD_B;
+
+  const values = data.map(d => d.value);
+  const minVal = Math.min(...values);
+  const maxVal = Math.max(...values);
+  const range = maxVal - minVal || 1;
+
+  const toX = (i) => PAD_L + (i / (data.length - 1)) * innerW;
+  const toY = (v) => PAD_T + innerH - ((v - minVal) / range) * innerH;
+
+  const points = data.map((d, i) => `${toX(i).toFixed(1)},${toY(d.value).toFixed(1)}`).join(' ');
+  const latest = values[values.length - 1];
+
+  return (
+    <View style={[chipLineStyles.container, { backgroundColor: cardBg }]}>
+      <View style={chipLineStyles.headerRow}>
+        <Text style={[chipLineStyles.label, { color: textSecondary }]}>{label}</Text>
+        <Text style={[chipLineStyles.latest, { color }]}>
+          {latest.toFixed(2)}{unit}
+        </Text>
+      </View>
+      <Svg width={svgWidth} height={svgHeight}>
+        <Polyline
+          points={points}
+          fill="none"
+          stroke={color}
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <SvgText x={2} y={PAD_T + 4} fill={textSecondary} fontSize={9}>{maxVal.toFixed(1)}</SvgText>
+        <SvgText x={2} y={PAD_T + innerH + 4} fill={textSecondary} fontSize={9}>{minVal.toFixed(1)}</SvgText>
+        <SvgText x={PAD_L} y={svgHeight - 4} fill={textSecondary} fontSize={9}>{data[0].date.slice(5)}</SvgText>
+        <SvgText x={svgWidth - PAD_R} y={svgHeight - 4} fill={textSecondary} fontSize={9} textAnchor="end">{data[data.length - 1].date.slice(5)}</SvgText>
+      </Svg>
+    </View>
+  );
+};
+
+const chipLineStyles = StyleSheet.create({
+  container: { borderRadius: 14, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8, marginHorizontal: 16, marginBottom: 14 },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  label: { fontSize: 13, fontWeight: '500' },
+  latest: { fontSize: 15, fontWeight: '700' },
+});
+
 const fetchTWStockData = async (symbol) => {
   try {
     const startDate = new Date(Date.now() - 1095 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
@@ -331,6 +392,8 @@ export default function AssetDetailScreen() {
   const [priceTime, setPriceTime] = useState(null);
   const [chipData, setChipData] = useState(null);
   const [marginData, setMarginData] = useState(null);
+  const [holdingData, setHoldingData] = useState(null);
+  const [marginUsageData, setMarginUsageData] = useState(null);
   const [chipLoading, setChipLoading] = useState(false);
 
   // Add transaction modal state
@@ -361,13 +424,19 @@ export default function AssetDetailScreen() {
   useEffect(() => {
     if (!asset || !isTWStock(asset) || !asset.symbol) return;
     setChipLoading(true);
-    const startDate = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const startDate20 = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const startDate90 = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const startDate180 = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     Promise.all([
-      fetchTWStockInstitutional(asset.symbol, startDate),
-      fetchTWStockMargin(asset.symbol, startDate),
-    ]).then(([chip, margin]) => {
+      fetchTWStockInstitutional(asset.symbol, startDate20),
+      fetchTWStockMargin(asset.symbol, startDate20),
+      fetchTWStockHoldingSharesPer(asset.symbol, startDate180),
+      fetchTWStockMarginUsage(asset.symbol, startDate90),
+    ]).then(([chip, margin, holding, marginUsage]) => {
       setChipData(chip);
       setMarginData(margin);
+      setHoldingData(holding);
+      setMarginUsageData(marginUsage);
     }).catch(() => {}).finally(() => setChipLoading(false));
   }, [asset?.id]);
 
@@ -780,6 +849,26 @@ export default function AssetDetailScreen() {
             chipData={chipData}
             marginData={marginData}
             loading={chipLoading}
+            colors={null}
+          />
+        )}
+
+        {isTWStock(asset) && (
+          <ChipLineChart
+            data={holdingData?.map(d => ({ date: d.date, value: d.percent }))}
+            label="大戶持股比例（400張以上）"
+            unit="%"
+            color="#F7A600"
+            colors={null}
+          />
+        )}
+
+        {isTWStock(asset) && (
+          <ChipLineChart
+            data={marginUsageData?.map(d => ({ date: d.date, value: d.usageRate }))}
+            label="融資使用率"
+            unit="%"
+            color="#4A90E2"
             colors={null}
           />
         )}

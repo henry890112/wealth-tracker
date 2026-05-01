@@ -1128,6 +1128,59 @@ export const fetchTWStockMargin = async (symbol, startDate) => {
 };
 
 /**
+ * 大戶持股比例（持股 400 張以上各級距加總）
+ * Dataset: TaiwanStockHoldingSharesPer（週頻）
+ * Returns [{ date: 'YYYY-MM-DD', percent: number }, ...] 按日期升序
+ */
+export const fetchTWStockHoldingSharesPer = async (symbol, startDate) => {
+  try {
+    const url = `${FINMIND_BASE_URL}/data?dataset=TaiwanStockHoldingSharesPer&data_id=${symbol}&start_date=${startDate}`;
+    const res = await fetch(url);
+    const json = await res.json();
+    if (json.status !== 200 || !json.data?.length) return null;
+
+    const byDate = {};
+    for (const row of json.data) {
+      const level = row.HoldingSharesLevel || '';
+      if (!/400|600|800|1000/.test(level)) continue;
+      const d = row.date;
+      if (!byDate[d]) byDate[d] = 0;
+      byDate[d] += parseFloat(row.percent) || 0;
+    }
+
+    return Object.keys(byDate)
+      .sort()
+      .map(date => ({ date, percent: Math.round(byDate[date] * 100) / 100 }));
+  } catch (e) {
+    return null;
+  }
+};
+
+/**
+ * 融資使用率時間序列
+ * Dataset: TaiwanStockMarginPurchaseShortSale（日頻）
+ * Returns [{ date: 'YYYY-MM-DD', usageRate: number }, ...] 按日期升序
+ */
+export const fetchTWStockMarginUsage = async (symbol, startDate) => {
+  try {
+    const url = `${FINMIND_BASE_URL}/data?dataset=TaiwanStockMarginPurchaseShortSale&data_id=${symbol}&start_date=${startDate}`;
+    const res = await fetch(url);
+    const json = await res.json();
+    if (json.status !== 200 || !json.data?.length) return null;
+
+    return json.data
+      .filter(row => (row.MarginPurchaseLimit || 0) > 0)
+      .map(row => ({
+        date: row.date,
+        usageRate: Math.round((row.MarginPurchaseTodayBalance / row.MarginPurchaseLimit) * 10000) / 100,
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+  } catch (e) {
+    return null;
+  }
+};
+
+/**
  * Batch-fetch exchange rates for multiple currencies → baseCurrency in one shot.
  * Fix 1: replaces the N individual fetchExchangeRate calls that each query
  * Supabase + BOT CSV.  Strategy:
