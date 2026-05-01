@@ -1131,10 +1131,18 @@ export const fetchTWStockMargin = async (symbol, startDate) => {
  * 大戶持股比例（持股 400 張以上各級距加總）
  * Dataset: TaiwanStockHoldingSharesPer（週頻）
  * Returns [{ date: 'YYYY-MM-DD', percent: number }, ...] 按日期升序
+ *
+ * FinMind level strings use comma-formatted numbers, e.g.:
+ *   "400,001-600,000", "600,001-800,000", "800,001-1,000,000",
+ *   "1,000,001 shares and over"
+ * We identify 大戶 (≥400 張 = ≥400,001 shares) by parsing the start of
+ * each range numerically, which is robust to any comma/format variation.
  */
 export const fetchTWStockHoldingSharesPer = async (symbol, startDate) => {
   try {
-    const url = `${FINMIND_BASE_URL}/data?dataset=TaiwanStockHoldingSharesPer&data_id=${symbol}&start_date=${startDate}`;
+    const token = process.env.EXPO_PUBLIC_FINMIND_API_KEY || '';
+    const tokenParam = token && token !== 'your-finmind-api-key' ? `&token=${token}` : '';
+    const url = `${FINMIND_BASE_URL}/data?dataset=TaiwanStockHoldingSharesPer&data_id=${symbol}&start_date=${startDate}${tokenParam}`;
     const res = await fetch(url);
     const json = await res.json();
     if (json.status !== 200 || !json.data?.length) return null;
@@ -1142,7 +1150,14 @@ export const fetchTWStockHoldingSharesPer = async (symbol, startDate) => {
     const byDate = {};
     for (const row of json.data) {
       const level = row.HoldingSharesLevel || '';
-      if (!/400|600|800|1000/.test(level)) continue;
+      // Parse the start of the range, stripping commas and non-numeric chars.
+      // "400,001-600,000"          → startNum = 400001
+      // "1,000,001 shares and over" → startNum = 1000001 (no '-', take whole prefix)
+      // "200,001-400,000"          → startNum = 200001  (excluded, < 400001)
+      const startStr = level.split('-')[0].replace(/[^0-9]/g, '');
+      const startNum = parseInt(startStr, 10);
+      if (!startNum || startNum < 400001) continue;  // 大戶 = ≥ 400 張
+
       const d = row.date;
       if (!byDate[d]) byDate[d] = 0;
       byDate[d] += parseFloat(row.percent) || 0;
