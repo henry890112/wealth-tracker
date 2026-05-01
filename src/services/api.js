@@ -1069,6 +1069,65 @@ export const fetchHistoricalPrices = async (symbol, marketType) => {
 };
 
 /**
+ * 三大法人買賣超（最近 5 個交易日）
+ * Dataset: TaiwanStockInstitutionalInvestors
+ * Returns { dates, foreign, trust, dealer } 各陣列長度 ≤ 5，按日期升序
+ */
+export const fetchTWStockInstitutional = async (symbol, startDate) => {
+  try {
+    const url = `${FINMIND_BASE_URL}/data?dataset=TaiwanStockInstitutionalInvestors&data_id=${symbol}&start_date=${startDate}`;
+    const res = await fetch(url);
+    const json = await res.json();
+    if (json.status !== 200 || !json.data?.length) return null;
+
+    const byDate = {};
+    for (const row of json.data) {
+      const d = row.date;
+      if (!byDate[d]) byDate[d] = { foreign: 0, trust: 0, dealer: 0 };
+      const name = row.name || '';
+      const diff = (row.buy - row.sell) / 1000; // 張 = 千股
+      if (/外資/.test(name)) byDate[d].foreign += diff;
+      else if (/投信/.test(name)) byDate[d].trust += diff;
+      else if (/自營/.test(name)) byDate[d].dealer += diff;
+    }
+
+    const sortedDates = Object.keys(byDate).sort().slice(-5);
+    return {
+      dates: sortedDates,
+      foreign: sortedDates.map(d => byDate[d].foreign),
+      trust: sortedDates.map(d => byDate[d].trust),
+      dealer: sortedDates.map(d => byDate[d].dealer),
+    };
+  } catch (e) {
+    return null;
+  }
+};
+
+/**
+ * 融資融券最新餘額
+ * Dataset: TaiwanStockMarginPurchaseShortsale
+ * Returns { date, marginBalance, shortBalance, offsetBalance }
+ */
+export const fetchTWStockMargin = async (symbol, startDate) => {
+  try {
+    const url = `${FINMIND_BASE_URL}/data?dataset=TaiwanStockMarginPurchaseShortsale&data_id=${symbol}&start_date=${startDate}`;
+    const res = await fetch(url);
+    const json = await res.json();
+    if (json.status !== 200 || !json.data?.length) return null;
+
+    const latest = json.data[json.data.length - 1];
+    return {
+      date: latest.date,
+      marginBalance: Math.round((latest.MarginPurchaseBalance || latest.margin_purchase_balance || 0) / 1000),
+      shortBalance: Math.round((latest.ShortSaleBalance || latest.short_sale_balance || 0) / 1000),
+      offsetBalance: Math.round((latest.OffsetLoanAndShort || latest.offset_loan_and_short || 0) / 1000),
+    };
+  } catch (e) {
+    return null;
+  }
+};
+
+/**
  * Batch-fetch exchange rates for multiple currencies → baseCurrency in one shot.
  * Fix 1: replaces the N individual fetchExchangeRate calls that each query
  * Supabase + BOT CSV.  Strategy:

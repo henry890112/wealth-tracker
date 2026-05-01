@@ -19,7 +19,7 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import { WebView } from 'react-native-webview';
 import { Trash2, Plus, Edit2 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
-import { convertToBaseCurrency, fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice } from '../services/api';
+import { convertToBaseCurrency, fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice, fetchTWStockInstitutional, fetchTWStockMargin } from '../services/api';
 
 const CATEGORY_LABELS = {
   liquid: '流動資產',
@@ -92,6 +92,106 @@ const getTradingViewHtml = (symbol) => `<!DOCTYPE html>
 </div>
 </body>
 </html>`;
+
+// ── 籌碼分析元件 ──────────────────────────────────────────────────────────────
+const BAR_GREEN = '#00C851';
+const BAR_RED = '#F03030';
+
+const InstitutionalSection = ({ chipData, marginData, loading, colors }) => {
+  const cardBg = colors?.card || '#1e2235';
+  const textPrimary = colors?.text || '#f1f5f9';
+  const textSecondary = colors?.subtext || '#94a3b8';
+
+  if (loading) {
+    return (
+      <View style={instStyles.section}>
+        <Text style={[instStyles.sectionTitle, { color: textPrimary }]}>籌碼分析</Text>
+        <ActivityIndicator size="small" color="#2563eb" style={{ marginTop: 16 }} />
+      </View>
+    );
+  }
+
+  if (!chipData && !marginData) return null;
+
+  const rows = chipData ? [
+    { label: '外資', values: chipData.foreign },
+    { label: '投信', values: chipData.trust },
+    { label: '自營', values: chipData.dealer },
+  ] : [];
+
+  const sum = (arr) => arr.reduce((a, b) => a + b, 0);
+  const sums = rows.map(r => sum(r.values));
+  const maxAbs = Math.max(...sums.map(Math.abs), 1);
+
+  const latestDate = chipData?.dates?.[chipData.dates.length - 1] || marginData?.date || '';
+
+  return (
+    <View style={[instStyles.section, { backgroundColor: cardBg }]}>
+      <View style={instStyles.headerRow}>
+        <Text style={[instStyles.sectionTitle, { color: textPrimary }]}>籌碼分析</Text>
+        {latestDate ? <Text style={[instStyles.dateText, { color: textSecondary }]}>{latestDate}</Text> : null}
+      </View>
+
+      {chipData && (
+        <>
+          <Text style={[instStyles.subTitle, { color: textSecondary }]}>三大法人買賣超（最近5日加總）</Text>
+          {rows.map((row, i) => {
+            const total = sums[i];
+            const isPos = total >= 0;
+            const barColor = isPos ? BAR_GREEN : BAR_RED;
+            const barFrac = Math.abs(total) / maxAbs;
+            const sign = isPos ? '+' : '';
+            return (
+              <View key={row.label} style={instStyles.barRow}>
+                <Text style={[instStyles.barLabel, { color: textSecondary }]}>{row.label}</Text>
+                <View style={instStyles.barTrack}>
+                  <View style={[instStyles.barFill, { width: `${Math.round(barFrac * 60)}%`, backgroundColor: barColor }]} />
+                </View>
+                <Text style={[instStyles.barValue, { color: barColor }]}>
+                  {sign}{Math.round(total).toLocaleString()} 張
+                </Text>
+              </View>
+            );
+          })}
+        </>
+      )}
+
+      {marginData && (
+        <View style={instStyles.marginRow}>
+          <View style={instStyles.marginCell}>
+            <Text style={[instStyles.marginLabel, { color: textSecondary }]}>融資餘額</Text>
+            <Text style={[instStyles.marginValue, { color: textPrimary }]}>{marginData.marginBalance.toLocaleString()} 張</Text>
+          </View>
+          <View style={instStyles.marginCell}>
+            <Text style={[instStyles.marginLabel, { color: textSecondary }]}>融券餘額</Text>
+            <Text style={[instStyles.marginValue, { color: textPrimary }]}>{marginData.shortBalance.toLocaleString()} 張</Text>
+          </View>
+          <View style={instStyles.marginCell}>
+            <Text style={[instStyles.marginLabel, { color: textSecondary }]}>資券相抵</Text>
+            <Text style={[instStyles.marginValue, { color: textPrimary }]}>{marginData.offsetBalance.toLocaleString()} 張</Text>
+          </View>
+        </View>
+      )}
+    </View>
+  );
+};
+
+const instStyles = StyleSheet.create({
+  section: { borderRadius: 14, padding: 16, marginHorizontal: 16, marginBottom: 14 },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  sectionTitle: { fontSize: 16, fontWeight: '600' },
+  dateText: { fontSize: 12 },
+  subTitle: { fontSize: 12, marginBottom: 10 },
+  barRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  barLabel: { width: 32, fontSize: 13 },
+  barTrack: { flex: 1, height: 10, backgroundColor: 'rgba(255,255,255,0.07)', borderRadius: 5, marginHorizontal: 8, overflow: 'hidden' },
+  barFill: { height: 10, borderRadius: 5 },
+  barValue: { width: 90, textAlign: 'right', fontSize: 12, fontWeight: '500' },
+  marginRow: { flexDirection: 'row', marginTop: 14, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(255,255,255,0.1)' },
+  marginCell: { flex: 1, alignItems: 'center' },
+  marginLabel: { fontSize: 11, marginBottom: 4 },
+  marginValue: { fontSize: 13, fontWeight: '600' },
+});
 
 const fetchTWStockData = async (symbol) => {
   try {
@@ -222,6 +322,9 @@ export default function AssetDetailScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [twChartData, setTwChartData] = useState(null);
   const [priceTime, setPriceTime] = useState(null);
+  const [chipData, setChipData] = useState(null);
+  const [marginData, setMarginData] = useState(null);
+  const [chipLoading, setChipLoading] = useState(false);
 
   // Add transaction modal state
   const [modalVisible, setModalVisible] = useState(false);
@@ -246,6 +349,19 @@ export default function AssetDetailScreen() {
     if (asset && isTWStock(asset) && asset.symbol) {
       fetchTWStockData(asset.symbol).then(data => setTwChartData(data));
     }
+  }, [asset?.id]);
+
+  useEffect(() => {
+    if (!asset || !isTWStock(asset) || !asset.symbol) return;
+    setChipLoading(true);
+    const startDate = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    Promise.all([
+      fetchTWStockInstitutional(asset.symbol, startDate),
+      fetchTWStockMargin(asset.symbol, startDate),
+    ]).then(([chip, margin]) => {
+      setChipData(chip);
+      setMarginData(margin);
+    }).catch(() => {}).finally(() => setChipLoading(false));
   }, [asset?.id]);
 
   const loadAssetDetails = async () => {
@@ -649,6 +765,16 @@ export default function AssetDetailScreen() {
               )}
             />
           </View>
+        )}
+
+        {/* Chip Analysis (TW stocks only) */}
+        {isTWStock(asset) && (
+          <InstitutionalSection
+            chipData={chipData}
+            marginData={marginData}
+            loading={chipLoading}
+            colors={null}
+          />
         )}
 
         {/* Transaction History */}
