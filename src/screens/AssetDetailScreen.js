@@ -478,16 +478,56 @@ export default function AssetDetailScreen() {
         }
       }
 
-      // Aggregate shares and weighted average cost from DB values (maintained by trigger)
+      // Fetch transactions oldest-first so we can compute correct Weighted Average Cost (WAC)
+      const { data: transactionsData, error: transactionsError } = await supabase
+        .from('transactions')
+        .select('*')
+        .in('asset_id', assetIds)
+        .order('trans_date', { ascending: true });
+
+      if (transactionsError) throw transactionsError;
+
+      // Compute WAC from transaction history in chronological order.
+      // The DB trigger is incorrect (it subtracts sell *proceeds* from total cost, which
+      // artificially lowers the avg cost when selling at a profit). Correct rules:
+      //   BUY:    totalCost += shares × price;  totalShares += shares
+      //   SELL:   remove cost at current avg, NOT at sale price
+      //           currentAvg stays unchanged; totalCost -= currentAvg × soldShares
+      //   ADJUST: skip — adjusts current_amount only, does not affect cost basis
+      let wacTotalCost   = 0;
+      let wacTotalShares = 0;
+      for (const tx of transactionsData) {
+        const txShares = parseFloat(tx.shares) || 0;
+        const txPrice  = parseFloat(tx.price)  || 0;
+        if (tx.type === 'BUY') {
+          wacTotalCost   += txShares * txPrice;
+          wacTotalShares += txShares;
+        } else if (tx.type === 'SELL') {
+          const currentAvg = wacTotalShares > 0 ? wacTotalCost / wacTotalShares : 0;
+          wacTotalShares  -= txShares;
+          wacTotalCost     = currentAvg * Math.max(0, wacTotalShares);
+          if (wacTotalShares <= 0) { wacTotalCost = 0; wacTotalShares = 0; }
+        }
+        // ADJUST: no-op for cost basis
+      }
+
+      // Share count comes from DB trigger (which correctly handles shares).
+      // avgCost is derived from the WAC calculation above.
       const totalShares = allAssetsData.reduce((sum, a) => sum + (parseFloat(a.current_shares) || 0), 0);
-      const weightedCost = allAssetsData.reduce((sum, a) => {
-        const s = parseFloat(a.current_shares) || 0;
-        const c = parseFloat(a.average_cost) || 0;
-        return sum + s * c;
-      }, 0);
-      const avgCost = totalShares > 0 ? weightedCost / totalShares : 0;
+      const avgCost = wacTotalShares > 0 ? wacTotalCost / wacTotalShares : 0;
+
+      // Persist the corrected WAC back to Supabase so Dashboard shows the right value.
+      // Fire-and-forget: only write when the value has actually changed.
+      if (avgCost > 0 && Math.abs(avgCost - primaryAsset.average_cost) > 0.001) {
+        supabase
+          .from('assets')
+          .update({ average_cost: avgCost })
+          .eq('id', primaryAsset.id)
+          .then(() => {}); // fire-and-forget
+      }
 
       // Convert cost basis to base currency for accurate P&L calculation
+      // P&L = converted_amount (current market value) − cost_basis_in_base
       const lev = primaryAsset.leverage || 1;
       const costBasisRaw = totalShares > 0 ? (totalShares * avgCost / lev) : 0;
       let costBasisInBase = costBasisRaw;
@@ -519,14 +559,10 @@ export default function AssetDetailScreen() {
         })();
       }
 
-      const { data: transactionsData, error: transactionsError } = await supabase
-        .from('transactions')
-        .select('*')
-        .in('asset_id', assetIds)
-        .order('trans_date', { ascending: false });
-
-      if (transactionsError) throw transactionsError;
-      setTransactions(transactionsData);
+      // Display transactions newest-first
+      setTransactions([...transactionsData].sort(
+        (a, b) => new Date(b.trans_date) - new Date(a.trans_date)
+      ));
 
     } catch (error) {
       console.error('Error loading asset details:', error);
