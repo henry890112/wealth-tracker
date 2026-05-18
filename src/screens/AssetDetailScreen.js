@@ -22,6 +22,7 @@ import { WebView } from 'react-native-webview';
 import { Trash2, Plus, Edit2 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { convertToBaseCurrency, fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice, fetchTWStockInstitutional, fetchTWStockMargin, fetchTWStockHoldingSharesPer, fetchTWStockMarginUsage } from '../services/api';
+import { useTheme } from '../lib/ThemeContext';
 
 const CATEGORY_LABELS = {
   liquid: '流動資產',
@@ -102,7 +103,7 @@ const BAR_RED = '#F03030';
 const InstitutionalSection = ({ chipData, marginData, loading, colors }) => {
   const cardBg = colors?.card || '#1e2235';
   const textPrimary = colors?.text || '#f1f5f9';
-  const textSecondary = colors?.subtext || '#94a3b8';
+  const textSecondary = colors?.textSub || '#94a3b8';
 
   if (loading) {
     return (
@@ -207,7 +208,7 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const ChipLineChart = ({ data, label, unit, color, colors }) => {
   const cardBg = colors?.card || '#1e2235';
   const textPrimary = colors?.text || '#f1f5f9';
-  const textSecondary = colors?.subtext || '#94a3b8';
+  const textSecondary = colors?.textSub || '#94a3b8';
 
   if (!data || data.length < 2) return null;
 
@@ -394,6 +395,7 @@ export default function AssetDetailScreen() {
   const route = useRoute();
   const navigation = useNavigation();
   const { assetId, allIds } = route.params;
+  const { colors } = useTheme();
 
   const [asset, setAsset] = useState(null);
   const [transactions, setTransactions] = useState([]);
@@ -759,7 +761,7 @@ export default function AssetDetailScreen() {
 
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
+      <View style={[styles.loadingContainer, { backgroundColor: colors.bg }]}>
         <ActivityIndicator size="large" color="#2563eb" />
       </View>
     );
@@ -767,8 +769,8 @@ export default function AssetDetailScreen() {
 
   if (!asset) {
     return (
-      <View style={styles.emptyState}>
-        <Text style={styles.emptyStateText}>資產不存在或無法載入</Text>
+      <View style={[styles.emptyState, { backgroundColor: colors.bg }]}>
+        <Text style={[styles.emptyStateText, { color: colors.textSub }]}>資產不存在或無法載入</Text>
       </View>
     );
   }
@@ -776,44 +778,44 @@ export default function AssetDetailScreen() {
   return (
     <>
       <ScrollView
-        style={styles.container}
+        style={[styles.container, { backgroundColor: colors.bg }]}
         contentContainerStyle={{ paddingBottom: 80 }}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
       >
         {/* Asset Summary Card */}
-        <View style={styles.assetSummaryCard}>
-          <Text style={styles.assetName}>{asset.name}</Text>
-          {asset.symbol && <Text style={styles.assetSymbol}>{asset.symbol}</Text>}
-          <View style={styles.assetValueRow}>
-            <Text style={styles.assetValueLabel}>當前價值</Text>
-            <Text style={styles.assetValue}>
+        <View style={[styles.assetSummaryCard, { backgroundColor: colors.card }]}>
+          <Text style={[styles.assetName, { color: colors.text }]}>{asset.name}</Text>
+          {asset.symbol && <Text style={[styles.assetSymbol, { color: colors.textSub }]}>{asset.symbol}</Text>}
+          <View style={[styles.assetValueRow, { borderBottomColor: colors.borderLight }]}>
+            <Text style={[styles.assetValueLabel, { color: colors.textSub }]}>當前價值</Text>
+            <Text style={[styles.assetValue, { color: colors.text }]}>
               {formatCurrency(asset.converted_amount)}
             </Text>
           </View>
           {priceTime && (
-            <Text style={{ color: '#64748b', fontSize: 11, textAlign: 'center', marginTop: 2 }}>
+            <Text style={{ color: colors.textSub, fontSize: 11, textAlign: 'center', marginTop: 2 }}>
               {`報價時間 ${formatPriceTime(priceTime)}`}
             </Text>
           )}
           {asset.market_type === 'US' && (
-            <Text style={{ color: '#9ca3af', fontSize: 10, textAlign: 'center', marginTop: 1 }}>
+            <Text style={{ color: colors.textMuted, fontSize: 10, textAlign: 'center', marginTop: 1 }}>
               （延遲 15 分鐘）
             </Text>
           )}
           {asset.current_shares > 0 && (
             <View style={styles.assetDetailRow}>
-              <Text style={styles.assetDetailLabel}>持有股數</Text>
-              <Text style={styles.assetDetailValue}>
+              <Text style={[styles.assetDetailLabel, { color: colors.textSub }]}>持有股數</Text>
+              <Text style={[styles.assetDetailValue, { color: colors.text }]}>
                 {asset.current_shares.toLocaleString()} 股
               </Text>
             </View>
           )}
           {asset.average_cost > 0 && (
             <View style={styles.assetDetailRow}>
-              <Text style={styles.assetDetailLabel}>平均成本</Text>
-              <Text style={styles.assetDetailValue}>
+              <Text style={[styles.assetDetailLabel, { color: colors.textSub }]}>平均成本</Text>
+              <Text style={[styles.assetDetailValue, { color: colors.text }]}>
                 {formatCurrency(asset.average_cost, asset.currency)}
               </Text>
             </View>
@@ -834,19 +836,19 @@ export default function AssetDetailScreen() {
             );
           })()}
           <View style={styles.assetDetailRow}>
-            <Text style={styles.assetDetailLabel}>分類</Text>
-            <Text style={styles.assetDetailValue}>
+            <Text style={[styles.assetDetailLabel, { color: colors.textSub }]}>分類</Text>
+            <Text style={[styles.assetDetailValue, { color: colors.text }]}>
               {CATEGORY_LABELS[asset.category]}
             </Text>
           </View>
           <View style={styles.assetDetailRow}>
-            <Text style={styles.assetDetailLabel}>原始幣別</Text>
-            <Text style={styles.assetDetailValue}>{asset.currency}</Text>
+            <Text style={[styles.assetDetailLabel, { color: colors.textSub }]}>原始幣別</Text>
+            <Text style={[styles.assetDetailValue, { color: colors.text }]}>{asset.currency}</Text>
           </View>
           {asset.leverage > 1 && (
             <View style={styles.assetDetailRow}>
-              <Text style={styles.assetDetailLabel}>槓桿</Text>
-              <Text style={styles.assetDetailValue}>{asset.leverage}x</Text>
+              <Text style={[styles.assetDetailLabel, { color: colors.textSub }]}>槓桿</Text>
+              <Text style={[styles.assetDetailValue, { color: colors.text }]}>{asset.leverage}x</Text>
             </View>
           )}
         </View>
@@ -860,11 +862,11 @@ export default function AssetDetailScreen() {
             <Plus size={18} color="white" />
             <Text style={styles.addTxButtonText}>新增交易</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.editButton} onPress={openEditModal}>
+          <TouchableOpacity style={[styles.editButton, { backgroundColor: colors.card }]} onPress={openEditModal}>
             <Edit2 size={18} color="#2563eb" />
             <Text style={styles.editButtonText}>編輯</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.deleteButton} onPress={handleDelete}>
+          <TouchableOpacity style={[styles.deleteButton, { backgroundColor: colors.card }]} onPress={handleDelete}>
             <Trash2 size={18} color="#F03030" />
             <Text style={styles.deleteButtonText}>刪除</Text>
           </TouchableOpacity>
@@ -872,8 +874,8 @@ export default function AssetDetailScreen() {
 
         {/* Technical Chart (investment assets only) */}
         {isInvestmentAsset && asset.symbol && asset.market_type && (
-          <View style={styles.chartSection}>
-            <Text style={styles.chartTitle}>技術圖表</Text>
+          <View style={[styles.chartSection, { backgroundColor: colors.card }]}>
+            <Text style={[styles.chartTitle, { color: colors.text, borderBottomColor: colors.borderLight }]}>技術圖表</Text>
             <WebView
               style={[styles.chartWebView, isTWStock(asset) && { height: 300 }]}
               source={{ html: isTWStock(asset) ? getTWStockHtml(asset.symbol, twChartData) : getTradingViewHtml(getTVSymbol(asset)) }}
@@ -897,7 +899,7 @@ export default function AssetDetailScreen() {
             chipData={chipData}
             marginData={marginData}
             loading={chipLoading}
-            colors={null}
+            colors={colors}
           />
         )}
 
@@ -907,7 +909,7 @@ export default function AssetDetailScreen() {
             label="大戶持股比例（400張以上）"
             unit="%"
             color="#F7A600"
-            colors={null}
+            colors={colors}
           />
         )}
 
@@ -917,16 +919,16 @@ export default function AssetDetailScreen() {
             label="融資使用率"
             unit="%"
             color="#4A90E2"
-            colors={null}
+            colors={colors}
           />
         )}
 
         {/* Transaction History */}
-        <View style={styles.transactionsSection}>
-          <Text style={styles.transactionsTitle}>交易歷史</Text>
+        <View style={[styles.transactionsSection, { backgroundColor: colors.card }]}>
+          <Text style={[styles.transactionsTitle, { color: colors.text, borderBottomColor: colors.borderLight }]}>交易歷史</Text>
           {transactions.length > 0 ? (
             transactions.map((transaction) => (
-              <View key={transaction.id} style={styles.transactionCard}>
+              <View key={transaction.id} style={[styles.transactionCard, { borderBottomColor: colors.borderLight }]}>
                 <View style={styles.transactionHeader}>
                   <Text
                     style={[
@@ -937,29 +939,29 @@ export default function AssetDetailScreen() {
                     {transaction.type === 'BUY' ? '買入' : transaction.type === 'SELL' ? '賣出' : '調整'}
                   </Text>
                   <View style={styles.transactionHeaderRight}>
-                    <Text style={styles.transactionDate}>
+                    <Text style={[styles.transactionDate, { color: colors.textSub }]}>
                       {new Date(transaction.trans_date).toLocaleDateString('zh-TW')}
                     </Text>
                     <TouchableOpacity
                       onPress={() => handleDeleteTransaction(transaction)}
                       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                     >
-                      <Trash2 size={14} color="#94a3b8" />
+                      <Trash2 size={14} color={colors.textMuted} />
                     </TouchableOpacity>
                   </View>
                 </View>
                 <View style={styles.transactionDetails}>
                   {isInvestmentAsset && (
-                    <Text style={styles.transactionText}>
+                    <Text style={[styles.transactionText, { color: colors.textSub }]}>
                       股數: {transaction.shares.toLocaleString()}
                     </Text>
                   )}
                   {isInvestmentAsset && (
-                  <Text style={styles.transactionText}>
+                  <Text style={[styles.transactionText, { color: colors.textSub }]}>
                     價格: {formatCurrency(transaction.price, asset.currency)}
                   </Text>
                   )}
-                  <Text style={styles.transactionAmount}>
+                  <Text style={[styles.transactionAmount, { color: colors.text }]}>
                     {formatCurrency(transaction.total_amount, asset.currency)}
                   </Text>
                 </View>

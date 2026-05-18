@@ -67,7 +67,8 @@ const isValidDate = (str) => {
 const ITEM_HEIGHT = 44;
 const VISIBLE_ITEMS = 5;
 const PICKER_HEIGHT = ITEM_HEIGHT * VISIBLE_ITEMS; // 220
-const YEARS = Array.from({ length: 7 }, (_, i) => 2020 + i); // 2020–2026
+const currentYear = new Date().getFullYear();
+const YEARS = Array.from({ length: currentYear - 2020 + 2 }, (_, i) => 2020 + i);
 const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1);
 const getDaysInMonth = (year, month) => new Date(year, month, 0).getDate();
 const pad2 = (n) => String(n).padStart(2, '0');

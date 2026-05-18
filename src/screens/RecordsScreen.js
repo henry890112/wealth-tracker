@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useMemo, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, ActivityIndicator,
-  TouchableOpacity,
+  TouchableOpacity, RefreshControl,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -37,6 +37,7 @@ export default function RecordsScreen() {
   const [typeFilter, setTypeFilter] = useState('all');
   const [marketFilter, setMarketFilter] = useState('all');
   const [assetFilter, setAssetFilter] = useState('all');
+  const [refreshing, setRefreshing] = useState(false);
   const lastLoadedRef = useRef(0);
 
   useFocusEffect(useCallback(() => {
@@ -44,6 +45,13 @@ export default function RecordsScreen() {
     lastLoadedRef.current = Date.now();
     loadData();
   }, []));
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    lastLoadedRef.current = 0;
+    await loadData();
+    setRefreshing(false);
+  }, []);
 
   const loadData = async () => {
     try {
@@ -126,7 +134,10 @@ export default function RecordsScreen() {
         {assetFilters.length > 2 && renderChip(assetFilters, assetFilter, setAssetFilter, '#7c3aed')}
       </View>
 
-      <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 80 }}>
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: insets.bottom + 80 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#F7A600" />}
+      >
         {filtered.length === 0 ? (
           <View style={styles.empty}>
             <Text style={[styles.emptyText, { color: colors.textSub }]}>無符合紀錄</Text>
@@ -136,7 +147,11 @@ export default function RecordsScreen() {
             {filtered.map((tx, idx) => {
               const cfg = TYPE_CONFIG[tx.type] || TYPE_CONFIG.ADJUST;
               const date = new Date(tx.trans_date);
-              const dateStr = `${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+              const nowYear = new Date().getFullYear();
+              const timeStr = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+              const dateStr = date.getFullYear() !== nowYear
+                ? `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()} ${timeStr}`
+                : `${date.getMonth() + 1}/${date.getDate()} ${timeStr}`;
               const assetCurrency = tx.assets?.currency || '';
               const amount = parseFloat(tx.total_amount);
               return (
