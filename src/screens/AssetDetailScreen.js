@@ -261,14 +261,24 @@ const chipLineStyles = StyleSheet.create({
   latest: { fontSize: 15, fontWeight: '700' },
 });
 
+const _twStockChartCache = {};
+const TW_CHART_CACHE_TTL = 5 * 60 * 1000;
+
 const fetchTWStockData = async (symbol) => {
+  const now = Date.now();
+  if (_twStockChartCache[symbol] && now - _twStockChartCache[symbol].ts < TW_CHART_CACHE_TTL) {
+    return _twStockChartCache[symbol].data;
+  }
   try {
-    const startDate = new Date(Date.now() - 1095 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const startDate = new Date(now - 1095 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const url = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${symbol}&start_date=${startDate}`;
     const res = await fetch(url);
     const json = await res.json();
-    if (!json.data || json.data.length === 0) return null;
-    return json.data
+    if (!json.data || json.data.length === 0) {
+      _twStockChartCache[symbol] = { data: null, ts: now };
+      return null;
+    }
+    const data = json.data
       .map(d => ({
         time: d.date,
         open: d.open,
@@ -277,6 +287,8 @@ const fetchTWStockData = async (symbol) => {
         close: d.close,
       }))
       .filter(d => d.open && d.close);
+    _twStockChartCache[symbol] = { data, ts: now };
+    return data;
   } catch (e) {
     return null;
   }

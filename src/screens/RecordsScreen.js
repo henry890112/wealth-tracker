@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, ActivityIndicator,
   TouchableOpacity,
@@ -37,8 +37,13 @@ export default function RecordsScreen() {
   const [typeFilter, setTypeFilter] = useState('all');
   const [marketFilter, setMarketFilter] = useState('all');
   const [assetFilter, setAssetFilter] = useState('all');
+  const lastLoadedRef = useRef(0);
 
-  useFocusEffect(useCallback(() => { loadData(); }, []));
+  useFocusEffect(useCallback(() => {
+    if (Date.now() - lastLoadedRef.current < 60000) return;
+    lastLoadedRef.current = Date.now();
+    loadData();
+  }, []));
 
   const loadData = async () => {
     try {

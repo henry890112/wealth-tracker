@@ -288,7 +288,7 @@ export default function DashboardScreen() {
         const lev = asset.leverage || 1;
         const borrowed   = asset.current_shares * (asset.average_cost || 0) * (lev - 1) / lev;
         const newAmount  = pd.price * asset.current_shares - borrowed;
-        await supabase.from('assets').update({ current_amount: newAmount, updated_at: new Date().toISOString() }).eq('id', asset.id);
+        if (Math.abs(newAmount - (asset.current_amount || 0)) < 0.001) return null;
         const ca   = await convertToBaseCurrency(newAmount, asset.currency, baseCurrency, ratesMap);
         const cost = asset.current_shares * (asset.average_cost || 0) / lev;
         const cc   = await convertToBaseCurrency(cost, asset.currency, baseCurrency, ratesMap);
@@ -298,6 +298,9 @@ export default function DashboardScreen() {
     );
     const changed = updates.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
     if (changed.length === 0) return;
+    const now = new Date().toISOString();
+    const changedRows = changed.map(c => ({ id: c.id, current_amount: c.current_amount, updated_at: now }));
+    await supabase.from('assets').upsert(changedRows);
     const map = Object.fromEntries(changed.map(c => [c.id, c]));
     setAssets(prev => {
       const next  = prev.map(a => map[a.id] ? { ...a, ...map[a.id] } : a);
@@ -361,7 +364,12 @@ export default function DashboardScreen() {
         .order('snapshot_date', { ascending: true }).limit(1).maybeSingle();
       if (monthSnap) setMonthlyChange(currentNetWorth - parseFloat(monthSnap.net_worth_base));
 
-      await supabase.rpc('create_daily_snapshot', { p_user_id: user.id });
+      const todayKey = new Date().toISOString().split('T')[0];
+      const lastSnapshotDate = await AsyncStorage.getItem('lastSnapshotDate');
+      if (lastSnapshotDate !== todayKey) {
+        await supabase.rpc('create_daily_snapshot', { p_user_id: user.id });
+        await AsyncStorage.setItem('lastSnapshotDate', todayKey);
+      }
 
       // Category snapshots write
       try {
