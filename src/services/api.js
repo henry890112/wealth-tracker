@@ -340,10 +340,11 @@ export const fetchCryptoPrice = async (symbol) => {
       return priceData;
     }
 
-    throw new Error('Cryptocurrency not found');
+    console.warn(`fetchCryptoPrice: no data found for ${symbol}`);
+    return null;
   } catch (error) {
-    console.error('Error fetching crypto price:', error);
-    throw error;
+    console.warn('fetchCryptoPrice error (non-fatal):', error?.message || error);
+    return null;
   }
 };
 
