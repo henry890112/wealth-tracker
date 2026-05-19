@@ -560,7 +560,9 @@ export default function AssetDetailScreen() {
         average_cost: avgCost,
         cost_basis_in_base: costBasisInBase,
       });
-      // Fetch live price_time for investment assets in background
+      // Fetch live price for investment assets and update converted_amount + P&L
+      // This fixes the bug where converted_amount was read from stale DB value,
+      // causing P&L ≈ 0 when the DB-cached price happened to equal the avg cost.
       if (primaryAsset.category === 'investment' && primaryAsset.symbol) {
         (async () => {
           try {
@@ -569,6 +571,14 @@ export default function AssetDetailScreen() {
             else if (primaryAsset.market_type === 'US') priceData = await fetchUSStockPrice(primaryAsset.symbol);
             else if (primaryAsset.market_type === 'Crypto') priceData = await fetchCryptoPrice(primaryAsset.symbol);
             if (priceData?.price_time) setPriceTime(priceData.price_time);
+            // If we got a live price, recalculate converted_amount so P&L is accurate
+            if (priceData?.price && totalShares > 0) {
+              const lev2 = primaryAsset.leverage || 1;
+              const borrowed = totalShares * (avgCost || 0) * (lev2 - 1) / lev2;
+              const liveAmount = priceData.price * totalShares - borrowed;
+              const liveConverted = await convertToBaseCurrency(liveAmount, primaryAsset.currency, baseCurrency);
+              setAsset(prev => prev ? { ...prev, converted_amount: liveConverted } : prev);
+            }
           } catch {}
         })();
       }
