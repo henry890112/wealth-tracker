@@ -16,14 +16,18 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.wealthtracker.app"
+      "bundleIdentifier": "com.wealthtracker.app",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "WealthTracker 需要麥克風權限以進行語音輸入"
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.wealthtracker.app"
+      "package": "com.wealthtracker.app",
+      "permissions": ["android.permission.RECORD_AUDIO"]
     },
     "web": {
       "favicon": "./assets/favicon.png"

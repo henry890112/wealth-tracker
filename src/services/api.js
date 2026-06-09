@@ -8,10 +8,13 @@ const BOT_CSV_URL = 'https://rate.bot.com.tw/xrt/flcsv/0/day';
 // Cache duration in milliseconds (1 minute)
 const CACHE_DURATION = 60 * 1000;
 
-// ── L1 in-memory price cache (Fix 5) ──────────────────────────────────────
+// ── L1 in-memory price cache ───────────────────────────────────────────────
 // Avoids a Supabase round-trip when the same price is requested again within
 // the same session.  Key: `${symbol}::${marketType}`, value: { data, timestamp }
 const _priceMemCache = new Map();
+// In-flight promise cache: if two callers request the same symbol concurrently,
+// the second one waits on the same Promise instead of firing a duplicate query.
+const _priceInflight = new Map();
 
 // ── TW stock list cache (Fix 2) ───────────────────────────────────────────
 // The full TaiwanStockInfo list is ~10 kB and changes at most daily.
@@ -1021,52 +1024,79 @@ export const fetchTrendingAssets = async () => {
 };
 
 /**
- * Fetch 30-day historical prices for chart
+ * Fetch historical close prices for technical analysis.
+ * Returns number[] (oldest → newest) or null on failure.
  */
-export const fetchHistoricalPrices = async (symbol, marketType) => {
-  const start = getDateString(-30);
-  const end = getDateString(0);
+const _histCache = new Map();
+const HIST_CACHE_TTL = 5 * 60 * 1000;
+
+export const fetchHistoricalPrices = async (symbol, marketType, days = 90) => {
+  const key = `${symbol}::${marketType}`;
+  const hit = _histCache.get(key);
+  if (hit && Date.now() - hit.ts < HIST_CACHE_TTL) return hit.data;
+
   try {
+    let closes = [];
+
     if (marketType === 'TW') {
-      const res = await fetch(
-        `${FINMIND_BASE_URL}/data?dataset=TaiwanStockPrice&data_id=${symbol}&start_date=${start}&end_date=${end}`
-      );
-      const data = await res.json();
-      if (data.status === 200 && data.data?.length > 0) {
-        return data.data.map(d => ({ date: d.date, price: parseFloat(d.close) }));
+      const startDate = getDateString(-days);
+      const url = `${FINMIND_BASE_URL}/data?dataset=TaiwanStockPrice&data_id=${symbol}&start_date=${startDate}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      if (json.data?.length > 0) {
+        closes = json.data.map(d => parseFloat(d.close)).filter(v => v > 0);
       }
     } else if (marketType === 'US') {
-      const res = await fetch(
-        `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=1mo&interval=1d`
-      );
-      const data = await res.json();
-      const result = data?.chart?.result?.[0];
-      if (result) {
-        const timestamps = result.timestamp || [];
-        const closes = result.indicators?.quote?.[0]?.close || [];
-        return timestamps.map((ts, i) => ({
-          date: new Date(ts * 1000).toISOString().split('T')[0],
-          price: closes[i] ?? null,
-        })).filter(d => d.price !== null);
+      const range = days <= 30 ? '1mo' : days <= 90 ? '3mo' : '6mo';
+      for (const host of ['query1', 'query2']) {
+        try {
+          const res = await fetch(
+            `https://${host}.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=${range}`,
+            { headers: { 'User-Agent': 'Mozilla/5.0' } }
+          );
+          if (!res.ok) continue;
+          const json = await res.json();
+          const raw = json?.chart?.result?.[0]?.indicators?.quote?.[0]?.close || [];
+          const valid = raw.filter(c => c !== null && !isNaN(c));
+          if (valid.length > 0) { closes = valid; break; }
+        } catch { continue; }
       }
     } else if (marketType === 'Crypto') {
-      const CRYPTO_IDS = { BTC: 'bitcoin', ETH: 'ethereum', SOL: 'solana', BNB: 'binancecoin' };
-      const coinId = CRYPTO_IDS[symbol] || symbol.toLowerCase();
-      const res = await fetch(
-        `${COINGECKO_BASE_URL}/coins/${coinId}/market_chart?vs_currency=usd&days=30&interval=daily`
-      );
-      const data = await res.json();
-      if (data.prices) {
-        return data.prices.map(([ts, price]) => ({
-          date: new Date(ts).toISOString().split('T')[0],
-          price,
-        }));
+      const upperSym = symbol.toUpperCase();
+      try {
+        const limit = Math.min(days, 500);
+        const res = await fetch(
+          `${BINANCE_BASE_URL}/klines?symbol=${upperSym}USDT&interval=1d&limit=${limit}`
+        );
+        if (res.ok) {
+          const json = await res.json();
+          if (Array.isArray(json) && json.length > 0) {
+            closes = json.map(k => parseFloat(k[4]));
+          }
+        }
+      } catch { /* fall through */ }
+
+      if (closes.length === 0) {
+        const coinId = SYMBOL_TO_COINGECKO_ID[upperSym] || upperSym.toLowerCase();
+        try {
+          const res = await fetch(
+            `${COINGECKO_BASE_URL}/coins/${coinId}/market_chart?vs_currency=usd&days=${days}&interval=daily`
+          );
+          if (res.ok) {
+            const json = await res.json();
+            if (json.prices?.length > 0) closes = json.prices.map(p => p[1]);
+          }
+        } catch { /* no data */ }
       }
     }
+
+    const data = closes.length >= 5 ? closes : null;
+    _histCache.set(key, { data, ts: Date.now() });
+    return data;
   } catch (e) {
-    console.error('fetchHistoricalPrices error:', e);
+    console.warn(`fetchHistoricalPrices(${symbol}):`, e.message);
+    return null;
   }
-  return [];
 };
 
 /**
@@ -1207,7 +1237,7 @@ export const fetchTWStockMarginUsage = async (symbol, startDate) => {
  * Returns { USD: 32.5, JPY: 0.22, … } (rate × amount = baseCurrency amount)
  */
 export const fetchExchangeRatesBatch = async (currencies, baseCurrency) => {
-  const unique = [...new Set(currencies)].filter(c => c && c !== baseCurrency);
+  const unique = [...new Set(currencies || [])].filter(c => c && c !== baseCurrency);
   if (unique.length === 0) return {};
 
   const ratesMap = {};
@@ -1261,7 +1291,7 @@ export const fetchExchangeRatesBatch = async (currencies, baseCurrency) => {
     }
 
     if (upserts.length > 0) {
-      supabase.from('exchange_rates').upsert(upserts, { onConflict: 'from_currency,to_currency' });
+      await supabase.from('exchange_rates').upsert(upserts, { onConflict: 'from_currency,to_currency' });
     }
   } catch { /* fall through to individual fallbacks */ }
 
@@ -1289,9 +1319,13 @@ export const convertToBaseCurrency = async (amount, fromCurrency, baseCurrency, 
     const rate = (ratesMap && ratesMap[fromCurrency] != null)
       ? ratesMap[fromCurrency]
       : await fetchExchangeRate(fromCurrency, baseCurrency);
+    if (rate == null || rate <= 0 || !isFinite(rate)) {
+      console.warn(`convertToBaseCurrency: invalid rate ${rate} for ${fromCurrency}→${baseCurrency}, using 1:1`);
+      return amount;
+    }
     return amount * rate;
   } catch (error) {
-    console.error('Error converting currency:', error);
+    console.warn(`convertToBaseCurrency failed (${fromCurrency}→${baseCurrency}):`, error?.message);
     return amount;
   }
 };
@@ -1299,40 +1333,52 @@ export const convertToBaseCurrency = async (amount, fromCurrency, baseCurrency, 
 // --- Helpers ---
 
 const getCachedPrice = async (symbol, marketType) => {
-  // Fix 5: check L1 in-memory cache before hitting Supabase
   const memKey = `${symbol}::${marketType}`;
+
+  // L1: in-memory cache hit — no network at all
   const memEntry = _priceMemCache.get(memKey);
   if (memEntry && (Date.now() - memEntry.timestamp) < CACHE_DURATION) {
     return memEntry.data;
   }
 
-  try {
-    const { data, error } = await supabase
-      .from('price_cache')
-      .select('*')
-      .eq('symbol', symbol)
-      .eq('market_type', marketType)
-      .single();
-
-    if (error || !data) return null;
-
-    if (isRecentCache(data.updated_at)) {
-      const priceData = {
-        symbol: data.symbol,
-        price: parseFloat(data.price),
-        change_percent: parseFloat(data.change_percent),
-        volume: parseFloat(data.volume),
-        market_type: data.market_type,
-        price_time: data.updated_at,
-      };
-      // Populate L1 cache from Supabase hit
-      _priceMemCache.set(memKey, { data: priceData, timestamp: Date.now() });
-      return priceData;
-    }
-    return null;
-  } catch {
-    return null;
+  // Dedup: if a Supabase query for this key is already in flight, reuse it
+  if (_priceInflight.has(memKey)) {
+    return _priceInflight.get(memKey);
   }
+
+  const promise = (async () => {
+    try {
+      const { data, error } = await supabase
+        .from('price_cache')
+        .select('*')
+        .eq('symbol', symbol)
+        .eq('market_type', marketType)
+        .single();
+
+      if (error || !data) return null;
+
+      if (isRecentCache(data.updated_at)) {
+        const priceData = {
+          symbol: data.symbol,
+          price: parseFloat(data.price),
+          change_percent: parseFloat(data.change_percent),
+          volume: parseFloat(data.volume),
+          market_type: data.market_type,
+          price_time: data.updated_at,
+        };
+        _priceMemCache.set(memKey, { data: priceData, timestamp: Date.now() });
+        return priceData;
+      }
+      return null;
+    } catch {
+      return null;
+    } finally {
+      _priceInflight.delete(memKey);
+    }
+  })();
+
+  _priceInflight.set(memKey, promise);
+  return promise;
 };
 
 const cachePrice = async (priceData) => {
@@ -1369,4 +1415,70 @@ const getDateString = (daysOffset) => {
 const calculateChangePercent = (prevPrice, currentPrice) => {
   if (!prevPrice || prevPrice === 0) return 0;
   return ((currentPrice - prevPrice) / prevPrice) * 100;
+};
+
+// ── News fetching ──────────────────────────────────────────────────────────
+const _newsCache = new Map();
+const NEWS_CACHE_TTL = 10 * 60 * 1000;
+
+/**
+ * Fetch recent news for an asset.
+ * Returns array of { title, summary, source, publishedAt } or [].
+ */
+export const fetchAssetNews = async (symbol, name, marketType) => {
+  const key = `${symbol}::${marketType}`;
+  const hit = _newsCache.get(key);
+  if (hit && Date.now() - hit.ts < NEWS_CACHE_TTL) return hit.data;
+
+  try {
+    let news = [];
+
+    if (marketType === 'TW') {
+      // FinMind TaiwanStockNews
+      const startDate = getDateString(-21);
+      const url = `${FINMIND_BASE_URL}/data?dataset=TaiwanStockNews&data_id=${symbol}&start_date=${startDate}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      if (json.data?.length > 0) {
+        news = json.data.slice(-8).reverse().map(d => ({
+          title: d.title || '',
+          summary: d.description || '',
+          source: d.source || 'FinMind',
+          publishedAt: (d.date || '').slice(0, 10),
+        })).filter(n => n.title);
+      }
+    }
+
+    // For non-TW or if FinMind returned nothing, try Yahoo Finance search
+    if (news.length === 0) {
+      const query = encodeURIComponent(symbol);
+      for (const host of ['query1', 'query2']) {
+        try {
+          const res = await fetch(
+            `https://${host}.finance.yahoo.com/v1/finance/search?q=${query}&newsCount=6&quotesCount=0&enableFuzzyQuery=false`,
+            { headers: { 'User-Agent': 'Mozilla/5.0' } }
+          );
+          if (!res.ok) continue;
+          const json = await res.json();
+          if (json.news?.length > 0) {
+            news = json.news.slice(0, 6).map(n => ({
+              title: n.title || '',
+              summary: n.summary || '',
+              source: n.publisher || '',
+              publishedAt: n.providerPublishTime
+                ? new Date(n.providerPublishTime * 1000).toISOString().slice(0, 10)
+                : '',
+            })).filter(n => n.title);
+            break;
+          }
+        } catch { continue; }
+      }
+    }
+
+    _newsCache.set(key, { data: news, ts: Date.now() });
+    return news;
+  } catch (e) {
+    console.warn(`fetchAssetNews(${symbol}):`, e.message);
+    return [];
+  }
 };

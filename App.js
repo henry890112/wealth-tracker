@@ -6,7 +6,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { LayoutGrid, PieChart, Clock, Settings, Search, CreditCard } from 'lucide-react-native';
+import { LayoutGrid, PieChart, Clock, Settings, Search, CreditCard, Bot } from 'lucide-react-native';
 import { supabase } from './src/lib/supabase';
 import { ThemeProvider, useTheme, COLORS } from './src/lib/ThemeContext';
 
@@ -19,6 +19,7 @@ import AuthScreen from './src/screens/AuthScreen';
 import AssetDetailScreen from './src/screens/AssetDetailScreen';
 import AddAssetScreen from './src/screens/AddAssetScreen';
 import FixedExpensesScreen from './src/screens/FixedExpensesScreen';
+import AIAnalysisScreen from './src/screens/AIAnalysisScreen';
 
 const Tab = createBottomTabNavigator();
 const DashboardStack = createNativeStackNavigator();
@@ -31,6 +32,7 @@ const TAB_CONFIG = [
   { name: 'Charts',    label: '圖表', Icon: PieChart   },
   { name: 'Records',   label: '紀錄', Icon: Clock      },
   { name: 'FixedExpenses',  label: '固定支出', Icon: CreditCard },
+  { name: 'AI',             label: 'AI',      Icon: Bot        },
   { name: 'Settings',       label: '設定',    Icon: Settings   },
 ];
 
@@ -126,8 +128,16 @@ function AppInner() {
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'TOKEN_REFRESHED' && !session) supabase.auth.signOut();
-      else setSession(session);
+      if (
+        event === 'SIGNED_OUT' ||
+        event === 'USER_DELETED' ||
+        (event === 'TOKEN_REFRESHED' && !session)
+      ) {
+        supabase.auth.signOut();
+        setSession(null);
+      } else {
+        setSession(session);
+      }
     });
 
     return () => subscription.unsubscribe();
@@ -156,6 +166,7 @@ function AppInner() {
           <Tab.Screen name="Charts"    component={TrendsScreen}         options={{ title: '圖表' }} />
           <Tab.Screen name="Records"       component={RecordsScreen}        options={{ title: '紀錄' }} />
           <Tab.Screen name="FixedExpenses" component={FixedExpensesScreen}  options={{ title: '固定支出' }} />
+          <Tab.Screen name="AI"            component={AIAnalysisScreen}     options={{ title: 'AI 助理', headerShown: false }} />
           <Tab.Screen name="Settings"      component={SettingsScreen}       options={{ title: '設定' }} />
         </Tab.Navigator>
       </NavigationContainer>

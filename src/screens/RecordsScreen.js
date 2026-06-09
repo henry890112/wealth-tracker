@@ -33,6 +33,7 @@ export default function RecordsScreen() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const [transactions, setTransactions] = useState([]);
+  const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [typeFilter, setTypeFilter] = useState('all');
   const [marketFilter, setMarketFilter] = useState('all');
@@ -58,13 +59,20 @@ export default function RecordsScreen() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const { data } = await supabase
-        .from('transactions')
-        .select('*, assets(name, symbol, currency, market_type, category)')
-        .order('trans_date', { ascending: false })
-        .limit(200);
+      const [{ data }, { count }] = await Promise.all([
+        supabase
+          .from('transactions')
+          .select('*, assets(name, symbol, currency, market_type, category)')
+          .order('trans_date', { ascending: false })
+          .limit(200),
+        supabase
+          .from('transactions')
+          .select('*', { count: 'exact', head: true })
+          .eq('user_id', user.id),
+      ]);
 
       setTransactions(data || []);
+      setTotalCount(count || 0);
     } catch (e) {
       console.error('Error loading records:', e);
     } finally {
@@ -181,6 +189,13 @@ export default function RecordsScreen() {
                 </View>
               );
             })}
+          </View>
+        )}
+        {totalCount > 200 && (
+          <View style={{ paddingVertical: 16, alignItems: 'center' }}>
+            <Text style={{ fontSize: 12, color: colors.textSub }}>
+              顯示最近 200 筆，共 {totalCount} 筆交易記錄
+            </Text>
           </View>
         )}
       </ScrollView>

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView,
   KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
@@ -104,6 +105,7 @@ export default function AddAssetScreen() {
 
       // Snapshot update
       await supabase.rpc('create_daily_snapshot', { p_user_id: user.id });
+      await AsyncStorage.setItem('@wt_needs_refresh', '1').catch(() => {});
 
       Alert.alert('新增成功', `「${name.trim()}」已加入${CATEGORIES.find(c => c.key === selectedCategory)?.label}`, [
         { text: '確定', onPress: () => navigation.goBack() },

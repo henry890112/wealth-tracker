@@ -1,4 +1,5 @@
 import React, { useState, useCallback } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
@@ -82,6 +83,11 @@ export default function SettingsScreen() {
       if (error) throw error;
 
       setProfile({ ...profile, ...updates });
+      // If currency changed, invalidate Dashboard cache so it re-converts on next focus
+      if (updates.base_currency) {
+        await AsyncStorage.multiRemove(['@wt_dashboard_cache', 'lastSnapshotDate', 'lastCategorySnapshotDate']);
+        await AsyncStorage.setItem('@wt_needs_refresh', '1');
+      }
       Alert.alert('成功', '設定已更新');
     } catch (error) {
       console.error('Error updating profile:', error);

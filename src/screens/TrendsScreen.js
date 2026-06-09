@@ -8,10 +8,10 @@ import Svg, {
   Path, Circle, Text as SvgText,
   Defs, LinearGradient, Stop, Line as SvgLine,
 } from 'react-native-svg';
-import { X, Calendar } from 'lucide-react-native';
+import { X, Calendar, ChevronLeft, ChevronRight } from 'lucide-react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../lib/supabase';
-import { convertToBaseCurrency } from '../services/api';
+import { convertToBaseCurrency, fetchUSStockPriceBatch, fetchCryptoPriceBatch, fetchTWStockPriceBatch } from '../services/api';
 import { useTheme } from '../lib/ThemeContext';
 
 const { width: screenWidth } = Dimensions.get('window');
@@ -54,6 +54,14 @@ const FILTER_OPTIONS = [
 
 const formatAmount = (amount) => {
   return Math.round(amount).toLocaleString('zh-TW');
+};
+
+const fmtCompact = (v) => {
+  const abs = Math.abs(v);
+  if (abs >= 1000000) return `${(v / 1000000).toFixed(1)}M`;
+  if (abs >= 10000)   return `${(v / 10000).toFixed(1)}萬`;
+  if (abs >= 1000)    return `${(v / 1000).toFixed(1)}k`;
+  return String(Math.round(v));
 };
 
 // Validates YYYY-MM-DD
@@ -425,6 +433,14 @@ export default function TrendsScreen() {
 
   const [selectedPeriod, setSelectedPeriod] = useState(PERIODS[2]); // default 90d
   const [customRange, setCustomRange] = useState(null); // { start, end } strings
+  const [monthlyBreakdown, setMonthlyBreakdown] = useState([]); // [{ label, change, pct }]
+  const [assetRanking, setAssetRanking] = useState({ gainers: [], losers: [] });
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const d = new Date();
+    return { year: d.getFullYear(), month: d.getMonth() + 1 };
+  });
+  const [dailyPnlMap, setDailyPnlMap] = useState({}); // { 'YYYY-MM-DD': { diff, prevValue } }
+  const [calendarLoading, setCalendarLoading] = useState(false);
 
   const [selectedFilter, setSelectedFilter] = useState('all');
   const [refreshing, setRefreshing] = useState(false);
@@ -436,6 +452,16 @@ export default function TrendsScreen() {
   selectedFilterRef.current = selectedFilter; // kept current every render
 
   const loadDataRef = useRef(null); // populated after loadData is defined below
+  const userIdRef = useRef(null);             // always reflects the latest userId
+  const calendarMonthRef = useRef(calendarMonth); // always reflects latest calendarMonth
+  calendarMonthRef.current = calendarMonth;   // kept current every render
+
+  // Day-detail modal state
+  const [dayDetailVisible, setDayDetailVisible] = useState(false);
+  const [dayDetailDate, setDayDetailDate] = useState(null);
+  const [dayDetailData, setDayDetailData] = useState([]);
+  const [dayDetailLoading, setDayDetailLoading] = useState(false);
+  const [dayDetailNetWorth, setDayDetailNetWorth] = useState(null);
 
   const chartOpacity = useRef(new Animated.Value(1)).current;
 
@@ -470,8 +496,13 @@ export default function TrendsScreen() {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await loadDataRef.current?.(selectedFilterRef.current);
+    // Also refresh the calendar for the currently displayed month
+    if (userIdRef.current) {
+      const { year, month } = calendarMonthRef.current;
+      await loadCalendarData(userIdRef.current, year, month);
+    }
     setRefreshing(false);
-  }, []);
+  }, [loadCalendarData]);
 
   const loadSnapshots = useCallback(async (uid, days, range, filter = 'all') => {
     setSnapshotLoading(true);
@@ -548,36 +579,63 @@ export default function TrendsScreen() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
       setUserId(user.id);
+      userIdRef.current = user.id;
 
       const { data: profileData } = await supabase
         .from('profiles').select('*').eq('id', user.id).single();
       setProfile(profileData);
 
-      // 先載入並換算資產，再 upsert 今日快照，最後才讀歷史快照畫折線圖
       const { data: assetsData } = await supabase
-        .from('assets').select('id, name, category, current_amount, currency, market_type')
+        .from('assets')
+        .select('id, name, symbol, category, current_amount, currency, market_type, average_cost, current_shares, leverage')
         .eq('user_id', user.id);
 
       if (assetsData) {
         const baseCurrency = profileData?.base_currency || 'TWD';
+
+        // ── Fetch live prices for investment assets ONCE — reused for both
+        //    the snapshot total (item 1) and the ranking (item 2 / no double-fetch)
+        const invAssets = assetsData.filter(
+          a => a.category === 'investment' && a.current_shares > 0 && a.symbol
+        );
+        const twSymbols = invAssets.filter(a => a.market_type === 'TW').map(a => a.symbol);
+        const usSymbols = invAssets.filter(a => a.market_type === 'US').map(a => a.symbol);
+        const crSymbols = invAssets.filter(a => a.market_type === 'Crypto').map(a => a.symbol);
+
+        const [twPrices, usPrices, crPrices] = await Promise.all([
+          fetchTWStockPriceBatch(twSymbols),
+          fetchUSStockPriceBatch(usSymbols),
+          fetchCryptoPriceBatch(crSymbols),
+        ]);
+        const priceMap = { ...twPrices, ...usPrices, ...crPrices };
+
+        // ── Convert all assets: investment uses live price if available,
+        //    others fall back to DB current_amount
         const converted = await Promise.all(
           assetsData.filter(a => a.category !== 'liability').map(async (a) => {
-            const converted_amount = await convertToBaseCurrency(parseFloat(a.current_amount), a.currency, baseCurrency);
+            let amount = parseFloat(a.current_amount);
+            if (a.category === 'investment' && a.current_shares > 0 && a.symbol) {
+              const pd = priceMap[a.symbol];
+              if (pd?.price) {
+                const lev      = a.leverage || 1;
+                const borrowed = a.current_shares * (a.average_cost || 0) * (lev - 1) / lev;
+                amount = pd.price * a.current_shares - borrowed;
+              }
+            }
+            const converted_amount = await convertToBaseCurrency(amount, a.currency, baseCurrency);
             return { ...a, converted_amount };
           })
         );
         setDetailedAssets(converted);
 
-        const today = new Date().toISOString().split('T')[0];
-
-        // Upsert 今日 daily_snapshots（確保折線圖最右邊的點是即時值）
+        const today      = new Date().toISOString().split('T')[0];
         const totalValue = converted.reduce((sum, a) => sum + Number(a.converted_amount || 0), 0);
+
+        // Upsert today's snapshot with live-price-accurate total
         await supabase.from('daily_snapshots').upsert(
           { user_id: user.id, snapshot_date: today, net_worth_base: totalValue },
           { onConflict: 'user_id,snapshot_date' }
         );
-
-        // Upsert 今日 category_snapshots
         await saveCategorySnapshots(converted, user.id, today);
 
         const catSums = {};
@@ -594,11 +652,63 @@ export default function TrendsScreen() {
               color: CATEGORY_CONFIG[cat]?.color || '#888',
             }))
         );
+
+        // ── Asset Ranking — reuses the same priceMap, no extra API calls
+        const rankAssets = invAssets.filter(a => a.average_cost > 0);
+        const ranked = (await Promise.all(
+          rankAssets.map(async (a) => {
+            const pd = priceMap[a.symbol];
+            if (!pd?.price) return null;
+            const lev       = a.leverage || 1;
+            const borrowed  = a.current_shares * (a.average_cost || 0) * (lev - 1) / lev;
+            const liveAmt   = pd.price * a.current_shares - borrowed;
+            const costAmt   = a.current_shares * a.average_cost / lev;
+            const currentVal = await convertToBaseCurrency(liveAmt, a.currency, baseCurrency);
+            const costBasis  = await convertToBaseCurrency(costAmt, a.currency, baseCurrency);
+            const pnl_pct    = costBasis > 0 ? ((currentVal - costBasis) / costBasis) * 100 : 0;
+            return isFinite(pnl_pct) ? { name: a.name, symbol: a.symbol, pnl_pct } : null;
+          })
+        )).filter(Boolean);
+
+        ranked.sort((a, b) => b.pnl_pct - a.pnl_pct);
+        setAssetRanking({
+          gainers: ranked.slice(0, 3).filter(a => a.pnl_pct > 0),
+          losers:  ranked.slice(-3).reverse().filter(a => a.pnl_pct < 0),
+        });
       }
 
-      // 在 upsert 完成後才讀歷史快照，確保今天的點已存入
-      // Use filterOverride (supplied by onRefresh) so pull-to-refresh never
-      // silently resets the active filter chip back to 'all'.
+      // ── Monthly Breakdown — last 24 months
+      try {
+        const since = new Date();
+        since.setMonth(since.getMonth() - 23);
+        since.setDate(1);
+        const { data: monthSnaps } = await supabase
+          .from('daily_snapshots').select('snapshot_date, net_worth_base')
+          .eq('user_id', user.id)
+          .gte('snapshot_date', since.toISOString().split('T')[0])
+          .order('snapshot_date', { ascending: true });
+
+        if (monthSnaps && monthSnaps.length > 1) {
+          const byMonth = {};
+          for (const s of monthSnaps) {
+            const ym = s.snapshot_date.slice(0, 7);
+            if (!byMonth[ym]) byMonth[ym] = { first: parseFloat(s.net_worth_base), last: parseFloat(s.net_worth_base) };
+            else byMonth[ym].last = parseFloat(s.net_worth_base);
+          }
+          const months = Object.entries(byMonth).sort(([a], [b]) => a.localeCompare(b));
+          const breakdown = [];
+          for (let i = 1; i < months.length; i++) {
+            const [ym, { last }] = months[i];
+            const prevLast = months[i - 1][1].last;
+            const change   = last - prevLast;
+            const pct      = prevLast > 0 ? (change / prevLast) * 100 : 0;
+            const [y, m]   = ym.split('-');
+            breakdown.push({ label: `${y}/${parseInt(m)}月`, change, pct });
+          }
+          setMonthlyBreakdown(breakdown); // show all available months (up to 24)
+        }
+      } catch {}
+
       const filterToLoad = filterOverride !== undefined ? filterOverride : selectedFilter;
       await loadSnapshots(user.id, PERIODS[2].days, null, filterToLoad);
     } catch (e) {
@@ -610,6 +720,71 @@ export default function TrendsScreen() {
 
   // Keep the ref pointing at the freshest loadData every render.
   loadDataRef.current = loadData;
+
+  // ── Calendar data loader ──────────────────────────────────────────────────
+  const loadCalendarData = useCallback(async (uid, year, month) => {
+    setCalendarLoading(true);
+    try {
+      // Fetch the day before the month starts so we can compute day-1 diff
+      const prevDay = new Date(year, month - 1, 0); // last day of previous month
+      const lastDay = new Date(year, month, 0);     // last day of this month
+      const startStr = prevDay.toISOString().split('T')[0];
+      const endStr   = lastDay.toISOString().split('T')[0];
+
+      const { data } = await supabase
+        .from('daily_snapshots')
+        .select('snapshot_date, net_worth_base')
+        .eq('user_id', uid)
+        .gte('snapshot_date', startStr)
+        .lte('snapshot_date', endStr)
+        .order('snapshot_date', { ascending: true });
+
+      if (!data || data.length < 2) { setDailyPnlMap({}); return; }
+
+      const map = {};
+      for (let i = 1; i < data.length; i++) {
+        const prev     = parseFloat(data[i - 1].net_worth_base);
+        const curr     = parseFloat(data[i].net_worth_base);
+        const dateStr  = data[i].snapshot_date;
+        const [y, m]   = dateStr.split('-').map(Number);
+        if (y === year && m === month) {
+          map[dateStr] = { diff: curr - prev, prevValue: prev };
+        }
+      }
+      setDailyPnlMap(map);
+    } catch (e) {
+      console.warn('loadCalendarData error:', e);
+    } finally {
+      setCalendarLoading(false);
+    }
+  }, []);
+
+  // Reload calendar whenever the displayed month or the logged-in user changes
+  useEffect(() => {
+    if (userId) loadCalendarData(userId, calendarMonth.year, calendarMonth.month);
+  }, [userId, calendarMonth, loadCalendarData]);
+
+  // ── Day-detail: fetch category_snapshots for a tapped calendar day ────────
+  const openDayDetail = useCallback(async (dateStr) => {
+    setDayDetailDate(dateStr);
+    setDayDetailVisible(true);
+    setDayDetailLoading(true);
+    setDayDetailData([]);
+    setDayDetailNetWorth(null);
+    try {
+      const uid = userIdRef.current;
+      const [catRes, snapRes] = await Promise.all([
+        supabase.from('category_snapshots').select('category, value').eq('user_id', uid).eq('date', dateStr),
+        supabase.from('daily_snapshots').select('net_worth_base').eq('user_id', uid).eq('snapshot_date', dateStr).maybeSingle(),
+      ]);
+      setDayDetailData(catRes.data || []);
+      setDayDetailNetWorth(snapRes.data ? parseFloat(snapRes.data.net_worth_base) : null);
+    } catch (e) {
+      console.warn('openDayDetail error:', e);
+    } finally {
+      setDayDetailLoading(false);
+    }
+  }, []);
 
   const handlePeriodSelect = (period) => {
     if (period.days === null) {
@@ -652,6 +827,50 @@ export default function TrendsScreen() {
 
   const currency = profile?.base_currency || 'TWD';
   const fmt = (v) => formatAmount(v);
+
+  // ── Calendar helpers ──────────────────────────────────────────────────────
+  const prevMonth = () => setCalendarMonth(({ year, month }) => {
+    const m = month - 1;
+    return m < 1 ? { year: year - 1, month: 12 } : { year, month: m };
+  });
+  const nextMonth = () => {
+    const today = new Date();
+    setCalendarMonth(({ year, month }) => {
+      const m = month + 1;
+      const next = m > 12 ? { year: year + 1, month: 1 } : { year, month: m };
+      // Don't navigate past current month
+      if (next.year > today.getFullYear() || (next.year === today.getFullYear() && next.month > today.getMonth() + 1)) {
+        return { year, month };
+      }
+      return next;
+    });
+  };
+
+  // Build a 7-column grid (Sun=0 … Sat=6) for the current calendar month
+  const calendarRows = (() => {
+    const { year, month } = calendarMonth;
+    const firstDow   = new Date(year, month - 1, 1).getDay(); // 0=Sun
+    const daysInMon  = getDaysInMonth(year, month);
+    const cells      = Array(firstDow).fill(null);
+    for (let d = 1; d <= daysInMon; d++) cells.push(d);
+    while (cells.length % 7 !== 0) cells.push(null);
+    const rows = [];
+    for (let i = 0; i < cells.length; i += 7) rows.push(cells.slice(i, i + 7));
+    return rows;
+  })();
+
+  // Monthly summary: sum of all daily diffs in the displayed month
+  const calendarMonthSummary = (() => {
+    const { year, month } = calendarMonth;
+    const prefix  = `${year}-${pad2(month)}-`;
+    const entries = Object.entries(dailyPnlMap).filter(([k]) => k.startsWith(prefix));
+    if (entries.length === 0) return null;
+    const totalDiff  = entries.reduce((s, [, v]) => s + v.diff, 0);
+    const sorted     = [...entries].sort(([a], [b]) => a.localeCompare(b));
+    const startValue = sorted[0][1].prevValue;
+    const pct        = startValue > 0 ? (totalDiff / startValue) * 100 : 0;
+    return { diff: totalDiff, pct };
+  })();
 
   if (loading) {
     return <View style={[styles.loading, { backgroundColor: colors.bg }]}><ActivityIndicator size="large" color={PRIMARY} /></View>;
@@ -940,7 +1159,269 @@ export default function TrendsScreen() {
             </View>
           </View>
         )}
+
+        {/* ── ASSET RANKING ─────────────────────────────────────────────── */}
+        {(assetRanking.gainers.length > 0 || assetRanking.losers.length > 0) && (
+          <View style={[styles.card, { marginHorizontal: 16, marginTop: 16, backgroundColor: colors.card }]}>
+            <Text style={[styles.cardTitle, { color: colors.text, marginBottom: 12 }]}>持倉排行</Text>
+            {assetRanking.gainers.length > 0 && (
+              <>
+                <Text style={{ fontSize: 12, color: colors.textSub, fontWeight: '600', marginBottom: 6 }}>▲ 漲幅前三</Text>
+                {assetRanking.gainers.map((a, i) => (
+                  <View key={i} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                    <Text style={{ fontSize: 13, color: colors.textSub, width: 20 }}>{i + 1}</Text>
+                    <Text style={{ fontSize: 13, color: colors.text, flex: 1 }} numberOfLines={1}>{a.name}</Text>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#0DBD8B' }}>
+                      +{a.pnl_pct.toFixed(2)}%
+                    </Text>
+                  </View>
+                ))}
+              </>
+            )}
+            {assetRanking.gainers.length > 0 && assetRanking.losers.length > 0 && (
+              <View style={{ height: 1, backgroundColor: colors.borderLight, marginVertical: 8 }} />
+            )}
+            {assetRanking.losers.length > 0 && (
+              <>
+                <Text style={{ fontSize: 12, color: colors.textSub, fontWeight: '600', marginBottom: 6 }}>▼ 跌幅前三</Text>
+                {assetRanking.losers.map((a, i) => (
+                  <View key={i} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                    <Text style={{ fontSize: 13, color: colors.textSub, width: 20 }}>{i + 1}</Text>
+                    <Text style={{ fontSize: 13, color: colors.text, flex: 1 }} numberOfLines={1}>{a.name}</Text>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#F03030' }}>
+                      {a.pnl_pct.toFixed(2)}%
+                    </Text>
+                  </View>
+                ))}
+              </>
+            )}
+          </View>
+        )}
+
+        {/* ── MONTHLY BREAKDOWN ─────────────────────────────────────────── */}
+        {monthlyBreakdown.length > 0 && (
+          <View style={[styles.card, { marginHorizontal: 16, marginTop: 16, marginBottom: 8, backgroundColor: colors.card }]}>
+            <Text style={[styles.cardTitle, { color: colors.text, marginBottom: 12 }]}>月度績效</Text>
+            {[...monthlyBreakdown].reverse().map((m, i) => {
+              const isUp = m.change >= 0;
+              const barPct = Math.min(Math.abs(m.pct) / 15, 1); // scale: 15% = full bar
+              return (
+                <View key={i} style={{ marginBottom: 10 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 3 }}>
+                    <Text style={{ fontSize: 13, color: colors.textSub, width: 60 }}>{m.label}</Text>
+                    <View style={{ flex: 1, height: 6, backgroundColor: colors.borderLight, borderRadius: 3, overflow: 'hidden' }}>
+                      <View style={{
+                        width: `${barPct * 100}%`, height: '100%', borderRadius: 3,
+                        backgroundColor: isUp ? '#0DBD8B' : '#F03030',
+                      }} />
+                    </View>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: isUp ? '#0DBD8B' : '#F03030', minWidth: 70, textAlign: 'right' }}>
+                      {isUp ? '+' : ''}{m.pct.toFixed(2)}%
+                    </Text>
+                  </View>
+                  <Text style={{ fontSize: 11, color: colors.textMuted, paddingLeft: 60 }}>
+                    {isUp ? '+' : ''}{fmt(m.change)}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        )}
+
+        {/* ── DAILY P&L CALENDAR ──────────────────────────────────────────── */}
+        <View style={[styles.card, { marginHorizontal: 16, marginTop: 16, marginBottom: 8, backgroundColor: colors.card }]}>
+          {/* Card header */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <Text style={[styles.cardTitle, { color: colors.text }]}>每日損益日曆</Text>
+            {calendarLoading && <ActivityIndicator size="small" color={PRIMARY} />}
+          </View>
+
+          {/* Month navigator */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 6 }}>
+            <TouchableOpacity onPress={prevMonth} style={{ padding: 8 }} activeOpacity={0.7}>
+              <ChevronLeft size={20} color={colors.textSub} />
+            </TouchableOpacity>
+            <Text style={{ fontSize: 16, fontWeight: '700', color: colors.text, minWidth: 130, textAlign: 'center' }}>
+              {calendarMonth.year}年 {calendarMonth.month}月
+            </Text>
+            <TouchableOpacity onPress={nextMonth} style={{ padding: 8 }} activeOpacity={0.7}>
+              <ChevronRight size={20} color={colors.textSub} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Monthly P&L summary */}
+          {calendarMonthSummary ? (
+            <View style={{ alignItems: 'center', marginBottom: 14 }}>
+              <Text style={{
+                fontSize: 14, fontWeight: '700',
+                color: calendarMonthSummary.diff >= 0 ? '#0DBD8B' : '#F03030',
+              }}>
+                {calendarMonthSummary.diff >= 0 ? '+' : ''}{fmt(calendarMonthSummary.diff)} {currency}
+                {'  '}
+                ({calendarMonthSummary.diff >= 0 ? '+' : ''}{calendarMonthSummary.pct.toFixed(2)}%)
+              </Text>
+            </View>
+          ) : !calendarLoading && (
+            <Text style={{ color: colors.textMuted, fontSize: 12, textAlign: 'center', marginBottom: 12 }}>
+              本月尚無快照資料
+            </Text>
+          )}
+
+          {/* Day-of-week headers: Sun → Sat */}
+          <View style={{ flexDirection: 'row', marginBottom: 6 }}>
+            {['日', '一', '二', '三', '四', '五', '六'].map(d => (
+              <Text key={d} style={{
+                flex: 1, textAlign: 'center',
+                fontSize: 11, fontWeight: '600',
+                color: colors.textMuted,
+              }}>
+                {d}
+              </Text>
+            ))}
+          </View>
+
+          {/* Calendar grid */}
+          {(() => {
+            const todayStr = new Date().toISOString().split('T')[0];
+            return calendarRows.map((week, wi) => (
+            <View key={wi} style={{ flexDirection: 'row', marginBottom: 3 }}>
+              {week.map((day, di) => {
+                if (!day) return <View key={di} style={{ flex: 1 }} />;
+                const dateStr = `${calendarMonth.year}-${pad2(calendarMonth.month)}-${pad2(day)}`;
+                const pnl     = dailyPnlMap[dateStr];
+                const hasPnl  = pnl != null;
+                const isPos   = hasPnl && pnl.diff >= 0;
+                const pct     = hasPnl && pnl.prevValue > 0
+                  ? (pnl.diff / pnl.prevValue) * 100 : 0;
+                const isToday = dateStr === todayStr;
+                const Cell    = hasPnl ? TouchableOpacity : View;
+                return (
+                  <Cell
+                    key={di}
+                    onPress={hasPnl ? () => openDayDetail(dateStr) : undefined}
+                    activeOpacity={0.7}
+                    style={{
+                      flex: 1,
+                      marginHorizontal: 2,
+                      borderRadius: 8,
+                      paddingVertical: 5,
+                      paddingHorizontal: 1,
+                      backgroundColor: isPos
+                        ? 'rgba(13,189,139,0.13)'
+                        : hasPnl
+                          ? 'rgba(240,48,48,0.10)'
+                          : (isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)'),
+                      alignItems: 'center',
+                      minHeight: 60,
+                      borderWidth: isToday ? 1.5 : 0,
+                      borderColor: isToday ? PRIMARY : 'transparent',
+                    }}
+                  >
+                    <Text style={{
+                      fontSize: 11,
+                      color: isToday ? PRIMARY
+                        : hasPnl ? (isDark ? '#cbd5e1' : '#475569') : colors.textMuted,
+                      fontWeight: isToday ? '800' : '600',
+                      marginBottom: 3,
+                    }}>
+                      {day}
+                    </Text>
+                    {hasPnl && (
+                      <>
+                        <Text style={{
+                          fontSize: 10, fontWeight: '700',
+                          color: isPos ? '#0DBD8B' : '#F03030',
+                          textAlign: 'center',
+                        }} numberOfLines={1}>
+                          {isPos ? '+' : ''}{pct.toFixed(1)}%
+                        </Text>
+                        <Text style={{
+                          fontSize: 9, fontWeight: '500',
+                          color: isPos ? '#0DBD8B' : '#F03030',
+                          textAlign: 'center', opacity: 0.8,
+                        }} numberOfLines={1}>
+                          {isPos ? '+' : ''}{fmtCompact(pnl.diff)}
+                        </Text>
+                      </>
+                    )}
+                  </Cell>
+                );
+              })}
+            </View>
+          ));
+          })()}
+        </View>
+
       </ScrollView>
+
+      {/* ── Day-detail modal ─────────────────────────────────────────── */}
+      <Modal
+        visible={dayDetailVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setDayDetailVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { backgroundColor: colors.card }]}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: colors.text }]}>{dayDetailDate}</Text>
+                <TouchableOpacity onPress={() => setDayDetailVisible(false)}>
+                  <X size={20} color={colors.textSub} />
+                </TouchableOpacity>
+              </View>
+
+              {/* Net worth + daily change */}
+              {dayDetailDate && dailyPnlMap[dayDetailDate] && (() => {
+                const pnl  = dailyPnlMap[dayDetailDate];
+                const isUp = pnl.diff >= 0;
+                const pct  = pnl.prevValue > 0 ? (pnl.diff / pnl.prevValue) * 100 : 0;
+                return (
+                  <View style={{ marginBottom: 16, paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: colors.borderLight }}>
+                    {dayDetailNetWorth != null && (
+                      <Text style={{ fontSize: 22, fontWeight: '800', color: colors.text, marginBottom: 4 }}>
+                        {fmt(dayDetailNetWorth)} {currency}
+                      </Text>
+                    )}
+                    <Text style={{ fontSize: 15, fontWeight: '700', color: isUp ? '#0DBD8B' : '#F03030' }}>
+                      {isUp ? '+' : ''}{fmt(pnl.diff)}  ({isUp ? '+' : ''}{pct.toFixed(2)}%)
+                    </Text>
+                  </View>
+                );
+              })()}
+
+              {/* Category breakdown */}
+              {dayDetailLoading ? (
+                <ActivityIndicator size="small" color={PRIMARY} style={{ marginTop: 16 }} />
+              ) : dayDetailData.length > 0 ? (
+                <>
+                  <Text style={{ fontSize: 13, fontWeight: '600', color: colors.textSub, marginBottom: 10 }}>資產類別</Text>
+                  {dayDetailData
+                    .filter(d => d.value > 0)
+                    .sort((a, b) => b.value - a.value)
+                    .map((d, i) => {
+                      const cfg   = { ...CATEGORY_CONFIG, ...MARKET_TYPE_CONFIG }[d.category];
+                      const label = cfg?.label || d.category;
+                      const color = cfg?.color || '#94a3b8';
+                      return (
+                        <View key={i} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+                          <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: color, marginRight: 10 }} />
+                          <Text style={{ flex: 1, fontSize: 14, color: colors.textSub }}>{label}</Text>
+                          <Text style={{ fontSize: 14, fontWeight: '700', color: colors.text }}>{fmt(d.value)}</Text>
+                        </View>
+                      );
+                    })
+                  }
+                </>
+              ) : (
+                <Text style={{ color: colors.textMuted, fontSize: 13, textAlign: 'center', marginTop: 8 }}>
+                  此日無類別快照資料
+                </Text>
+              )}
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Custom date range modal */}
       <Modal

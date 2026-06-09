@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   View,
   Text,
@@ -21,7 +22,9 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import { WebView } from 'react-native-webview';
 import { Trash2, Plus, Edit2 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
-import { convertToBaseCurrency, fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice, fetchTWStockInstitutional, fetchTWStockMargin, fetchTWStockHoldingSharesPer, fetchTWStockMarginUsage } from '../services/api';
+import { convertToBaseCurrency, fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice, fetchTWStockInstitutional, fetchTWStockMargin, fetchTWStockHoldingSharesPer, fetchTWStockMarginUsage, fetchHistoricalPrices, fetchAssetNews } from '../services/api';
+import { buildTechnicalsText } from '../services/indicators';
+import { analyzeAsset } from '../services/ai';
 import { useTheme } from '../lib/ThemeContext';
 
 const CATEGORY_LABELS = {
@@ -409,6 +412,8 @@ export default function AssetDetailScreen() {
   const [holdingData, setHoldingData] = useState(null);
   const [marginUsageData, setMarginUsageData] = useState(null);
   const [chipLoading, setChipLoading] = useState(false);
+  // Ref to cancel in-flight live-price fetch when loadAssetDetails is called again
+  const livePriceFetchIdRef = useRef(0);
 
   // Add transaction modal state
   const [modalVisible, setModalVisible] = useState(false);
@@ -417,6 +422,11 @@ export default function AssetDetailScreen() {
   const [txPrice, setTxPrice] = useState('');
   const [txDate, setTxDate] = useState(todayString());
   const [adding, setAdding] = useState(false);
+
+  // AI analysis state
+  const [aiAnalysis,   setAiAnalysis]   = useState(null);
+  const [aiLoading,    setAiLoading]    = useState(false);
+  const [aiError,      setAiError]      = useState(null);
 
   // Edit asset modal state
   const [editModalVisible, setEditModalVisible] = useState(false);
@@ -433,6 +443,42 @@ export default function AssetDetailScreen() {
     if (asset && isTWStock(asset) && asset.symbol) {
       fetchTWStockData(asset.symbol).then(data => setTwChartData(data));
     }
+  }, [asset?.id]);
+
+  // Trigger AI analysis for investment assets with a symbol
+  useEffect(() => {
+    if (!asset || asset.category !== 'investment' || !asset.symbol) return;
+    setAiAnalysis(null);
+    setAiError(null);
+    setAiLoading(true);
+    (async () => {
+      try {
+        const [closes, news] = await Promise.all([
+          fetchHistoricalPrices(asset.symbol, asset.market_type, 90),
+          fetchAssetNews(asset.symbol, asset.name, asset.market_type),
+        ]);
+        const lp      = closes ? closes[closes.length - 1] : null;
+        const technicals = lp ? buildTechnicalsText(closes, lp) : null;
+        const pnlPct  = asset.cost_basis_in_base > 0
+          ? ((asset.converted_amount - asset.cost_basis_in_base) / asset.cost_basis_in_base) * 100
+          : null;
+        const result = await analyzeAsset({
+          name:         asset.name,
+          symbol:       asset.symbol,
+          marketType:   asset.market_type,
+          currentPrice: lp,
+          pnlPct,
+          currency:     asset.currency,
+          technicals,
+          news,
+        });
+        setAiAnalysis(result);
+      } catch (e) {
+        setAiError(e.message || 'AI 分析失敗');
+      } finally {
+        setAiLoading(false);
+      }
+    })();
   }, [asset?.id]);
 
   useEffect(() => {
@@ -537,7 +583,8 @@ export default function AssetDetailScreen() {
           .from('assets')
           .update({ average_cost: avgCost })
           .eq('id', primaryAsset.id)
-          .then(() => {}); // fire-and-forget
+          .then(() => {})
+          .catch(e => console.warn('WAC write-back failed:', e?.message || e));
       }
 
       // Convert cost basis to base currency for accurate P&L calculation
@@ -560,23 +607,27 @@ export default function AssetDetailScreen() {
         average_cost: avgCost,
         cost_basis_in_base: costBasisInBase,
       });
-      // Fetch live price for investment assets and update converted_amount + P&L
-      // This fixes the bug where converted_amount was read from stale DB value,
-      // causing P&L ≈ 0 when the DB-cached price happened to equal the avg cost.
+      // Fetch live price for investment assets and update converted_amount + P&L.
+      // Uses a fetch-id ref so that if loadAssetDetails is called again before this
+      // resolves, the stale result is discarded and won't overwrite fresher state.
       if (primaryAsset.category === 'investment' && primaryAsset.symbol) {
+        const fetchId = ++livePriceFetchIdRef.current;
         (async () => {
           try {
             let priceData = null;
             if (primaryAsset.market_type === 'TW') priceData = await fetchTWStockPrice(primaryAsset.symbol);
             else if (primaryAsset.market_type === 'US') priceData = await fetchUSStockPrice(primaryAsset.symbol);
             else if (primaryAsset.market_type === 'Crypto') priceData = await fetchCryptoPrice(primaryAsset.symbol);
+            // Discard if a newer fetch has started
+            if (fetchId !== livePriceFetchIdRef.current) return;
             if (priceData?.price_time) setPriceTime(priceData.price_time);
-            // If we got a live price, recalculate converted_amount so P&L is accurate
+            // Recalculate converted_amount from live price so P&L is accurate
             if (priceData?.price && totalShares > 0) {
               const lev2 = primaryAsset.leverage || 1;
               const borrowed = totalShares * (avgCost || 0) * (lev2 - 1) / lev2;
               const liveAmount = priceData.price * totalShares - borrowed;
               const liveConverted = await convertToBaseCurrency(liveAmount, primaryAsset.currency, baseCurrency);
+              if (fetchId !== livePriceFetchIdRef.current) return;
               setAsset(prev => prev ? { ...prev, converted_amount: liveConverted } : prev);
             }
           } catch {}
@@ -646,6 +697,7 @@ export default function AssetDetailScreen() {
                 .eq('id', tx.id);
               if (error) throw error;
               await loadAssetDetails();
+              await AsyncStorage.setItem('@wt_needs_refresh', '1');
             } catch (error) {
               console.error('Delete transaction error:', error);
               Alert.alert('錯誤', '刪除失敗');
@@ -752,6 +804,8 @@ export default function AssetDetailScreen() {
       setModalVisible(false);
       resetAddModal();
       await loadAssetDetails();
+      // Signal Dashboard to bypass debounce on next focus so net worth updates immediately
+      await AsyncStorage.setItem('@wt_needs_refresh', '1');
       Alert.alert('成功', '交易記錄已新增');
     } catch (error) {
       console.error('Add transaction error:', error);
@@ -881,6 +935,70 @@ export default function AssetDetailScreen() {
             <Text style={styles.deleteButtonText}>刪除</Text>
           </TouchableOpacity>
         </View>
+
+        {/* ── AI Analysis Card (investment assets only) ─────────────────── */}
+        {isInvestmentAsset && asset.symbol && (
+          <View style={[aiCardStyles.card, { backgroundColor: colors.card }]}>
+            <View style={aiCardStyles.header}>
+              <View style={[aiCardStyles.iconWrap, { backgroundColor: colors.isDark ? '#1e3a2f' : '#f0fdf4' }]}>
+                <Text style={aiCardStyles.iconText}>🤖</Text>
+              </View>
+              <Text style={[aiCardStyles.title, { color: colors.text }]}>AI 智能分析</Text>
+              {!aiLoading && (
+                <TouchableOpacity
+                  onPress={() => {
+                    setAiAnalysis(null);
+                    setAiError(null);
+                    setAiLoading(true);
+                    (async () => {
+                      try {
+                        const [closes, news] = await Promise.all([
+                          fetchHistoricalPrices(asset.symbol, asset.market_type, 90),
+                          fetchAssetNews(asset.symbol, asset.name, asset.market_type),
+                        ]);
+                        const lp = closes ? closes[closes.length - 1] : null;
+                        const technicals = lp ? buildTechnicalsText(closes, lp) : null;
+                        const pnlPct = asset.cost_basis_in_base > 0
+                          ? ((asset.converted_amount - asset.cost_basis_in_base) / asset.cost_basis_in_base) * 100
+                          : null;
+                        const result = await analyzeAsset({
+                          name: asset.name, symbol: asset.symbol,
+                          marketType: asset.market_type, currentPrice: lp,
+                          pnlPct, currency: asset.currency, technicals, news,
+                        });
+                        setAiAnalysis(result);
+                      } catch (e) {
+                        setAiError(e.message || 'AI 分析失敗');
+                      } finally {
+                        setAiLoading(false);
+                      }
+                    })();
+                  }}
+                  style={aiCardStyles.refreshBtn}
+                >
+                  <Text style={[aiCardStyles.refreshText, { color: colors.textSub }]}>重新分析</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {aiLoading && (
+              <View style={aiCardStyles.loadingWrap}>
+                <ActivityIndicator size="small" color="#F7A600" />
+                <Text style={[aiCardStyles.loadingText, { color: colors.textSub }]}>
+                  正在取得新聞和技術指標…
+                </Text>
+              </View>
+            )}
+
+            {!aiLoading && aiError && (
+              <Text style={[aiCardStyles.errorText, { color: '#F03030' }]}>{aiError}</Text>
+            )}
+
+            {!aiLoading && aiAnalysis && (
+              <Text style={[aiCardStyles.body, { color: colors.text }]}>{aiAnalysis}</Text>
+            )}
+          </View>
+        )}
 
         {/* Technical Chart (investment assets only) */}
         {isInvestmentAsset && asset.symbol && asset.market_type && (
@@ -1527,4 +1645,28 @@ const styles = StyleSheet.create({
     color: 'white',
     fontWeight: '600',
   },
+});
+
+const aiCardStyles = StyleSheet.create({
+  card: {
+    marginHorizontal: 16, marginBottom: 14,
+    borderRadius: 14, padding: 16,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.07, shadowRadius: 6, elevation: 3,
+  },
+  header: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12,
+  },
+  iconWrap: {
+    width: 30, height: 30, borderRadius: 9,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  iconText:    { fontSize: 16 },
+  title:       { fontSize: 15, fontWeight: '700', flex: 1 },
+  refreshBtn:  { paddingHorizontal: 8, paddingVertical: 4 },
+  refreshText: { fontSize: 12 },
+  loadingWrap: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
+  loadingText: { fontSize: 13 },
+  errorText:   { fontSize: 13, lineHeight: 20 },
+  body:        { fontSize: 14, lineHeight: 22 },
 });

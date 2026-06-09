@@ -144,6 +144,8 @@ export default function DashboardScreen() {
   const [sortOrder,          setSortOrder]          = useState('default');
   const [isRefreshing,       setIsRefreshing]       = useState(false);
   const [categorySnapshots,  setCategorySnapshots]  = useState({});
+  const [loadError,          setLoadError]          = useState(null);
+  const CONCENTRATION_THRESHOLD = 0.30; // warn when single asset > 30% of portfolio
 
   const lastLoadedRef = useRef(0);
 
@@ -193,7 +195,7 @@ export default function DashboardScreen() {
       } else {
         const ex = map.get(key);
         ex._allIds.push(asset.id);
-        ex.converted_amount += asset.converted_amount;
+        ex.converted_amount = (ex.converted_amount || 0) + (asset.converted_amount || 0);
         ex.current_shares = (ex.current_shares || 0) + (asset.current_shares || 0);
         if (ex.pnl !== null && asset.pnl !== null) {
           ex.pnl += asset.pnl;
@@ -262,13 +264,22 @@ export default function DashboardScreen() {
   }, [categorySnapshots]);
 
   // ── focus effect ─────────────────────────────────────────────────────────
+  // Bypass the 60s debounce if another screen (AssetDetail, Settings) flagged
+  // that data-changing work was done (transaction added, currency switched).
   useFocusEffect(useCallback(() => {
-    if (Date.now() - lastLoadedRef.current < 60000) return;
-    loadData();
+    (async () => {
+      const needsRefresh = await AsyncStorage.getItem('@wt_needs_refresh');
+      if (needsRefresh === '1') {
+        await AsyncStorage.removeItem('@wt_needs_refresh');
+        lastLoadedRef.current = 0;
+      }
+      if (Date.now() - lastLoadedRef.current < 60000) return;
+      loadData();
+    })();
   }, []));
 
   // ── live prices ──────────────────────────────────────────────────────────
-  const refreshLivePrices = async (assetsData, baseCurrency, ratesMap = null) => {
+  const refreshLivePrices = async (assetsData, baseCurrency, ratesMap = null, userId = null) => {
     const inv = (assetsData || []).filter(a => a.symbol && a.category === 'investment' && a.current_shares > 0);
     if (inv.length === 0) return;
     const twA = inv.filter(a => a.market_type === 'TW');
@@ -303,10 +314,19 @@ export default function DashboardScreen() {
     await supabase.from('assets').upsert(changedRows);
     const map = Object.fromEntries(changed.map(c => [c.id, c]));
     setAssets(prev => {
-      const next  = prev.map(a => map[a.id] ? { ...a, ...map[a.id] } : a);
-      const total = next.filter(a => a.category !== 'liability').reduce((s, a) => s + a.converted_amount, 0);
-      const liab  = next.filter(a => a.category === 'liability').reduce((s, a) => s + a.converted_amount, 0);
-      setNetWorth(total - liab);
+      const next    = prev.map(a => map[a.id] ? { ...a, ...map[a.id] } : a);
+      const total   = next.filter(a => a.category !== 'liability').reduce((s, a) => s + a.converted_amount, 0);
+      const liab    = next.filter(a => a.category === 'liability').reduce((s, a) => s + a.converted_amount, 0);
+      const liveNW  = total - liab;
+      setNetWorth(liveNW);
+      // Upsert today's snapshot with the accurate live net worth (fire-and-forget)
+      if (userId) {
+        const today = new Date().toISOString().split('T')[0];
+        supabase.from('daily_snapshots')
+          .upsert({ user_id: userId, snapshot_date: today, net_worth_base: liveNW },
+                  { onConflict: 'user_id,snapshot_date' })
+          .then(() => {}, e => console.warn('live snapshot upsert:', e?.message));
+      }
       return next;
     });
   };
@@ -343,7 +363,7 @@ export default function DashboardScreen() {
         })
       );
       setAssets(converted);
-      refreshLivePrices(assetsData, baseCurrency, ratesMap);
+      await refreshLivePrices(assetsData, baseCurrency, ratesMap, user.id);
 
       const assetsTotal    = converted.filter(a => a.category !== 'liability').reduce((s, a) => s + a.converted_amount, 0);
       const liabTotal      = converted.filter(a => a.category === 'liability').reduce((s, a) => s + a.converted_amount, 0);
@@ -364,16 +384,23 @@ export default function DashboardScreen() {
         .order('snapshot_date', { ascending: true }).limit(1).maybeSingle();
       if (monthSnap) setMonthlyChange(currentNetWorth - parseFloat(monthSnap.net_worth_base));
 
-      const todayKey = new Date().toISOString().split('T')[0];
-      const lastSnapshotDate = await AsyncStorage.getItem('lastSnapshotDate');
-      if (lastSnapshotDate !== todayKey) {
-        await supabase.rpc('create_daily_snapshot', { p_user_id: user.id });
-        await AsyncStorage.setItem('lastSnapshotDate', todayKey);
+      // Fallback snapshot upsert using stale net worth — only fires if
+      // refreshLivePrices had no changes (all prices unchanged today).
+      // If prices did change, refreshLivePrices already wrote a live snapshot.
+      {
+        const today = new Date().toISOString().split('T')[0];
+        try {
+          await supabase.from('daily_snapshots')
+            .upsert({ user_id: user.id, snapshot_date: today, net_worth_base: currentNetWorth },
+                    { onConflict: 'user_id,snapshot_date' });
+        } catch (e) { console.warn('fallback snapshot upsert:', e?.message); }
       }
 
-      // Category snapshots write
+      // Category snapshots write — gated by same daily key as daily_snapshot
       try {
         const today = new Date().toISOString().split('T')[0];
+        const lastCatSnapshot = await AsyncStorage.getItem('lastCategorySnapshotDate');
+        if (lastCatSnapshot === today) throw new Error('already_written');
         const getCatKey = (a) => {
           if (a.market_type === 'TW')     return 'TW';
           if (a.market_type === 'US')     return 'US';
@@ -386,8 +413,11 @@ export default function DashboardScreen() {
         const totals = {};
         converted.forEach(a => { const k = getCatKey(a); totals[k] = (totals[k] || 0) + Number(a.converted_amount || 0); });
         const rows = Object.entries(totals).map(([category, value]) => ({ user_id: user.id, date: today, category, value }));
-        if (rows.length > 0) await supabase.from('category_snapshots').upsert(rows, { onConflict: 'user_id,date,category' });
-      } catch (e) { console.log('category snapshot write error:', e); }
+        if (rows.length > 0) {
+          await supabase.from('category_snapshots').upsert(rows, { onConflict: 'user_id,date,category' });
+          await AsyncStorage.setItem('lastCategorySnapshotDate', today);
+        }
+      } catch (e) { if (e?.message !== 'already_written') console.log('category snapshot write error:', e); }
 
       // Category snapshots read (sparklines)
       try {
@@ -403,9 +433,11 @@ export default function DashboardScreen() {
         }
       } catch (e) { console.log('category snapshots read error:', e); }
 
+      setLoadError(null); // clear any previous error on success
       lastLoadedRef.current = Date.now();
     } catch (error) {
       console.error('Error loading data:', error);
+      setLoadError(error?.message || '載入失敗，請檢查網路連線');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -442,6 +474,35 @@ export default function DashboardScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={GREEN} colors={[GREEN]} />
         }
       >
+
+        {/* ── NETWORK ERROR BANNER ─────────────────────────────────────── */}
+        {loadError && (
+          <View style={{
+            marginHorizontal: 16, marginBottom: 12,
+            backgroundColor: 'rgba(240,48,48,0.10)',
+            borderRadius: 14, borderLeftWidth: 3, borderLeftColor: '#F03030',
+            padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10,
+          }}>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: '#F03030', fontSize: 13, fontWeight: '700', marginBottom: 2 }}>
+                載入失敗
+              </Text>
+              <Text style={{ color: C.textSub, fontSize: 12 }} numberOfLines={2}>
+                {loadError}
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => { setLoadError(null); onRefresh(); }}
+              style={{
+                backgroundColor: '#F03030', borderRadius: 10,
+                paddingHorizontal: 12, paddingVertical: 7,
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>重試</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* ── HERO ──────────────────────────────────────────────────────── */}
         <View style={[styles.hero]}>
@@ -516,6 +577,38 @@ export default function DashboardScreen() {
             </View>
           </View>
         </View>
+
+        {/* ── CONCENTRATION ALERTS ─────────────────────────────────────── */}
+        {(() => {
+          if (!netWorth || netWorth <= 0) return null;
+          const overweight = mergedAssets.filter(a =>
+            a.category !== 'liability' &&
+            (a.converted_amount || 0) / netWorth > CONCENTRATION_THRESHOLD
+          );
+          if (overweight.length === 0) return null;
+          return (
+            <View style={{ marginHorizontal: 16, marginBottom: 10 }}>
+              {overweight.map(a => {
+                const pct = ((a.converted_amount / netWorth) * 100).toFixed(1);
+                return (
+                  <View key={a.id} style={{
+                    flexDirection: 'row', alignItems: 'center', gap: 8,
+                    backgroundColor: 'rgba(245,158,11,0.12)',
+                    borderLeftWidth: 3, borderLeftColor: '#f59e0b',
+                    borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8,
+                    marginBottom: 6,
+                  }}>
+                    <Text style={{ fontSize: 14 }}>⚠️</Text>
+                    <Text style={{ fontSize: 13, color: '#d97706', flex: 1 }}>
+                      <Text style={{ fontWeight: '700' }}>{a.name}</Text>
+                      {` 佔總資產 ${pct}%，集中度偏高`}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+          );
+        })()}
 
         {/* ── 2-COL: LIQUID + INVESTMENT ────────────────────────────────── */}
         <View style={[styles.twoColRow, { marginHorizontal: 16, marginBottom: 10 }]}>
@@ -734,7 +827,7 @@ export default function DashboardScreen() {
                   {asset.pnl !== null && (
                     <Text style={{ fontSize: 11, fontWeight: '600', color: asset.pnl >= 0 ? GREEN : RED }}>
                       {hidden ? '****' : asset.pnl_pct !== null
-                        ? `${asset.pnl >= 0 ? '+' : ''}${fmt(asset.pnl)}  (${asset.pnl >= 0 ? '+' : ''}${asset.pnl_pct.toFixed(1)}%)`
+                        ? `${asset.pnl >= 0 ? '+' : ''}${fmt(asset.pnl)}  (${asset.pnl >= 0 ? '+' : ''}${Number(asset.pnl_pct).toFixed(1)}%)`
                         : `${asset.pnl >= 0 ? '+' : ''}${fmt(asset.pnl)}`}
                     </Text>
                   )}

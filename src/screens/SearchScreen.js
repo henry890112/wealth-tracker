@@ -33,6 +33,7 @@ import {
   fetchCryptoPrice,
   fetchUSStockPriceBatch,
   fetchCryptoPriceBatch,
+  fetchTWStockPriceBatch,
 } from '../services/api';
 import { useTheme } from '../lib/ThemeContext';
 import { getAlerts, saveAlert, deleteAlert, resetAlert, checkAndFireAlerts, requestNotificationPermission, registerBackgroundPriceAlerts } from '../lib/priceAlerts';
@@ -817,22 +818,14 @@ export default function SearchScreen() {
     const usSymbols   = list.filter(i => i.market_type === 'US').map(i => i.symbol);
     const cryptoSymbols = list.filter(i => i.market_type === 'Crypto').map(i => i.symbol);
 
-    // US and Crypto use batch endpoints (single request each)
-    const [usBatch, cryptoBatch] = await Promise.all([
+    // All three market types fetched in parallel using batch functions
+    const twSymbols = twItems.map(i => i.symbol);
+    const [usBatch, cryptoBatch, twBatch] = await Promise.all([
       fetchUSStockPriceBatch(usSymbols),
       fetchCryptoPriceBatch(cryptoSymbols),
+      fetchTWStockPriceBatch(twSymbols),
     ]);
-    Object.assign(prices, usBatch, cryptoBatch);
-
-    // TW stocks: no batch endpoint available, fetch in parallel
-    await Promise.allSettled(
-      twItems.map(async (item) => {
-        try {
-          const priceData = await fetchTWStockPrice(item.symbol);
-          if (priceData) prices[item.symbol] = priceData;
-        } catch {}
-      })
-    );
+    Object.assign(prices, usBatch, cryptoBatch, twBatch);
 
     setWatchlistPrices(prices);
     setWatchlistLoading(false);
@@ -982,6 +975,20 @@ export default function SearchScreen() {
       let currency = 'TWD';
       if (selectedAsset.market_type === 'US') currency = 'USD';
       if (selectedAsset.market_type === 'Crypto') currency = 'USD';
+
+      // Prevent adding the same symbol twice
+      const { data: existing } = await supabase
+        .from('assets')
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('symbol', selectedAsset.symbol)
+        .eq('market_type', selectedAsset.market_type || '')
+        .maybeSingle();
+      if (existing) {
+        Alert.alert('已持有此資產', '您已持有此資產，請在總覽頁面或紀錄中新增交易');
+        setAdding(false);
+        return;
+      }
 
       const { data: asset, error: assetError } = await supabase
         .from('assets')
