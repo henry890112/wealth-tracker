@@ -30,12 +30,19 @@ React Native (Expo) + Supabase 的個人資產管理 App，支援多幣別、即
 - **交易紀錄 (Records)**:
   - 支援類型篩選（買入/賣出/調整）× 市場篩選（台股/美股/虛幣）
 - **資產詳情 (AssetDetail)**: 個別資產交易歷史，買入/賣出/調整操作
+- **AI 助理 (AIAnalysis)**:
+  - 智能分析您的資產組合並提供專業理財建議
+  - 支援語音輸入與文字輸入兩種模式
+  - 可執行自然語言交易操作（買入、賣出、調整）
+  - 提供單一資產的技術指標（RSI, MA）與新聞摘要分析
 - **系統設定 (Settings)**: 基準貨幣切換、主題偏好、登出
 
 ### API 整合
 
-- **FinMind API**: 台股即時報價與搜尋
-- **Yahoo Finance**: 美股即時報價與趨勢標的
+- **Google Gemini API**: AI 聊天與語音轉文字
+- **FinMind API**: 台股即時報價、搜尋、新聞與歷史數據
+- **Yahoo Finance**: 美股即時報價、趨勢標的、新聞與歷史數據
+- **Binance API**: 虛擬貨幣歷史數據
 - **CoinGecko API**: 虛擬貨幣價格、成交量排名（附 Supabase 快取 fallback）
 - **ExchangeRate API**: 匯率換算
 
@@ -74,14 +81,19 @@ supabase db reset
 
 ### 3. 設定環境變數
 
+複製 `.env.example` 並重新命名為 `.env`：
 ```bash
 cp .env.example .env
-# 填入 supabase start 輸出的 anon key
 ```
+
+然後編輯 `.env` 檔案，填入以下變數：
+- `EXPO_PUBLIC_SUPABASE_ANON_KEY`: 執行 `supabase start` 後輸出的 `anon key`。
+- `EXPO_PUBLIC_GEMINI_API_KEY`: 您的 Google Gemini API Key（可從 [Google AI Studio](https://aistudio.google.com/app/apikey) 獲取）。
 
 ```env
 EXPO_PUBLIC_SUPABASE_URL=http://localhost:54321
 EXPO_PUBLIC_SUPABASE_ANON_KEY=<from supabase start output>
+EXPO_PUBLIC_GEMINI_API_KEY=<your_gemini_api_key>
 ```
 
 ### 4. 啟動
