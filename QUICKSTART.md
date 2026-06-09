@@ -8,7 +8,7 @@
 
 ```bash
 cd WealthTracker
-npm install
+npm install --legacy-peer-deps
 ```
 
 ### 步驟 2: 啟動 Supabase (本地開發)
