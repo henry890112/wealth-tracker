@@ -181,7 +181,12 @@ export default function DashboardScreen() {
   }, []);
 
   const cycleSortOrder = () =>
-    setSortOrder(prev => prev === 'default' ? 'desc' : prev === 'desc' ? 'asc' : 'default');
+    setSortOrder(prev => 
+      prev === 'default' ? 'desc' : 
+      prev === 'desc' ? 'asc' : 
+      prev === 'asc' ? 'pnl_desc' : 
+      prev === 'pnl_desc' ? 'pnl_asc' : 'default'
+    );
 
   // ── derived data ─────────────────────────────────────────────────────────
   const mergedAssets = useMemo(() => {
@@ -224,9 +229,22 @@ export default function DashboardScreen() {
 
   const sortedFilteredAssets = useMemo(() => {
     if (sortOrder === 'default') return filteredAssets;
-    return [...filteredAssets].sort((a, b) =>
-      sortOrder === 'desc' ? b.converted_amount - a.converted_amount : a.converted_amount - b.converted_amount
-    );
+    return [...filteredAssets].sort((a, b) => {
+      if (sortOrder === 'desc') return (b.converted_amount || 0) - (a.converted_amount || 0);
+      if (sortOrder === 'asc') return (a.converted_amount || 0) - (b.converted_amount || 0);
+      
+      if (sortOrder === 'pnl_desc' || sortOrder === 'pnl_asc') {
+        const valA = typeof a.pnl_pct === 'number' && !isNaN(a.pnl_pct) ? a.pnl_pct : null;
+        const valB = typeof b.pnl_pct === 'number' && !isNaN(b.pnl_pct) ? b.pnl_pct : null;
+
+        if (valA === valB) return 0;
+        if (valA === null) return 1; // nulls go to the bottom
+        if (valB === null) return -1;
+
+        return sortOrder === 'pnl_desc' ? valB - valA : valA - valB;
+      }
+      return 0;
+    });
   }, [filteredAssets, sortOrder]);
 
   const donutData = useMemo(() => [
@@ -811,9 +829,11 @@ export default function DashboardScreen() {
           <Text style={[styles.filterCount, { color: C.textMuted }]}> {sortedFilteredAssets.length} 項</Text>
           <TouchableOpacity onPress={cycleSortOrder} style={styles.sortBtn} activeOpacity={0.7}>
             <Text style={[styles.sortText, { color: sortOrder !== 'default' ? PRIMARY : C.textMuted }]}>
-              {sortOrder === 'default' ? '排序' : sortOrder === 'desc' ? '金額↓' : '金額↑'}
+              {sortOrder === 'default' ? '排序' : sortOrder === 'desc' ? '金額↓' : sortOrder === 'asc' ? '金額↑' : sortOrder === 'pnl_desc' ? '損益↓' : '損益↑'}
             </Text>
           </TouchableOpacity>
+
+
         </View>
 
         {/* update time */}
