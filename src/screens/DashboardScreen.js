@@ -278,10 +278,46 @@ export default function DashboardScreen() {
     })();
   }, []));
 
+  // ── helper: save category snapshots ──────────────────────────────────────
+  const saveCategorySnapshots = async (assetsToSnapshot, uid, date, currentNW) => {
+    try {
+      const lastSnapNWStr = await AsyncStorage.getItem('lastCategorySnapshotNW');
+      const lastSnapNW = lastSnapNWStr ? parseFloat(lastSnapNWStr) : 0;
+      
+      // Only update if NW has changed by more than 0.1%
+      const diff = Math.abs(currentNW - lastSnapNW);
+      const threshold = lastSnapNW === 0 ? Infinity : lastSnapNW * 0.001;
+      if (diff <= threshold) return;
+
+      const getCatKey = (a) => {
+        if (a.market_type === 'TW')     return 'TW';
+        if (a.market_type === 'US')     return 'US';
+        if (a.market_type === 'Crypto') return 'Crypto';
+        if (a.category === 'liquid')    return 'liquid';
+        if (a.category === 'fixed')     return 'fixed';
+        if (a.category === 'receivable') return 'receivable';
+        return 'other';
+      };
+      const totals = {};
+      assetsToSnapshot.forEach(a => { 
+        const k = getCatKey(a); 
+        totals[k] = (totals[k] || 0) + Number(a.converted_amount || 0); 
+      });
+      const rows = Object.entries(totals).map(([category, value]) => ({ user_id: uid, date, category, value }));
+      
+      if (rows.length > 0) {
+        await supabase.from('category_snapshots').upsert(rows, { onConflict: 'user_id,date,category' });
+        await AsyncStorage.setItem('lastCategorySnapshotNW', currentNW.toString());
+      }
+    } catch (e) {
+      console.log('category snapshot write error:', e);
+    }
+  };
+
   // ── live prices ──────────────────────────────────────────────────────────
   const refreshLivePrices = async (assetsData, baseCurrency, ratesMap = null, userId = null) => {
     const inv = (assetsData || []).filter(a => a.symbol && a.category === 'investment' && a.current_shares > 0);
-    if (inv.length === 0) return;
+    if (inv.length === 0) return assetsData;
     const twA = inv.filter(a => a.market_type === 'TW');
     const usA = inv.filter(a => a.market_type === 'US');
     const crA = inv.filter(a => a.market_type === 'Crypto');
@@ -308,27 +344,32 @@ export default function DashboardScreen() {
       })
     );
     const changed = updates.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
-    if (changed.length === 0) return;
+    if (changed.length === 0) return assetsData;
     const now = new Date().toISOString();
     const changedRows = changed.map(c => ({ id: c.id, current_amount: c.current_amount, updated_at: now }));
     await supabase.from('assets').upsert(changedRows);
     const map = Object.fromEntries(changed.map(c => [c.id, c]));
-    setAssets(prev => {
-      const next    = prev.map(a => map[a.id] ? { ...a, ...map[a.id] } : a);
-      const total   = next.filter(a => a.category !== 'liability').reduce((s, a) => s + a.converted_amount, 0);
-      const liab    = next.filter(a => a.category === 'liability').reduce((s, a) => s + a.converted_amount, 0);
-      const liveNW  = total - liab;
-      setNetWorth(liveNW);
-      // Upsert today's snapshot with the accurate live net worth (fire-and-forget)
-      if (userId) {
-        const today = new Date().toISOString().split('T')[0];
-        supabase.from('daily_snapshots')
-          .upsert({ user_id: userId, snapshot_date: today, net_worth_base: liveNW },
-                  { onConflict: 'user_id,snapshot_date' })
-          .then(() => {}, e => console.warn('live snapshot upsert:', e?.message));
-      }
-      return next;
-    });
+    
+    const next = assetsData.map(a => map[a.id] ? { ...a, ...map[a.id] } : a);
+    const total   = next.filter(a => a.category !== 'liability').reduce((s, a) => s + a.converted_amount, 0);
+    const liab    = next.filter(a => a.category === 'liability').reduce((s, a) => s + a.converted_amount, 0);
+    const liveNW  = total - liab;
+    
+    setAssets(next);
+    setNetWorth(liveNW);
+
+    if (userId) {
+      const today = new Date().toISOString().split('T')[0];
+      // Upsert today's snapshot with the accurate live net worth
+      supabase.from('daily_snapshots')
+        .upsert({ user_id: userId, snapshot_date: today, net_worth_base: liveNW },
+                { onConflict: 'user_id,snapshot_date' })
+        .then(() => {}, e => console.warn('live snapshot upsert:', e?.message));
+      
+      // Immediately trigger category snapshot if prices changed
+      saveCategorySnapshots(next, userId, today, liveNW).catch(e => console.warn('live category snapshot error:', e));
+    }
+    return next;
   };
 
   // ── load data ────────────────────────────────────────────────────────────
@@ -363,16 +404,16 @@ export default function DashboardScreen() {
         })
       );
       setAssets(converted);
-      await refreshLivePrices(assetsData, baseCurrency, ratesMap, user.id);
+      const finalAssets = await refreshLivePrices(converted, baseCurrency, ratesMap, user.id);
 
-      const assetsTotal    = converted.filter(a => a.category !== 'liability').reduce((s, a) => s + a.converted_amount, 0);
-      const liabTotal      = converted.filter(a => a.category === 'liability').reduce((s, a) => s + a.converted_amount, 0);
+      const assetsTotal    = finalAssets.filter(a => a.category !== 'liability').reduce((s, a) => s + a.converted_amount, 0);
+      const liabTotal      = finalAssets.filter(a => a.category === 'liability').reduce((s, a) => s + a.converted_amount, 0);
       const currentNetWorth = assetsTotal - liabTotal;
       setNetWorth(currentNetWorth);
       setLastUpdated(new Date());
 
       try {
-        await AsyncStorage.setItem(DASHBOARD_CACHE_KEY, JSON.stringify({ assets: converted, netWorth: currentNetWorth, lastUpdated: Date.now() }));
+        await AsyncStorage.setItem(DASHBOARD_CACHE_KEY, JSON.stringify({ assets: finalAssets, netWorth: currentNetWorth, lastUpdated: Date.now() }));
       } catch (e) { console.log('dashboard cache write error:', e); }
 
       // Monthly change
@@ -384,9 +425,7 @@ export default function DashboardScreen() {
         .order('snapshot_date', { ascending: true }).limit(1).maybeSingle();
       if (monthSnap) setMonthlyChange(currentNetWorth - parseFloat(monthSnap.net_worth_base));
 
-      // Fallback snapshot upsert using stale net worth — only fires if
-      // refreshLivePrices had no changes (all prices unchanged today).
-      // If prices did change, refreshLivePrices already wrote a live snapshot.
+      // Fallback snapshot upsert
       {
         const today = new Date().toISOString().split('T')[0];
         try {
@@ -396,28 +435,27 @@ export default function DashboardScreen() {
         } catch (e) { console.warn('fallback snapshot upsert:', e?.message); }
       }
 
-      // Category snapshots write — gated by same daily key as daily_snapshot
+      // Category snapshots write — gated by change detection
       try {
         const today = new Date().toISOString().split('T')[0];
-        const lastCatSnapshot = await AsyncStorage.getItem('lastCategorySnapshotDate');
-        if (lastCatSnapshot === today) throw new Error('already_written');
-        const getCatKey = (a) => {
-          if (a.market_type === 'TW')     return 'TW';
-          if (a.market_type === 'US')     return 'US';
-          if (a.market_type === 'Crypto') return 'Crypto';
-          if (a.category === 'liquid')    return 'liquid';
-          if (a.category === 'fixed')     return 'fixed';
-          if (a.category === 'receivable') return 'receivable';
-          return 'other';
-        };
-        const totals = {};
-        converted.forEach(a => { const k = getCatKey(a); totals[k] = (totals[k] || 0) + Number(a.converted_amount || 0); });
-        const rows = Object.entries(totals).map(([category, value]) => ({ user_id: user.id, date: today, category, value }));
-        if (rows.length > 0) {
-          await supabase.from('category_snapshots').upsert(rows, { onConflict: 'user_id,date,category' });
-          await AsyncStorage.setItem('lastCategorySnapshotDate', today);
+        await saveCategorySnapshots(finalAssets, user.id, today, currentNetWorth);
+      } catch (e) {
+        if (e?.message !== 'already_written') console.log('category snapshot write error:', e);
+      }
+
+      // Category snapshots read (sparklines)
+      try {
+        const ago = new Date(); ago.setDate(ago.getDate() - 30);
+        const { data: snapData } = await supabase
+          .from('category_snapshots').select('date, category, value')
+          .eq('user_id', user.id).gte('date', ago.toISOString().split('T')[0])
+          .order('date', { ascending: true });
+        if (snapData) {
+          const grouped = {};
+          snapData.forEach(r => { if (!grouped[r.category]) grouped[r.category] = []; grouped[r.category].push(Number(r.value)); });
+          setCategorySnapshots(grouped);
         }
-      } catch (e) { if (e?.message !== 'already_written') console.log('category snapshot write error:', e); }
+      } catch (e) { console.log('category snapshots read error:', e); }
 
       // Category snapshots read (sparklines)
       try {
