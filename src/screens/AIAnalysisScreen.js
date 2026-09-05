@@ -765,12 +765,12 @@ export default function AIAnalysisScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: C.bg, marginBottom: tabBarHeight }}
+      style={{ flex: 1, backgroundColor: C.bg }}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
     >
       {/* ── Header ────────────────────────────────────────────────────────── */}
-      <View style={[styles.header, { backgroundColor: C.card, borderBottomColor: C.border, paddingTop: insets.top + 8 }]}>
+      <View style={[styles.header, { backgroundColor: C.card, borderBottomColor: C.border, paddingTop: insets.top + 6 }]}> 
         <View style={styles.headerLeft}>
           <View style={[styles.headerIcon, { backgroundColor: isDark ? '#1e3a2f' : '#f0fdf4' }]}>
             <Bot size={20} color={PRIMARY} />
@@ -987,7 +987,7 @@ const styles = StyleSheet.create({
   headerSub:   { fontSize: 11, marginTop: 1 },
   clearBtn:    { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10 },
 
-  emptyState:  { alignItems: 'center', paddingTop: 40, paddingBottom: 20 },
+  emptyState:  { alignItems: 'center', paddingTop: 18, paddingBottom: 12 },
   emptyIcon:   { width: 72, height: 72, borderRadius: 22, justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
   emptyTitle:  { fontSize: 22, fontWeight: '800', marginBottom: 8 },
   emptySub:    { fontSize: 14, textAlign: 'center', lineHeight: 22, marginBottom: 28 },
