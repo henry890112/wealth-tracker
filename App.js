@@ -24,6 +24,7 @@ import AIAnalysisScreen from './src/screens/AIAnalysisScreen';
 const Tab = createBottomTabNavigator();
 const DashboardStack = createNativeStackNavigator();
 const RootStack = createNativeStackNavigator();
+const MainStack = createNativeStackNavigator();
 
 const PRIMARY = '#16a34a';
 
@@ -171,6 +172,15 @@ function MainTabs() {
   );
 }
 
+function MainStackScreen() {
+  return (
+    <MainStack.Navigator screenOptions={{ headerShown: false }}>
+      <MainStack.Screen name="Tabs" component={MainTabs} />
+      <MainStack.Screen name="AI" component={AIAnalysisScreen} options={{ presentation: 'modal' }} />
+    </MainStack.Navigator>
+  );
+}
+
 function AppInner() {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -212,8 +222,7 @@ function AppInner() {
       <StatusBar style={isDark ? 'light' : 'dark'} />
       <NavigationContainer theme={navTheme}>
         <RootStack.Navigator screenOptions={{ headerShown: false }}>
-          <RootStack.Screen name="MainTabs" component={MainTabs} />
-          <RootStack.Screen name="AI" component={AIAnalysisScreen} />
+          <RootStack.Screen name="Main" component={MainStackScreen} />
         </RootStack.Navigator>
       </NavigationContainer>
     </>
