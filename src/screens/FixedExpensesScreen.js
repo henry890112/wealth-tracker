@@ -223,7 +223,7 @@ export default function FixedExpensesScreen() {
           {expenses.length === 0 ? (
             <View style={styles.empty}>
               <Text style={[styles.emptyText, { color: c.textMuted }]}>尚無固定支出</Text>
-              <Text style={[styles.emptySub, { color: c.textMuted }]}>點擊右下角 + 新增</Text>
+              <Text style={[styles.emptySub, { color: c.textMuted }]}>點擊右上角 + 新增</Text>
             </View>
           ) : (
             grouped.map(group => {
@@ -287,9 +287,9 @@ export default function FixedExpensesScreen() {
         </ScrollView>
       )}
 
-      {/* FAB */}
+      {/* FAB (moved to top-right to avoid overlapping AI FAB) */}
       <TouchableOpacity
-        style={[styles.fab, { bottom: insets.bottom + 90 }]}
+        style={[styles.fab, { top: insets.top + 12, right: 16 }]}
         onPress={openNew}
         activeOpacity={0.8}
       >
