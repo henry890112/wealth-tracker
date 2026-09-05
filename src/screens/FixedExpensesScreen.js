@@ -11,6 +11,8 @@ import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/ThemeContext';
 import { fetchExchangeRate } from '../services/api';
 
+const PRIMARY = '#F7A600';
+
 const CATEGORIES = ['住房', '交通', '訂閱', '保險', '貸款', '餐飲', '其他'];
 const CURRENCIES = ['TWD', 'USD', 'JPY', 'EUR', 'CNY'];
 
