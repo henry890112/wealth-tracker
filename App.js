@@ -109,7 +109,7 @@ function GlassTabBar({ state, descriptors, navigation }) {
         </View>
         
       </View>
-      {/* Right-side floating AI pill (icon + label) placed outside the clipped container */}
+      {/* Right-side floating AI icon-only FAB placed outside the clipped container */}
       <TouchableOpacity
         onPress={() => navigation.navigate('AI')}
         activeOpacity={0.95}
@@ -119,14 +119,12 @@ function GlassTabBar({ state, descriptors, navigation }) {
           right: 18,
           // place above tab bar: tab bar pill height ~= 75 + safe area
           bottom: (insets.bottom || 16) + 75 + 8,
-          flexDirection: 'row',
-          alignItems: 'center',
-          paddingVertical: 8,
-          paddingLeft: 10,
-          paddingRight: 12,
-          borderRadius: 24,
+          width: 56,
+          height: 56,
+          borderRadius: 28,
           backgroundColor: PRIMARY,
           justifyContent: 'center',
+          alignItems: 'center',
           zIndex: 20,
           shadowColor: '#000',
           shadowOffset: { width: 0, height: 6 },
@@ -135,13 +133,7 @@ function GlassTabBar({ state, descriptors, navigation }) {
           elevation: 10,
         }}
       >
-        <View style={{
-          width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.12)',
-          justifyContent: 'center', alignItems: 'center', marginRight: 8
-        }}>
-          <Bot size={18} color="#fff" />
-        </View>
-        <Text style={{ color: '#fff', fontWeight: '700', fontSize: 12 }}>AI 助手</Text>
+        <Bot size={22} color="#fff" />
       </TouchableOpacity>
     </View>
   );
