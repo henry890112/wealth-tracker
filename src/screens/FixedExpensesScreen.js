@@ -5,6 +5,7 @@ import {
   Platform,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { Plus } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/ThemeContext';
@@ -289,11 +290,11 @@ export default function FixedExpensesScreen() {
 
       {/* FAB (moved to top-right to avoid overlapping AI FAB) */}
       <TouchableOpacity
-        style={[styles.fab, { top: insets.top + 12, right: 16 }]}
+        style={[styles.fabTop, { top: insets.top + 12, right: 16 }]}
         onPress={openNew}
         activeOpacity={0.8}
       >
-        <Text style={styles.fabText}>+</Text>
+        <Plus size={20} color={PRIMARY} />
       </TouchableOpacity>
 
       {/* Add/Edit Modal */}
@@ -520,6 +521,21 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   fabText: { color: '#fff', fontSize: 28, lineHeight: 32, fontWeight: '300' },
+
+  fabTop: {
+    position: 'absolute',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 4,
+  },
 
   modalOverlay: {
     flex: 1,
