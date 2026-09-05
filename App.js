@@ -23,6 +23,7 @@ import AIAnalysisScreen from './src/screens/AIAnalysisScreen';
 
 const Tab = createBottomTabNavigator();
 const DashboardStack = createNativeStackNavigator();
+const RootStack = createNativeStackNavigator();
 
 const PRIMARY = '#16a34a';
 
@@ -32,7 +33,6 @@ const TAB_CONFIG = [
   { name: 'Charts',    label: '圖表', Icon: PieChart   },
   { name: 'Records',   label: '紀錄', Icon: Clock      },
   { name: 'FixedExpenses',  label: '固定支出', Icon: CreditCard },
-  { name: 'AI',             label: 'AI',      Icon: Bot        },
   { name: 'Settings',       label: '設定',    Icon: Settings   },
 ];
 
@@ -73,6 +73,14 @@ function GlassTabBar({ state, descriptors, navigation }) {
               if (!focused && !event.defaultPrevented) navigation.navigate(route.name);
             };
 
+            // Reserve space for the AI tab but render it as empty here
+            // so we can show a centered FAB over the tab bar instead.
+            if (cfg.name === 'AI') {
+              return (
+                <View key={route.key} style={styles.tabItem} />
+              );
+            }
+
             return (
               <TouchableOpacity
                 key={route.key}
@@ -99,7 +107,42 @@ function GlassTabBar({ state, descriptors, navigation }) {
             );
           })}
         </View>
+        
       </View>
+      {/* Right-side floating AI pill (icon + label) placed outside the clipped container */}
+      <TouchableOpacity
+        onPress={() => navigation.navigate('AI')}
+        activeOpacity={0.95}
+        accessibilityLabel="Open AI Assistant"
+        style={{
+          position: 'absolute',
+          right: 18,
+          // place above tab bar: tab bar pill height ~= 75 + safe area
+          bottom: (insets.bottom || 16) + 75 + 8,
+          flexDirection: 'row',
+          alignItems: 'center',
+          paddingVertical: 8,
+          paddingLeft: 10,
+          paddingRight: 12,
+          borderRadius: 24,
+          backgroundColor: PRIMARY,
+          justifyContent: 'center',
+          zIndex: 20,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 6 },
+          shadowOpacity: 0.12,
+          shadowRadius: 10,
+          elevation: 10,
+        }}
+      >
+        <View style={{
+          width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.12)',
+          justifyContent: 'center', alignItems: 'center', marginRight: 8
+        }}>
+          <Bot size={18} color="#fff" />
+        </View>
+        <Text style={{ color: '#fff', fontWeight: '700', fontSize: 12 }}>AI 助手</Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -111,6 +154,28 @@ function DashboardStackScreen() {
       <DashboardStack.Screen name="AssetDetail"   component={AssetDetailScreen} options={{ title: '資產詳情', headerBackTitle: '返回' }} />
       <DashboardStack.Screen name="AddAsset"      component={AddAssetScreen} options={{ headerShown: false }} />
     </DashboardStack.Navigator>
+  );
+}
+
+function MainTabs() {
+  const { isDark, colors } = useTheme();
+  const t = toTheme(colors);
+
+  return (
+    <Tab.Navigator
+      tabBar={(props) => <GlassTabBar {...props} />}
+      screenOptions={{
+        headerStyle: { backgroundColor: t.headerBg },
+        headerTitleStyle: { fontWeight: 'bold', color: t.headerText },
+      }}
+    >
+      <Tab.Screen name="Dashboard" component={DashboardStackScreen} options={{ title: '總覽', headerShown: false }} />
+      <Tab.Screen name="Search"    component={SearchScreen}         options={{ title: '搜尋資產' }} />
+      <Tab.Screen name="Charts"    component={TrendsScreen}         options={{ title: '圖表' }} />
+      <Tab.Screen name="Records"       component={RecordsScreen}        options={{ title: '紀錄' }} />
+      <Tab.Screen name="FixedExpenses" component={FixedExpensesScreen}  options={{ title: '固定支出' }} />
+      <Tab.Screen name="Settings"      component={SettingsScreen}       options={{ title: '設定' }} />
+    </Tab.Navigator>
   );
 }
 
@@ -154,21 +219,10 @@ function AppInner() {
     <>
       <StatusBar style={isDark ? 'light' : 'dark'} />
       <NavigationContainer theme={navTheme}>
-        <Tab.Navigator
-          tabBar={(props) => <GlassTabBar {...props} />}
-          screenOptions={{
-            headerStyle: { backgroundColor: t.headerBg },
-            headerTitleStyle: { fontWeight: 'bold', color: t.headerText },
-          }}
-        >
-          <Tab.Screen name="Dashboard" component={DashboardStackScreen} options={{ title: '總覽', headerShown: false }} />
-          <Tab.Screen name="Search"    component={SearchScreen}         options={{ title: '搜尋資產' }} />
-          <Tab.Screen name="Charts"    component={TrendsScreen}         options={{ title: '圖表' }} />
-          <Tab.Screen name="Records"       component={RecordsScreen}        options={{ title: '紀錄' }} />
-          <Tab.Screen name="FixedExpenses" component={FixedExpensesScreen}  options={{ title: '固定支出' }} />
-          <Tab.Screen name="AI"            component={AIAnalysisScreen}     options={{ title: 'AI 助理', headerShown: false }} />
-          <Tab.Screen name="Settings"      component={SettingsScreen}       options={{ title: '設定' }} />
-        </Tab.Navigator>
+        <RootStack.Navigator screenOptions={{ headerShown: false }}>
+          <RootStack.Screen name="MainTabs" component={MainTabs} />
+          <RootStack.Screen name="AI" component={AIAnalysisScreen} />
+        </RootStack.Navigator>
       </NavigationContainer>
     </>
   );

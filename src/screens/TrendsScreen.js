@@ -40,6 +40,7 @@ const MARKET_TYPE_CONFIG = {
 };
 
 const DRILL_PALETTE = ['#6366f1', '#ec4899', '#14b8a6', '#f97316', '#8b5cf6', '#06b6d4'];
+const DRILL_LIMIT = 20; // how many items to show in drilldown / donut legend
 
 const FILTER_OPTIONS = [
   { label: '全部',    key: 'all' },
@@ -609,6 +610,14 @@ export default function TrendsScreen() {
         ]);
         const priceMap = { ...twPrices, ...usPrices, ...crPrices };
 
+        // Debug: log counts and any missing prices for US symbols
+        try {
+          console.warn('[Trends] total assets:', assetsData.length, 'invAssets:', invAssets.length);
+          console.warn('[Trends] US symbols requested:', usSymbols.length, usSymbols);
+          const missingUS = usSymbols.filter(s => !usPrices[s] || !usPrices[s].price);
+          if (missingUS.length > 0) console.warn('[Trends] Missing US prices for symbols:', missingUS);
+        } catch (e) { console.warn('[Trends] debug log failed', e); }
+
         // ── Convert all assets: investment uses live price if available,
         //    others fall back to DB current_amount
         const converted = await Promise.all(
@@ -925,10 +934,10 @@ export default function TrendsScreen() {
           color: MARKET_TYPE_CONFIG[mt]?.color || '#94a3b8',
         }));
     }
-    return mergeBySymbol(catAssets)
+      return mergeBySymbol(catAssets)
       .filter(a => a.converted_amount > 0)
       .sort((a, b) => b.converted_amount - a.converted_amount)
-      .slice(0, 6)
+      .slice(0, DRILL_LIMIT)
       .map((a, i) => ({
         key: a.symbol || a.name,
         label: a.name,
@@ -966,7 +975,7 @@ export default function TrendsScreen() {
     return mergedAssets
       .filter(a => a.converted_amount > 0)
       .sort((a, b) => b.converted_amount - a.converted_amount)
-      .slice(0, 6)
+      .slice(0, DRILL_LIMIT)
       .map((a, i) => ({
         key: a.symbol || a.name,
         label: a.name,
