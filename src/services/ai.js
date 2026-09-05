@@ -1,7 +1,7 @@
 // Google Gemini AI service for WealthTracker
 const GEMINI_API_KEY =
   process.env.EXPO_PUBLIC_GEMINI_API_KEY ||
-  'AIzaSyD4w0DX2juMpKoPBj-vUStsjmhfxnb1KX4';
+  'AIzaSyDJu0UgwaLuLiRokHaFz1YvZ2tGU7K6GI0';
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 // Models tried in order — first one that responds wins

@@ -8,7 +8,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Bot, Send, RefreshCw, ChevronDown, CheckCircle, XCircle, Mic, MicOff } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
-import { Audio } from 'expo-av';
+// `expo-av` is dynamically imported at runtime to avoid crashing in Expo Go
+// when the native module is not present (e.g. before building a dev client).
 import * as FileSystem from 'expo-file-system/legacy';
 import { supabase } from '../lib/supabase';
 import { convertToBaseCurrency, fetchExchangeRatesBatch, fetchTWStockPriceBatch, fetchUSStockPriceBatch, fetchCryptoPriceBatch } from '../services/api';
@@ -311,6 +312,20 @@ export default function AIAnalysisScreen() {
   const [showScroll,   setShowScroll]   = useState(false);
   const [recording,    setRecording]    = useState(null);
   const [transcribing, setTranscribing] = useState(false);
+  // Reference to the runtime-loaded Audio module (expo-av)
+  const audioRef = useRef(null);
+
+  const ensureAudio = async () => {
+    if (audioRef.current) return audioRef.current;
+    try {
+      const mod = await import('expo-av');
+      audioRef.current = mod.Audio;
+      return audioRef.current;
+    } catch (e) {
+      console.warn('expo-av dynamic import failed:', e?.message || e);
+      throw e;
+    }
+  };
 
   // ── Load saved messages + portfolio on first focus ──────────────────────
   const didLoadRef = useRef(false);
@@ -664,17 +679,25 @@ export default function AIAnalysisScreen() {
   // ── Voice recording ────────────────────────────────────────────────────
   const startRecording = async () => {
     try {
-      const { granted } = await Audio.requestPermissionsAsync();
+      let AudioModule;
+      try {
+        AudioModule = await ensureAudio();
+      } catch (err) {
+        alert('語音功能目前在此環境不可用。請使用 EAS dev client 或預建原生應用以啟用錄音/播放。');
+        return;
+      }
+
+      const { granted } = await AudioModule.requestPermissionsAsync();
       if (!granted) {
         alert('需要麥克風權限才能使用語音輸入');
         return;
       }
-      await Audio.setAudioModeAsync({
+      await AudioModule.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
       });
-      const { recording: rec } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      const { recording: rec } = await AudioModule.Recording.createAsync(
+        AudioModule.RecordingOptionsPresets.HIGH_QUALITY
       );
       setRecording(rec);
     } catch (e) {
@@ -688,7 +711,12 @@ export default function AIAnalysisScreen() {
     setTranscribing(true);
     try {
       await recording.stopAndUnloadAsync();
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+      try {
+        const AudioModule = await ensureAudio();
+        await AudioModule.setAudioModeAsync({ allowsRecordingIOS: false });
+      } catch (e) {
+        // ignore: audio module not available at runtime
+      }
       const uri = recording.getURI();
       setRecording(null);
 
@@ -730,6 +758,8 @@ export default function AIAnalysisScreen() {
     muted:   isDark ? '#475569' : colors.textMuted,
     input:   isDark ? '#1e293b' : '#f8fafc',
   };
+
+  const SHOW_FAB = false; // local FAB disabled; use tab-bar FAB instead
 
   const isEmpty = messages.length === 0;
 
@@ -912,6 +942,7 @@ export default function AIAnalysisScreen() {
             onPress={handleMicPress}
             disabled={isThinking || transcribing}
             activeOpacity={0.8}
+            hitSlop={{ top: 12, left: 12, right: 12, bottom: 12 }}
           >
             {transcribing
               ? <ActivityIndicator size="small" color={PRIMARY} />
@@ -937,6 +968,7 @@ export default function AIAnalysisScreen() {
           </TouchableOpacity>
         </View>
       </View>
+      {/* local FAB disabled; tab bar will provide AI FAB */}
     </KeyboardAvoidingView>
   );
 }
