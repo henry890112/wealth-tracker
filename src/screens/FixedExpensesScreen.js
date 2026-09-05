@@ -292,7 +292,7 @@ export default function FixedExpensesScreen() {
 
       {/* FAB (moved to top-right to avoid overlapping AI FAB) */}
       <TouchableOpacity
-        style={[styles.fabTop, { top: insets.top + 12, right: 16 }]}
+        style={[styles.fabTop, { top: insets.top + 28, right: 16 }]}
         onPress={openNew}
         activeOpacity={0.8}
       >
