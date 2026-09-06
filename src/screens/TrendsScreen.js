@@ -11,7 +11,14 @@ import Svg, {
 import { X, Calendar, ChevronLeft, ChevronRight } from 'lucide-react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../lib/supabase';
-import { convertToBaseCurrency, fetchUSStockPriceBatch, fetchCryptoPriceBatch, fetchTWStockPriceBatch } from '../services/api';
+import { fetchExchangeRatesBatch } from '../services/api';
+import {
+  calculatePortfolioTotals,
+  fetchLiveAssetPrices,
+  getLiveQuote,
+  groupSnapshotTotals,
+  valueAssets,
+} from '../services/portfolio';
 import { useTheme } from '../lib/ThemeContext';
 
 const { width: screenWidth } = Dimensions.get('window');
@@ -453,6 +460,7 @@ export default function TrendsScreen() {
   selectedFilterRef.current = selectedFilter; // kept current every render
 
   const loadDataRef = useRef(null); // populated after loadData is defined below
+  const loadCalendarDataRef = useRef(null); // avoids referencing callback before initialization
   const userIdRef = useRef(null);             // always reflects the latest userId
   const calendarMonthRef = useRef(calendarMonth); // always reflects latest calendarMonth
   calendarMonthRef.current = calendarMonth;   // kept current every render
@@ -500,10 +508,10 @@ export default function TrendsScreen() {
     // Also refresh the calendar for the currently displayed month
     if (userIdRef.current) {
       const { year, month } = calendarMonthRef.current;
-      await loadCalendarData(userIdRef.current, year, month);
+      await loadCalendarDataRef.current?.(userIdRef.current, year, month);
     }
     setRefreshing(false);
-  }, [loadCalendarData]);
+  }, []);
 
   const loadSnapshots = useCallback(async (uid, days, range, filter = 'all') => {
     setSnapshotLoading(true);
@@ -548,20 +556,7 @@ export default function TrendsScreen() {
   }, []);
 
   const saveCategorySnapshots = async (assets, uid, date) => {
-    const getCategoryKey = (a) => {
-      if (a.market_type === 'TW') return 'TW';
-      if (a.market_type === 'US') return 'US';
-      if (a.market_type === 'Crypto') return 'Crypto';
-      if (a.category === 'liquid') return 'liquid';
-      if (a.category === 'fixed') return 'fixed';
-      if (a.category === 'receivable') return 'receivable';
-      return 'other';
-    };
-    const totals = {};
-    assets.forEach(a => {
-      const key = getCategoryKey(a);
-      totals[key] = (totals[key] || 0) + (a.converted_amount || 0);
-    });
+    const totals = groupSnapshotTotals(assets);
     const rows = Object.entries(totals).map(([category, value]) => ({
       user_id: uid,
       date,
@@ -569,9 +564,10 @@ export default function TrendsScreen() {
       value,
     }));
     if (rows.length > 0) {
-      await supabase.from('category_snapshots').upsert(rows, {
+      const { error } = await supabase.from('category_snapshots').upsert(rows, {
         onConflict: 'user_id,date,category',
       });
+      if (error) throw error;
     }
   };
 
@@ -582,14 +578,16 @@ export default function TrendsScreen() {
       setUserId(user.id);
       userIdRef.current = user.id;
 
-      const { data: profileData } = await supabase
+      const { data: profileData, error: profileError } = await supabase
         .from('profiles').select('*').eq('id', user.id).single();
+      if (profileError) throw profileError;
       setProfile(profileData);
 
-      const { data: assetsData } = await supabase
+      const { data: assetsData, error: assetsError } = await supabase
         .from('assets')
         .select('id, name, symbol, category, current_amount, currency, market_type, average_cost, current_shares, leverage')
         .eq('user_id', user.id);
+      if (assetsError) throw assetsError;
 
       if (assetsData) {
         const baseCurrency = profileData?.base_currency || 'TWD';
@@ -599,56 +597,33 @@ export default function TrendsScreen() {
         const invAssets = assetsData.filter(
           a => a.category === 'investment' && a.current_shares > 0 && a.symbol
         );
-        const twSymbols = invAssets.filter(a => a.market_type === 'TW').map(a => a.symbol);
-        const usSymbols = invAssets.filter(a => a.market_type === 'US').map(a => a.symbol);
-        const crSymbols = invAssets.filter(a => a.market_type === 'Crypto').map(a => a.symbol);
-
-        const [twPrices, usPrices, crPrices] = await Promise.all([
-          fetchTWStockPriceBatch(twSymbols),
-          fetchUSStockPriceBatch(usSymbols),
-          fetchCryptoPriceBatch(crSymbols),
+        const [priceMap, ratesMap] = await Promise.all([
+          fetchLiveAssetPrices(invAssets),
+          fetchExchangeRatesBatch(
+            [...new Set(assetsData.map(asset => asset.currency).filter(Boolean))],
+            baseCurrency,
+          ),
         ]);
-        const priceMap = { ...twPrices, ...usPrices, ...crPrices };
-
-        // Debug: log counts and any missing prices for US symbols
-        try {
-          console.warn('[Trends] total assets:', assetsData.length, 'invAssets:', invAssets.length);
-          console.warn('[Trends] US symbols requested:', usSymbols.length, usSymbols);
-          const missingUS = usSymbols.filter(s => !usPrices[s] || !usPrices[s].price);
-          if (missingUS.length > 0) console.warn('[Trends] Missing US prices for symbols:', missingUS);
-        } catch (e) { console.warn('[Trends] debug log failed', e); }
 
         // ── Convert all assets: investment uses live price if available,
         //    others fall back to DB current_amount
-        const converted = await Promise.all(
-          assetsData.filter(a => a.category !== 'liability').map(async (a) => {
-            let amount = parseFloat(a.current_amount);
-            if (a.category === 'investment' && a.current_shares > 0 && a.symbol) {
-              const pd = priceMap[a.symbol];
-              if (pd?.price) {
-                const lev      = a.leverage || 1;
-                const borrowed = a.current_shares * (a.average_cost || 0) * (lev - 1) / lev;
-                amount = pd.price * a.current_shares - borrowed;
-              }
-            }
-            const converted_amount = await convertToBaseCurrency(amount, a.currency, baseCurrency);
-            return { ...a, converted_amount };
-          })
-        );
-        setDetailedAssets(converted);
+        const converted = await valueAssets(assetsData, baseCurrency, { ratesMap, livePrices: priceMap });
+        const nonLiabilityAssets = converted.filter(asset => asset.category !== 'liability');
+        setDetailedAssets(nonLiabilityAssets);
 
         const today      = new Date().toISOString().split('T')[0];
-        const totalValue = converted.reduce((sum, a) => sum + Number(a.converted_amount || 0), 0);
+        const { netWorth: totalValue } = calculatePortfolioTotals(converted);
 
         // Upsert today's snapshot with live-price-accurate total
-        await supabase.from('daily_snapshots').upsert(
+        const { error: snapshotError } = await supabase.from('daily_snapshots').upsert(
           { user_id: user.id, snapshot_date: today, net_worth_base: totalValue },
           { onConflict: 'user_id,snapshot_date' }
         );
+        if (snapshotError) throw snapshotError;
         await saveCategorySnapshots(converted, user.id, today);
 
         const catSums = {};
-        converted.forEach(a => {
+        nonLiabilityAssets.forEach(a => {
           catSums[a.category] = (catSums[a.category] || 0) + a.converted_amount;
         });
         setCategoryTotals(
@@ -664,17 +639,13 @@ export default function TrendsScreen() {
 
         // ── Asset Ranking — reuses the same priceMap, no extra API calls
         const rankAssets = invAssets.filter(a => a.average_cost > 0);
+        const valuedById = new Map(converted.map(asset => [asset.id, asset]));
         const ranked = (await Promise.all(
           rankAssets.map(async (a) => {
-            const pd = priceMap[a.symbol];
+            const pd = getLiveQuote(priceMap, a);
             if (!pd?.price) return null;
-            const lev       = a.leverage || 1;
-            const borrowed  = a.current_shares * (a.average_cost || 0) * (lev - 1) / lev;
-            const liveAmt   = pd.price * a.current_shares - borrowed;
-            const costAmt   = a.current_shares * a.average_cost / lev;
-            const currentVal = await convertToBaseCurrency(liveAmt, a.currency, baseCurrency);
-            const costBasis  = await convertToBaseCurrency(costAmt, a.currency, baseCurrency);
-            const pnl_pct    = costBasis > 0 ? ((currentVal - costBasis) / costBasis) * 100 : 0;
+            const valued = valuedById.get(a.id);
+            const pnl_pct = valued?.pnl_pct ?? 0;
             return isFinite(pnl_pct) ? { name: a.name, symbol: a.symbol, pnl_pct } : null;
           })
         )).filter(Boolean);
@@ -767,6 +738,7 @@ export default function TrendsScreen() {
       setCalendarLoading(false);
     }
   }, []);
+  loadCalendarDataRef.current = loadCalendarData;
 
   // Reload calendar whenever the displayed month or the logged-in user changes
   useEffect(() => {

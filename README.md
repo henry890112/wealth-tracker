@@ -50,7 +50,7 @@ React Native (Expo) + Supabase 的個人資產管理 App，支援多幣別、即
 
 ## 技術棧
 
-- **Frontend**: React Native (Expo 54)
+- **Frontend**: React Native (Expo 57)
 - **Backend**: Supabase (PostgreSQL + Auth)
 - **UI**: Lucide React Native icons、expo-blur、react-native-svg
 - **Charts**: React Native Chart Kit（折線圖）、自製 SVG 甜甜圈圖
@@ -135,7 +135,8 @@ WealthTracker/
 │   │   ├── supabase.js           # Supabase 客戶端
 │   │   └── ThemeContext.js       # 深色/淺色/系統主題 Context
 │   ├── services/
-│   │   └── api.js                # FinMind / Yahoo / CoinGecko / ExchangeRate
+│   │   ├── api.js                # FinMind / Yahoo / CoinGecko / ExchangeRate
+│   │   └── portfolio.js          # 報價、槓桿、換匯與資產組合計算
 │   └── screens/
 │       ├── AuthScreen.js
 │       ├── DashboardScreen.js

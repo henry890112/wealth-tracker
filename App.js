@@ -4,9 +4,8 @@ import { NavigationContainer, DarkTheme, DefaultTheme } from '@react-navigation/
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
-import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { LayoutGrid, PieChart, Clock, Settings, Search, CreditCard, Bot } from 'lucide-react-native';
+import { LayoutGrid, BarChart3, Bot, ClipboardList, MoreHorizontal, Search, Sparkles } from 'lucide-react-native';
 import { supabase } from './src/lib/supabase';
 import { ThemeProvider, useTheme, COLORS } from './src/lib/ThemeContext';
 
@@ -20,21 +19,22 @@ import AssetDetailScreen from './src/screens/AssetDetailScreen';
 import AddAssetScreen from './src/screens/AddAssetScreen';
 import FixedExpensesScreen from './src/screens/FixedExpensesScreen';
 import AIAnalysisScreen from './src/screens/AIAnalysisScreen';
+import ReceivablesScreen from './src/screens/ReceivablesScreen';
+import MoreScreen from './src/screens/MoreScreen';
 
 const Tab = createBottomTabNavigator();
 const DashboardStack = createNativeStackNavigator();
 const RootStack = createNativeStackNavigator();
 const MainStack = createNativeStackNavigator();
 
-const PRIMARY = '#16a34a';
+const PRIMARY = '#F59E0B';
 
 const TAB_CONFIG = [
   { name: 'Dashboard', label: '總覽', Icon: LayoutGrid },
   { name: 'Search',    label: '搜尋', Icon: Search     },
-  { name: 'Charts',    label: '圖表', Icon: PieChart   },
-  { name: 'Records',   label: '紀錄', Icon: Clock      },
-  { name: 'FixedExpenses',  label: '固定支出', Icon: CreditCard },
-  { name: 'Settings',       label: '設定',    Icon: Settings   },
+  { name: 'Charts',    label: '圖表', Icon: BarChart3  },
+  { name: 'Records',   label: '紀錄', Icon: ClipboardList },
+  { name: 'More',      label: '更多', Icon: MoreHorizontal },
 ];
 
 // Map shared COLORS to tab bar tokens
@@ -53,13 +53,29 @@ const toTheme = (c) => ({
 
 function GlassTabBar({ state, descriptors, navigation }) {
   const insets = useSafeAreaInsets();
-  const { isDark, colors } = useTheme();
+  const { colors } = useTheme();
   const t = toTheme(colors);
 
   return (
-    <View style={[styles.tabBarWrapper, { paddingBottom: insets.bottom || 16 }]}>
-      <View style={[styles.tabBarContainer, { borderColor: t.border, shadowColor: t.shadow }]}>
-        <BlurView intensity={60} tint={t.blurTint} style={StyleSheet.absoluteFill} />
+    <View
+      style={[styles.tabBarWrapper, { paddingBottom: insets.bottom || 16 }]}
+    >
+      <TouchableOpacity
+        style={styles.aiDockButton}
+        onPress={() => navigation.getParent()?.navigate('AI')}
+        activeOpacity={0.88}
+        accessibilityRole="button"
+        accessibilityLabel="開啟 AI 財務分析"
+      >
+        <View style={styles.aiDockIcon}>
+          <Bot size={19} color="#FFFFFF" strokeWidth={2.3} />
+        </View>
+        <Text style={styles.aiDockLabel}>問 AI</Text>
+        <Sparkles size={14} color="#FFF3D6" />
+      </TouchableOpacity>
+      <View
+        style={[styles.tabBarContainer, { borderColor: t.border, shadowColor: t.shadow }]}
+      >
         <View style={[styles.tabBarOverlay, { backgroundColor: t.overlay }]} />
 
         <View style={styles.tabBarInner}>
@@ -74,14 +90,6 @@ function GlassTabBar({ state, descriptors, navigation }) {
               if (!focused && !event.defaultPrevented) navigation.navigate(route.name);
             };
 
-            // Reserve space for the AI tab but render it as empty here
-            // so we can show a centered FAB over the tab bar instead.
-            if (cfg.name === 'AI') {
-              return (
-                <View key={route.key} style={styles.tabItem} />
-              );
-            }
-
             return (
               <TouchableOpacity
                 key={route.key}
@@ -91,8 +99,7 @@ function GlassTabBar({ state, descriptors, navigation }) {
               >
                 {focused && (
                   <View style={[styles.activePill, {
-                    backgroundColor: t.activePillBg,
-                    borderColor: t.activePillBorder,
+                    backgroundColor: PRIMARY,
                   }]} />
                 )}
                 <Icon
@@ -108,35 +115,23 @@ function GlassTabBar({ state, descriptors, navigation }) {
             );
           })}
         </View>
-        
       </View>
-      {/* Right-side floating AI icon-only FAB placed outside the clipped container */}
-      <TouchableOpacity
-        onPress={() => navigation.navigate('AI')}
-        activeOpacity={0.95}
-        accessibilityLabel="Open AI Assistant"
-        style={{
-          position: 'absolute',
-          right: 18,
-          // place above tab bar: tab bar pill height ~= 75 + safe area
-          bottom: (insets.bottom || 16) + 75 + 8,
-          width: 56,
-          height: 56,
-          borderRadius: 28,
-          backgroundColor: PRIMARY,
-          justifyContent: 'center',
-          alignItems: 'center',
-          zIndex: 20,
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 6 },
-          shadowOpacity: 0.12,
-          shadowRadius: 10,
-          elevation: 10,
-        }}
-      >
-        <Bot size={22} color="#fff" />
-      </TouchableOpacity>
     </View>
+  );
+}
+
+function AIHeaderButton({ onPress }) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      style={styles.aiHeaderButton}
+      activeOpacity={0.82}
+      accessibilityRole="button"
+      accessibilityLabel="開啟 AI 財務分析"
+    >
+      <Bot size={17} color="#FFFFFF" strokeWidth={2.4} />
+      <Text style={styles.aiHeaderLabel}>問 AI</Text>
+    </TouchableOpacity>
   );
 }
 
@@ -164,19 +159,32 @@ function MainTabs() {
     >
       <Tab.Screen name="Dashboard" component={DashboardStackScreen} options={{ title: '總覽', headerShown: false }} />
       <Tab.Screen name="Search"    component={SearchScreen}         options={{ title: '搜尋資產' }} />
-      <Tab.Screen name="Charts"    component={TrendsScreen}         options={{ title: '圖表' }} />
-      <Tab.Screen name="Records"       component={RecordsScreen}        options={{ title: '紀錄' }} />
-      <Tab.Screen name="FixedExpenses" component={FixedExpensesScreen}  options={{ title: '固定支出' }} />
-      <Tab.Screen name="Settings"      component={SettingsScreen}       options={{ title: '設定' }} />
+      <Tab.Screen name="Charts"    component={TrendsScreen}         options={{ title: '資產趨勢' }} />
+      <Tab.Screen name="Records"   component={RecordsScreen}        options={{ title: '交易紀錄' }} />
+      <Tab.Screen name="More"      component={MoreScreen}           options={{ title: '更多', headerShown: false }} />
     </Tab.Navigator>
   );
 }
 
 function MainStackScreen() {
+  const { colors } = useTheme();
+  const withAI = ({ navigation }) => ({
+    headerShown: true,
+    headerRight: () => <AIHeaderButton onPress={() => navigation.navigate('AI')} />,
+  });
   return (
-    <MainStack.Navigator screenOptions={{ headerShown: false }}>
+    <MainStack.Navigator screenOptions={{
+      headerShown: false,
+      headerStyle: { backgroundColor: colors.header },
+      headerTintColor: colors.text,
+      headerTitleStyle: { fontWeight: '700' },
+      contentStyle: { backgroundColor: colors.bg },
+    }}>
       <MainStack.Screen name="Tabs" component={MainTabs} />
       <MainStack.Screen name="AI" component={AIAnalysisScreen} options={{ presentation: 'modal' }} />
+      <MainStack.Screen name="FixedExpenses" component={FixedExpensesScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '固定支出' })} />
+      <MainStack.Screen name="Receivables" component={ReceivablesScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '應收款項' })} />
+      <MainStack.Screen name="Settings" component={SettingsScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '設定' })} />
     </MainStack.Navigator>
   );
 }
@@ -242,43 +250,85 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 0, left: 0, right: 0,
     alignItems: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: 0,
     backgroundColor: 'transparent',
+    zIndex: 20,
   },
+  aiDockButton: {
+    position: 'absolute',
+    top: -48,
+    alignSelf: 'center',
+    height: 42,
+    paddingLeft: 5,
+    paddingRight: 13,
+    borderRadius: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    backgroundColor: '#0B1F3A',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    shadowColor: '#0B1F3A',
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  aiDockIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: PRIMARY,
+  },
+  aiDockLabel: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
+  aiHeaderButton: {
+    height: 34,
+    paddingHorizontal: 11,
+    borderRadius: 17,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#0B1F3A',
+  },
+  aiHeaderLabel: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
   tabBarContainer: {
     width: '100%',
-    borderRadius: 26,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     overflow: 'hidden',
-    borderWidth: 1,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.12,
-    shadowRadius: 24,
-    elevation: 12,
+    borderTopWidth: 1,
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 8,
   },
   tabBarOverlay: {
     ...StyleSheet.absoluteFillObject,
   },
   tabBarInner: {
     flexDirection: 'row',
-    paddingVertical: 8,
-    paddingHorizontal: 4,
+    paddingTop: 7,
+    paddingHorizontal: 12,
   },
   tabItem: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 8,
+    minHeight: 58,
+    paddingVertical: 7,
     gap: 3,
     borderRadius: 18,
   },
   activePill: {
     position: 'absolute',
-    top: 0, bottom: 0, left: 4, right: 4,
-    borderRadius: 16,
-    borderWidth: 1,
+    top: 0, left: 18, right: 18,
+    height: 3,
+    borderRadius: 2,
   },
   tabLabel: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '500',
   },
   tabLabelActive: {

@@ -12,7 +12,12 @@ import { useFocusEffect } from '@react-navigation/native';
 // when the native module is not present (e.g. before building a dev client).
 import * as FileSystem from 'expo-file-system/legacy';
 import { supabase } from '../lib/supabase';
-import { convertToBaseCurrency, fetchExchangeRatesBatch, fetchTWStockPriceBatch, fetchUSStockPriceBatch, fetchCryptoPriceBatch } from '../services/api';
+import { convertToBaseCurrency, fetchExchangeRatesBatch } from '../services/api';
+import {
+  calculatePortfolioTotals,
+  fetchLiveAssetPrices,
+  valueAssets,
+} from '../services/portfolio';
 import { askAI, transcribeAudio } from '../services/ai';
 import { useTheme } from '../lib/ThemeContext';
 
@@ -392,6 +397,10 @@ export default function AIAnalysisScreen() {
         supabase.from('fixed_expenses').select('amount, currency, frequency').eq('user_id', user.id),
       ]);
 
+      if (profileRes.error) throw profileRes.error;
+      if (assetsRes.error) throw assetsRes.error;
+      if (expensesRes.error) throw expensesRes.error;
+
       const baseCurrency = profileRes.data?.base_currency || 'TWD';
       const assetsData   = assetsRes.data || [];
       const expenses     = expensesRes.data || [];
@@ -402,40 +411,11 @@ export default function AIAnalysisScreen() {
 
       // Fetch live prices for investment assets
       const inv = assetsData.filter(a => a.symbol && a.category === 'investment' && a.current_shares > 0);
-      let liveAmounts = {};
-      if (inv.length > 0) {
-        const [usPrices, crPrices, twPrices] = await Promise.all([
-          fetchUSStockPriceBatch(inv.filter(a => a.market_type === 'US').map(a => a.symbol)),
-          fetchCryptoPriceBatch(inv.filter(a => a.market_type === 'Crypto').map(a => a.symbol)),
-          fetchTWStockPriceBatch(inv.filter(a => a.market_type === 'TW').map(a => a.symbol)),
-        ]);
-        const priceMap = { ...usPrices, ...crPrices, ...twPrices };
-        inv.forEach(a => {
-          const pd = priceMap[a.symbol];
-          if (!pd?.price) return;
-          const lev = a.leverage || 1;
-          const borrowed = a.current_shares * (a.average_cost || 0) * (lev - 1) / lev;
-          liveAmounts[a.id] = pd.price * a.current_shares - borrowed;
-        });
-      }
+      const priceMap = await fetchLiveAssetPrices(inv);
 
       // Convert assets + compute pnl_pct with live prices
       // Also store converted_cost (base currency) for correct P&L in consolidation
-      const converted = await Promise.all(
-        assetsData.map(async (a) => {
-          const rawAmount = liveAmounts[a.id] ?? parseFloat(a.current_amount || 0);
-          const converted_amount = await convertToBaseCurrency(rawAmount, a.currency, baseCurrency, ratesMap);
-          let pnl_pct = null;
-          let converted_cost = 0;
-          if (a.category === 'investment' && a.current_shares > 0 && a.average_cost > 0) {
-            const lev = a.leverage || 1;
-            const costBasis = a.current_shares * a.average_cost / lev;
-            converted_cost = await convertToBaseCurrency(costBasis, a.currency, baseCurrency, ratesMap);
-            pnl_pct = converted_cost > 0 ? ((converted_amount - converted_cost) / converted_cost) * 100 : 0;
-          }
-          return { ...a, converted_amount, converted_cost, pnl_pct };
-        })
-      );
+      const converted = await valueAssets(assetsData, baseCurrency, { ratesMap, livePrices: priceMap });
 
       // ── Consolidate same-symbol investment assets into one entry ────────────
       // (mirrors Dashboard grouping so AI sees the same totals)
@@ -457,9 +437,8 @@ export default function AIAnalysisScreen() {
       }
       const merged = Object.values(consolidatedMap);
 
-      const nonLiab   = merged.filter(a => a.category !== 'liability');
-      const liabTotal = merged.filter(a => a.category === 'liability').reduce((s, a) => s + (a.converted_amount || 0), 0);
-      const netWorth  = nonLiab.reduce((s, a) => s + (a.converted_amount || 0), 0) - liabTotal;
+      const nonLiab = merged.filter(a => a.category !== 'liability');
+      const { netWorth } = calculatePortfolioTotals(merged);
 
       // Monthly change from daily_snapshots
       let monthlyChange = null;

@@ -8,7 +8,14 @@ import { Wallet, TrendingUp, Home, DollarSign, CreditCard, Plus, RefreshCw, Eye,
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Circle, Polyline } from 'react-native-svg';
 import { supabase } from '../lib/supabase';
-import { convertToBaseCurrency, fetchExchangeRatesBatch, fetchTWStockPrice, fetchTWStockPriceBatch, fetchUSStockPriceBatch, fetchCryptoPriceBatch } from '../services/api';
+import { fetchExchangeRatesBatch } from '../services/api';
+import {
+  calculatePortfolioTotals,
+  fetchLiveAssetPrices,
+  getLiveQuote,
+  groupSnapshotTotals,
+  valueAssets,
+} from '../services/portfolio';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../lib/ThemeContext';
 
@@ -304,27 +311,17 @@ export default function DashboardScreen() {
       
       // Only update if NW has changed by more than 0.1%
       const diff = Math.abs(currentNW - lastSnapNW);
-      const threshold = lastSnapNW === 0 ? Infinity : lastSnapNW * 0.001;
+      const threshold = lastSnapNW === 0 ? 0 : Math.abs(lastSnapNW) * 0.001;
       if (diff <= threshold) return;
 
-      const getCatKey = (a) => {
-        if (a.market_type === 'TW')     return 'TW';
-        if (a.market_type === 'US')     return 'US';
-        if (a.market_type === 'Crypto') return 'Crypto';
-        if (a.category === 'liquid')    return 'liquid';
-        if (a.category === 'fixed')     return 'fixed';
-        if (a.category === 'receivable') return 'receivable';
-        return 'other';
-      };
-      const totals = {};
-      assetsToSnapshot.forEach(a => { 
-        const k = getCatKey(a); 
-        totals[k] = (totals[k] || 0) + Number(a.converted_amount || 0); 
-      });
+      const totals = groupSnapshotTotals(assetsToSnapshot);
       const rows = Object.entries(totals).map(([category, value]) => ({ user_id: uid, date, category, value }));
       
       if (rows.length > 0) {
-        await supabase.from('category_snapshots').upsert(rows, { onConflict: 'user_id,date,category' });
+        const { error } = await supabase
+          .from('category_snapshots')
+          .upsert(rows, { onConflict: 'user_id,date,category' });
+        if (error) throw error;
         await AsyncStorage.setItem('lastCategorySnapshotNW', currentNW.toString());
       }
     } catch (e) {
@@ -336,42 +333,36 @@ export default function DashboardScreen() {
   const refreshLivePrices = async (assetsData, baseCurrency, ratesMap = null, userId = null) => {
     const inv = (assetsData || []).filter(a => a.symbol && a.category === 'investment' && a.current_shares > 0);
     if (inv.length === 0) return assetsData;
-    const twA = inv.filter(a => a.market_type === 'TW');
-    const usA = inv.filter(a => a.market_type === 'US');
-    const crA = inv.filter(a => a.market_type === 'Crypto');
-    const [usPrices, crPrices, twPrices] = await Promise.all([
-      fetchUSStockPriceBatch(usA.map(a => a.symbol)),
-      fetchCryptoPriceBatch(crA.map(a => a.symbol)),
-      fetchTWStockPriceBatch(twA.map(a => a.symbol)),
-    ]);
-    const priceMap  = { ...usPrices, ...crPrices, ...twPrices };
+    const priceMap = await fetchLiveAssetPrices(inv);
 
     const updates = await Promise.allSettled(
       inv.map(async (asset) => {
-        const pd = priceMap[asset.symbol];
+        const pd = getLiveQuote(priceMap, asset);
         if (!pd?.price) return null;
-        const lev = asset.leverage || 1;
-        const borrowed   = asset.current_shares * (asset.average_cost || 0) * (lev - 1) / lev;
-        const newAmount  = pd.price * asset.current_shares - borrowed;
+        const [valued] = await valueAssets([asset], baseCurrency, { ratesMap, livePrices: priceMap });
+        const newAmount = valued.current_amount;
         if (Math.abs(newAmount - (asset.current_amount || 0)) < 0.001) return null;
-        const ca   = await convertToBaseCurrency(newAmount, asset.currency, baseCurrency, ratesMap);
-        const cost = asset.current_shares * (asset.average_cost || 0) / lev;
-        const cc   = await convertToBaseCurrency(cost, asset.currency, baseCurrency, ratesMap);
-        const pnl  = ca - cc;
-        return { id: asset.id, current_amount: newAmount, converted_amount: ca, pnl, pnl_pct: cc > 0 ? (pnl / cc) * 100 : 0, converted_cost: cc, price_time: pd.price_time || null };
+        return { id: asset.id, ...valued };
       })
     );
     const changed = updates.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
     if (changed.length === 0) return assetsData;
     const now = new Date().toISOString();
-    const changedRows = changed.map(c => ({ id: c.id, current_amount: c.current_amount, updated_at: now }));
-    await supabase.from('assets').upsert(changedRows);
+    if (userId) {
+      const persisted = await Promise.all(changed.map(({ id, current_amount }) =>
+        supabase
+          .from('assets')
+          .update({ current_amount, updated_at: now })
+          .eq('id', id)
+          .eq('user_id', userId)
+      ));
+      const updateError = persisted.find(result => result.error)?.error;
+      if (updateError) throw updateError;
+    }
     const map = Object.fromEntries(changed.map(c => [c.id, c]));
     
     const next = assetsData.map(a => map[a.id] ? { ...a, ...map[a.id] } : a);
-    const total   = next.filter(a => a.category !== 'liability').reduce((s, a) => s + a.converted_amount, 0);
-    const liab    = next.filter(a => a.category === 'liability').reduce((s, a) => s + a.converted_amount, 0);
-    const liveNW  = total - liab;
+    const { netWorth: liveNW } = calculatePortfolioTotals(next);
     
     setAssets(next);
     setNetWorth(liveNW);
@@ -379,10 +370,10 @@ export default function DashboardScreen() {
     if (userId) {
       const today = new Date().toISOString().split('T')[0];
       // Upsert today's snapshot with the accurate live net worth
-      supabase.from('daily_snapshots')
+      const { error: snapshotError } = await supabase.from('daily_snapshots')
         .upsert({ user_id: userId, snapshot_date: today, net_worth_base: liveNW },
-                { onConflict: 'user_id,snapshot_date' })
-        .then(() => {}, e => console.warn('live snapshot upsert:', e?.message));
+                { onConflict: 'user_id,snapshot_date' });
+      if (snapshotError) console.warn('live snapshot upsert:', snapshotError.message);
       
       // Immediately trigger category snapshot if prices changed
       saveCategorySnapshots(next, userId, today, liveNW).catch(e => console.warn('live category snapshot error:', e));
@@ -396,7 +387,9 @@ export default function DashboardScreen() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const { data: profileData } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles').select('*').eq('id', user.id).single();
+      if (profileError) throw profileError;
       setProfile(profileData);
 
       const { data: assetsData, error } = await supabase
@@ -407,26 +400,11 @@ export default function DashboardScreen() {
       const uniqueCurrencies = [...new Set(assetsData.map(a => a.currency).filter(Boolean))];
       const ratesMap         = await fetchExchangeRatesBatch(uniqueCurrencies, baseCurrency);
 
-      const converted = await Promise.all(
-        assetsData.map(async (asset) => {
-          const ca = await convertToBaseCurrency(parseFloat(asset.current_amount), asset.currency, baseCurrency, ratesMap);
-          let pnl = null, pnl_pct = null, converted_cost = null;
-          if (asset.category === 'investment' && asset.current_shares > 0 && asset.average_cost > 0) {
-            const lev = asset.leverage || 1;
-            const costBasis = asset.current_shares * asset.average_cost / lev;
-            converted_cost  = await convertToBaseCurrency(costBasis, asset.currency, baseCurrency, ratesMap);
-            pnl     = ca - converted_cost;
-            pnl_pct = converted_cost > 0 ? (pnl / converted_cost) * 100 : 0;
-          }
-          return { ...asset, converted_amount: ca, pnl, pnl_pct, converted_cost };
-        })
-      );
+      const converted = await valueAssets(assetsData, baseCurrency, { ratesMap });
       setAssets(converted);
       const finalAssets = await refreshLivePrices(converted, baseCurrency, ratesMap, user.id);
 
-      const assetsTotal    = finalAssets.filter(a => a.category !== 'liability').reduce((s, a) => s + a.converted_amount, 0);
-      const liabTotal      = finalAssets.filter(a => a.category === 'liability').reduce((s, a) => s + a.converted_amount, 0);
-      const currentNetWorth = assetsTotal - liabTotal;
+      const { netWorth: currentNetWorth } = calculatePortfolioTotals(finalAssets);
       setNetWorth(currentNetWorth);
       setLastUpdated(new Date());
 
@@ -447,9 +425,10 @@ export default function DashboardScreen() {
       {
         const today = new Date().toISOString().split('T')[0];
         try {
-          await supabase.from('daily_snapshots')
+          const { error: snapshotError } = await supabase.from('daily_snapshots')
             .upsert({ user_id: user.id, snapshot_date: today, net_worth_base: currentNetWorth },
                     { onConflict: 'user_id,snapshot_date' });
+          if (snapshotError) throw snapshotError;
         } catch (e) { console.warn('fallback snapshot upsert:', e?.message); }
       }
 
@@ -460,20 +439,6 @@ export default function DashboardScreen() {
       } catch (e) {
         if (e?.message !== 'already_written') console.log('category snapshot write error:', e);
       }
-
-      // Category snapshots read (sparklines)
-      try {
-        const ago = new Date(); ago.setDate(ago.getDate() - 30);
-        const { data: snapData } = await supabase
-          .from('category_snapshots').select('date, category, value')
-          .eq('user_id', user.id).gte('date', ago.toISOString().split('T')[0])
-          .order('date', { ascending: true });
-        if (snapData) {
-          const grouped = {};
-          snapData.forEach(r => { if (!grouped[r.category]) grouped[r.category] = []; grouped[r.category].push(Number(r.value)); });
-          setCategorySnapshots(grouped);
-        }
-      } catch (e) { console.log('category snapshots read error:', e); }
 
       // Category snapshots read (sparklines)
       try {
