@@ -1206,8 +1206,14 @@ export default function SearchScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={90}
     >
+      <View style={styles.searchIntro}>
+        <Text style={[styles.searchIntroTitle, { color: colors.text }]}>快速尋找</Text>
+        <Text style={[styles.searchIntroSub, { color: colors.textSub }]}>股票、加密貨幣與外幣都能一次搜尋</Text>
+      </View>
       {/* Search Bar */}
-      <View style={[styles.searchContainer, { backgroundColor: colors.cardAlt }]}>
+      <View
+        style={[styles.searchContainer, { backgroundColor: colors.card, borderColor: colors.border }]}
+      >
         <SearchIcon size={20} color={colors.textSub} />
         <TextInput
           style={[styles.searchInput, { color: colors.text }]}
@@ -1228,15 +1234,15 @@ export default function SearchScreen() {
       </View>
 
       {/* Market Tabs */}
-      <View style={[styles.tabsContainer, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+      <View style={styles.tabsContainer}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsScroll}>
           {MARKET_TABS.map(tab => (
             <TouchableOpacity
               key={tab.id}
-              style={[styles.tab, activeTab === tab.id && styles.activeTab]}
+              style={[styles.tab, { backgroundColor: activeTab === tab.id ? '#FFF3D6' : colors.card, borderColor: activeTab === tab.id ? '#F59E0B' : colors.border }]}
               onPress={() => setActiveTab(tab.id)}
             >
-              <Text style={[styles.tabText, { color: colors.textSub }, activeTab === tab.id && styles.activeTabText]}>
+              <Text style={[styles.tabText, { color: activeTab === tab.id ? '#D97706' : colors.textSub }, activeTab === tab.id && styles.activeTabText]}>
                 {tab.label}
               </Text>
             </TouchableOpacity>
@@ -1884,17 +1890,21 @@ export default function SearchScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  searchIntro: { paddingHorizontal: 16, paddingTop: 16 },
+  searchIntroTitle: { fontSize: 18, fontWeight: '700' },
+  searchIntroSub: { fontSize: 13, marginTop: 3 },
   searchContainer: {
     flexDirection: 'row', alignItems: 'center',
-    margin: 12, paddingHorizontal: 12,
-    borderRadius: 10, gap: 8,
+    marginHorizontal: 16, marginTop: 12, marginBottom: 12, paddingHorizontal: 14,
+    borderRadius: 16, gap: 8, borderWidth: 1,
+    shadowColor: '#0B1F3A', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 2,
   },
   searchInput: { flex: 1, paddingVertical: 12, fontSize: 15 },
-  tabsContainer: { borderBottomWidth: 1 },
-  tab: { paddingHorizontal: 20, paddingVertical: 12, borderBottomWidth: 2, borderBottomColor: 'transparent' },
-  activeTab: { borderBottomColor: '#2563eb' },
+  tabsContainer: { marginBottom: 4 },
+  tabsScroll: { paddingHorizontal: 16, gap: 8 },
+  tab: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 18, borderWidth: 1 },
   tabText: { fontSize: 14 },
-  activeTabText: { color: '#2563eb', fontWeight: '600' },
+  activeTabText: { fontWeight: '700' },
   fxTable: {
     marginHorizontal: 16, marginTop: 12, borderRadius: 12, overflow: 'hidden',
     shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2,

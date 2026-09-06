@@ -6,6 +6,7 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Plus } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/ThemeContext';
 import { fetchExchangeRate } from '../services/api';
@@ -202,9 +203,19 @@ export default function ReceivablesScreen() {
   return (
     <View style={[styles.container, { backgroundColor: c.bg }]}>
       {/* Total card */}
-      <View style={[styles.totalCard, { backgroundColor: c.card, borderColor: c.border }]}>
-        <Text style={[styles.totalLabel, { color: c.textSub }]}>預計月均應收（{baseCurrency}）</Text>
-        <Text style={[styles.totalAmount, { color: c.text }]}>
+      <View
+        style={[styles.totalCard, { backgroundColor: c.card, borderColor: c.border }]}
+      >
+        <View style={styles.totalHeader}>
+          <Text style={[styles.totalLabel, { color: c.textSub }]}>預計月均應收（{baseCurrency}）</Text>
+          <TouchableOpacity style={styles.addAction} onPress={openNew} activeOpacity={0.8}>
+            <Plus size={16} color="#FFFFFF" />
+            <Text style={styles.addActionText}>新增</Text>
+          </TouchableOpacity>
+        </View>
+        <Text
+          style={[styles.totalAmount, { color: c.text }]}
+        >
           {Math.round(totalMonthly).toLocaleString('zh-TW', { minimumFractionDigits: 0 })}
           <Text style={[styles.totalCurrency, { color: c.textMuted }]}> {baseCurrency}</Text>
         </Text>
@@ -221,7 +232,7 @@ export default function ReceivablesScreen() {
           {items.length === 0 ? (
             <View style={styles.empty}>
               <Text style={[styles.emptyText, { color: c.textMuted }]}>尚無應收款項</Text>
-              <Text style={[styles.emptySub, { color: c.textMuted }]}>點擊右下角 + 新增</Text>
+              <Text style={[styles.emptySub, { color: c.textMuted }]}>點擊上方「新增」開始建立</Text>
             </View>
           ) : (
             grouped.map(group => {
@@ -282,15 +293,6 @@ export default function ReceivablesScreen() {
           )}
         </ScrollView>
       )}
-
-      {/* FAB */}
-      <TouchableOpacity
-        style={[styles.fab, { bottom: insets.bottom + 90 }]}
-        onPress={openNew}
-        activeOpacity={0.8}
-      >
-        <Text style={styles.fabText}>+</Text>
-      </TouchableOpacity>
 
       {/* Add/Edit Modal */}
       <Modal
@@ -462,8 +464,10 @@ const styles = StyleSheet.create({
     padding: 20,
     borderRadius: 16,
     borderWidth: 1,
-    alignItems: 'center',
   },
+  totalHeader: { width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  addAction: { height: 34, borderRadius: 17, paddingHorizontal: 12, backgroundColor: '#F59E0B', flexDirection: 'row', alignItems: 'center', gap: 5 },
+  addActionText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
   totalLabel: { fontSize: 13, marginBottom: 4 },
   totalAmount: { fontSize: 32, fontWeight: '700' },
   totalCurrency: { fontSize: 16, fontWeight: '400' },

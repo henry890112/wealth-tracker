@@ -207,9 +207,19 @@ export default function FixedExpensesScreen() {
   return (
     <View style={[styles.container, { backgroundColor: c.bg }]}>
       {/* Total card */}
-      <View style={[styles.totalCard, { backgroundColor: c.card, borderColor: c.border }]}>
-        <Text style={[styles.totalLabel, { color: c.textSub }]}>月均固定支出（{baseCurrency}）</Text>
-        <Text style={[styles.totalAmount, { color: c.text }]}>
+      <View
+        style={[styles.totalCard, { backgroundColor: c.card, borderColor: c.border }]}
+      >
+        <View style={styles.totalHeader}>
+          <Text style={[styles.totalLabel, { color: c.textSub }]}>月均固定支出（{baseCurrency}）</Text>
+          <TouchableOpacity style={styles.addAction} onPress={openNew} activeOpacity={0.8}>
+            <Plus size={16} color="#FFFFFF" />
+            <Text style={styles.addActionText}>新增</Text>
+          </TouchableOpacity>
+        </View>
+        <Text
+          style={[styles.totalAmount, { color: c.text }]}
+        >
           {Math.round(totalInBase).toLocaleString('zh-TW', { minimumFractionDigits: 0 })}
           <Text style={[styles.totalCurrency, { color: c.textMuted }]}> {baseCurrency}</Text>
         </Text>
@@ -226,7 +236,7 @@ export default function FixedExpensesScreen() {
           {expenses.length === 0 ? (
             <View style={styles.empty}>
               <Text style={[styles.emptyText, { color: c.textMuted }]}>尚無固定支出</Text>
-              <Text style={[styles.emptySub, { color: c.textMuted }]}>點擊右上角 + 新增</Text>
+              <Text style={[styles.emptySub, { color: c.textMuted }]}>點擊上方「新增」開始建立</Text>
             </View>
           ) : (
             grouped.map(group => {
@@ -289,15 +299,6 @@ export default function FixedExpensesScreen() {
           )}
         </ScrollView>
       )}
-
-      {/* FAB (moved to top-right to avoid overlapping AI FAB) */}
-      <TouchableOpacity
-        style={[styles.fabTop, { top: insets.top + 28, right: 16 }]}
-        onPress={openNew}
-        activeOpacity={0.8}
-      >
-        <Plus size={20} color={PRIMARY} />
-      </TouchableOpacity>
 
       {/* Add/Edit Modal */}
       <Modal
@@ -470,8 +471,10 @@ const styles = StyleSheet.create({
     padding: 20,
     borderRadius: 16,
     borderWidth: 1,
-    alignItems: 'center',
   },
+  totalHeader: { width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  addAction: { height: 34, borderRadius: 17, paddingHorizontal: 12, backgroundColor: '#F59E0B', flexDirection: 'row', alignItems: 'center', gap: 5 },
+  addActionText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
   totalLabel: { fontSize: 13, marginBottom: 4 },
   totalAmount: { fontSize: 32, fontWeight: '700' },
   totalCurrency: { fontSize: 16, fontWeight: '400' },
@@ -523,21 +526,6 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   fabText: { color: '#fff', fontSize: 28, lineHeight: 32, fontWeight: '300' },
-
-  fabTop: {
-    position: 'absolute',
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#FFFFFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 6,
-    elevation: 4,
-  },
 
   modalOverlay: {
     flex: 1,

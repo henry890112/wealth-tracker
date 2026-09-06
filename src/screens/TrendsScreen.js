@@ -452,6 +452,7 @@ export default function TrendsScreen() {
 
   const [selectedFilter, setSelectedFilter] = useState('all');
   const [refreshing, setRefreshing] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Refs so that stable callbacks (onRefresh, useFocusEffect) always see the
   // latest selectedFilter and the latest loadData without needing to be
@@ -1179,8 +1180,20 @@ export default function TrendsScreen() {
           </View>
         )}
 
+        <TouchableOpacity
+          style={[styles.advancedToggle, { backgroundColor: colors.card, borderColor: colors.border }]}
+          onPress={() => setShowAdvanced(v => !v)}
+          activeOpacity={0.8}
+        >
+          <View>
+            <Text style={[styles.advancedTitle, { color: colors.text }]}>進階分析</Text>
+            <Text style={[styles.advancedSub, { color: colors.textSub }]}>月度績效與每日損益日曆</Text>
+          </View>
+          <Text style={styles.advancedAction}>{showAdvanced ? '收起' : '展開'}</Text>
+        </TouchableOpacity>
+
         {/* ── MONTHLY BREAKDOWN ─────────────────────────────────────────── */}
-        {monthlyBreakdown.length > 0 && (
+        {showAdvanced && monthlyBreakdown.length > 0 && (
           <View style={[styles.card, { marginHorizontal: 16, marginTop: 16, marginBottom: 8, backgroundColor: colors.card }]}>
             <Text style={[styles.cardTitle, { color: colors.text, marginBottom: 12 }]}>月度績效</Text>
             {[...monthlyBreakdown].reverse().map((m, i) => {
@@ -1210,7 +1223,9 @@ export default function TrendsScreen() {
         )}
 
         {/* ── DAILY P&L CALENDAR ──────────────────────────────────────────── */}
-        <View style={[styles.card, { marginHorizontal: 16, marginTop: 16, marginBottom: 8, backgroundColor: colors.card }]}>
+        {showAdvanced && <View
+          style={[styles.card, { marginHorizontal: 16, marginTop: 16, marginBottom: 8, backgroundColor: colors.card }]}
+        >
           {/* Card header */}
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
             <Text style={[styles.cardTitle, { color: colors.text }]}>每日損益日曆</Text>
@@ -1331,7 +1346,7 @@ export default function TrendsScreen() {
             </View>
           ));
           })()}
-        </View>
+        </View>}
 
       </ScrollView>
 
@@ -1638,6 +1653,10 @@ const styles = StyleSheet.create({
   legendValue: { fontSize: 13, fontWeight: '600', marginTop: 4 },
   barBg: { height: 4, borderRadius: 2, overflow: 'hidden' },
   barFill: { height: 4, borderRadius: 2 },
+  advancedToggle: { marginHorizontal: 16, marginTop: 16, borderWidth: 1, borderRadius: 18, paddingHorizontal: 16, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  advancedTitle: { fontSize: 16, fontWeight: '700' },
+  advancedSub: { fontSize: 12, marginTop: 3 },
+  advancedAction: { color: '#D97706', fontSize: 13, fontWeight: '700' },
 
   // ── Custom date modal ──
   modalOverlay: {

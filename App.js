@@ -5,7 +5,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { LayoutGrid, BarChart3, Bot, ClipboardList, MoreHorizontal, Search, Sparkles } from 'lucide-react-native';
+import { LayoutGrid, BarChart3, Bot, ClipboardList, MoreHorizontal, Search } from 'lucide-react-native';
 import { supabase } from './src/lib/supabase';
 import { ThemeProvider, useTheme, COLORS } from './src/lib/ThemeContext';
 
@@ -58,7 +58,13 @@ function GlassTabBar({ state, descriptors, navigation }) {
 
   return (
     <View
-      style={[styles.tabBarWrapper, { paddingBottom: insets.bottom || 16 }]}
+      style={[
+        styles.tabBarWrapper,
+        {
+          paddingBottom: insets.bottom || 16,
+          backgroundColor: t.overlay,
+        },
+      ]}
     >
       <TouchableOpacity
         style={styles.aiDockButton}
@@ -67,17 +73,18 @@ function GlassTabBar({ state, descriptors, navigation }) {
         accessibilityRole="button"
         accessibilityLabel="開啟 AI 財務分析"
       >
-        <View style={styles.aiDockIcon}>
-          <Bot size={19} color="#FFFFFF" strokeWidth={2.3} />
-        </View>
-        <Text style={styles.aiDockLabel}>問 AI</Text>
-        <Sparkles size={14} color="#FFF3D6" />
+        <Bot size={22} color="#FFFFFF" strokeWidth={2.3} />
       </TouchableOpacity>
       <View
-        style={[styles.tabBarContainer, { borderColor: t.border, shadowColor: t.shadow }]}
+        style={[
+          styles.tabBarContainer,
+          {
+            backgroundColor: t.overlay,
+            borderColor: t.border,
+            shadowColor: t.shadow,
+          },
+        ]}
       >
-        <View style={[styles.tabBarOverlay, { backgroundColor: t.overlay }]} />
-
         <View style={styles.tabBarInner}>
           {state.routes.map((route, index) => {
             const focused = state.index === index;
@@ -181,7 +188,11 @@ function MainStackScreen() {
       contentStyle: { backgroundColor: colors.bg },
     }}>
       <MainStack.Screen name="Tabs" component={MainTabs} />
-      <MainStack.Screen name="AI" component={AIAnalysisScreen} options={{ presentation: 'modal' }} />
+      <MainStack.Screen
+        name="AI"
+        component={AIAnalysisScreen}
+        options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }}
+      />
       <MainStack.Screen name="FixedExpenses" component={FixedExpensesScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '固定支出' })} />
       <MainStack.Screen name="Receivables" component={ReceivablesScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '應收款項' })} />
       <MainStack.Screen name="Settings" component={SettingsScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '設定' })} />
@@ -256,15 +267,13 @@ const styles = StyleSheet.create({
   },
   aiDockButton: {
     position: 'absolute',
-    top: -48,
-    alignSelf: 'center',
-    height: 42,
-    paddingLeft: 5,
-    paddingRight: 13,
-    borderRadius: 22,
-    flexDirection: 'row',
+    top: -60,
+    right: 16,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     alignItems: 'center',
-    gap: 7,
+    justifyContent: 'center',
     backgroundColor: '#0B1F3A',
     borderWidth: 2,
     borderColor: '#FFFFFF',
@@ -274,15 +283,6 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 8,
   },
-  aiDockIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: PRIMARY,
-  },
-  aiDockLabel: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
   aiHeaderButton: {
     height: 34,
     paddingHorizontal: 11,
@@ -303,9 +303,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 12,
     elevation: 8,
-  },
-  tabBarOverlay: {
-    ...StyleSheet.absoluteFillObject,
   },
   tabBarInner: {
     flexDirection: 'row',

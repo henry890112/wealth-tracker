@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SlidersHorizontal, X } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/ThemeContext';
 
@@ -38,6 +39,7 @@ export default function RecordsScreen() {
   const [typeFilter, setTypeFilter] = useState('all');
   const [marketFilter, setMarketFilter] = useState('all');
   const [assetFilter, setAssetFilter] = useState('all');
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const lastLoadedRef = useRef(0);
 
@@ -104,6 +106,12 @@ export default function RecordsScreen() {
     });
   }, [transactions, typeFilter, marketFilter, assetFilter]);
 
+  const advancedFilterCount = (marketFilter !== 'all' ? 1 : 0) + (assetFilter !== 'all' ? 1 : 0);
+  const resetAdvancedFilters = () => {
+    setMarketFilter('all');
+    setAssetFilter('all');
+  };
+
   if (loading) {
     return (
       <View style={[styles.loading, { backgroundColor: colors.bg }]}>
@@ -136,10 +144,38 @@ export default function RecordsScreen() {
   return (
     <View style={[{ flex: 1 }, { backgroundColor: colors.bg }]}>
       {/* Filter bar */}
-      <View style={[styles.filterBar, { backgroundColor: colors.card, borderBottomColor: colors.borderLight }]}>
+      <View
+        style={[styles.filterBar, { backgroundColor: colors.card, borderBottomColor: colors.borderLight }]}
+      >
+        <View style={styles.filterHeader}>
+          <View>
+            <Text style={[styles.filterTitle, { color: colors.text }]}>篩選交易</Text>
+            <Text style={[styles.filterCount, { color: colors.textMuted }]}>顯示 {filtered.length} 筆紀錄</Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.filterToggle, { backgroundColor: advancedFilterCount ? '#FFF3D6' : colors.cardAlt, borderColor: advancedFilterCount ? '#F59E0B' : colors.border }]}
+            onPress={() => setFiltersExpanded(v => !v)}
+          >
+            <SlidersHorizontal size={16} color={advancedFilterCount ? '#D97706' : colors.textSub} />
+            <Text style={[styles.filterToggleText, { color: advancedFilterCount ? '#D97706' : colors.textSub }]}>進階{advancedFilterCount ? ` · ${advancedFilterCount}` : ''}</Text>
+          </TouchableOpacity>
+        </View>
         {renderChip(TYPE_FILTERS,   typeFilter,   setTypeFilter,   '#F7A600')}
-        {renderChip(MARKET_FILTERS, marketFilter, setMarketFilter, '#2563eb')}
-        {assetFilters.length > 2 && renderChip(assetFilters, assetFilter, setAssetFilter, '#7c3aed')}
+        {filtersExpanded && (
+          <View style={styles.advancedFilters}>
+            <View style={styles.advancedHeader}>
+              <Text style={[styles.advancedLabel, { color: colors.textMuted }]}>市場與資產</Text>
+              {advancedFilterCount > 0 && (
+                <TouchableOpacity style={styles.resetButton} onPress={resetAdvancedFilters}>
+                  <X size={13} color="#D97706" />
+                  <Text style={styles.resetText}>清除</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            {renderChip(MARKET_FILTERS, marketFilter, setMarketFilter, '#2563eb')}
+            {assetFilters.length > 2 && renderChip(assetFilters, assetFilter, setAssetFilter, '#7c3aed')}
+          </View>
+        )}
       </View>
 
       <ScrollView
@@ -210,9 +246,19 @@ const styles = StyleSheet.create({
 
   filterBar: {
     borderBottomWidth: 1,
-    paddingVertical: 8,
-    gap: 4,
+    paddingVertical: 12,
+    gap: 8,
   },
+  filterHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16 },
+  filterTitle: { fontSize: 16, fontWeight: '700' },
+  filterCount: { fontSize: 12, marginTop: 2 },
+  filterToggle: { height: 34, paddingHorizontal: 11, borderRadius: 17, borderWidth: 1, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  filterToggleText: { fontSize: 12, fontWeight: '700' },
+  advancedFilters: { gap: 7, paddingTop: 3 },
+  advancedHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16 },
+  advancedLabel: { fontSize: 12, fontWeight: '600' },
+  resetButton: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  resetText: { color: '#D97706', fontSize: 12, fontWeight: '600' },
   chipRow: { flexDirection: 'row', paddingHorizontal: 12, gap: 6 },
   chip: {
     paddingHorizontal: 12, paddingVertical: 6,

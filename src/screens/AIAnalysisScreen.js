@@ -5,7 +5,7 @@ import {
   Platform, Keyboard, Animated,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Bot, Send, RefreshCw, ChevronDown, CheckCircle, XCircle, Mic, MicOff } from 'lucide-react-native';
+import { Bot, Send, RefreshCw, ChevronDown, CheckCircle, XCircle, Mic, MicOff, ShieldAlert, Sparkles, TrendingUp, WalletCards } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 // `expo-av` is dynamically imported at runtime to avoid crashing in Expo Go
@@ -40,6 +40,13 @@ const QUICK_QUESTIONS = [
   { label: '💸 現金流分析',  text: '根據我的固定支出和資產，每個月的現金流狀況如何？能撐多久？' },
   { label: '📰 新聞解讀',    text: '根據我目前持有的資產，最近有哪些重要產業動態或市場消息值得注意？分別對我的持倉有什麼潛在影響？' },
   { label: '📆 年度規劃',    text: '根據我目前的淨資產和近幾個月的月度變動趨勢，推算今年底的預估淨資產。同時給我 2-3 個具體建議，幫助我達成更好的年度財務目標。' },
+];
+
+const FEATURED_QUESTIONS = [
+  { label: '組合健檢', subtitle: '配置、優勢與盲點', Icon: Sparkles, text: QUICK_QUESTIONS[0].text, color: '#F59E0B' },
+  { label: '風險雷達', subtitle: '集中度與流動性', Icon: ShieldAlert, text: QUICK_QUESTIONS[1].text, color: '#EF4444' },
+  { label: '績效解讀', subtitle: '找出漲跌關鍵', Icon: TrendingUp, text: QUICK_QUESTIONS[2].text, color: '#14B8A6' },
+  { label: '行動建議', subtitle: '下一步如何調整', Icon: WalletCards, text: QUICK_QUESTIONS[3].text, color: '#2563EB' },
 ];
 
 // ── Typing dots animation ──────────────────────────────────────────────────
@@ -301,11 +308,9 @@ function MessageBubble({ msg, msgIdx, colors, isDark, onConfirmAction, onCancelA
   );
 }
 
-export default function AIAnalysisScreen() {
+export default function AIAnalysisScreen({ navigation }) {
   const { colors, isDark }  = useTheme();
   const insets              = useSafeAreaInsets();
-  // Tab bar pill height (67px) + safe area bottom + 8px buffer
-  const tabBarHeight        = 75 + insets.bottom;
   const scrollRef           = useRef(null);
 
   const [messages,     setMessages]     = useState([]);
@@ -317,6 +322,7 @@ export default function AIAnalysisScreen() {
   const [showScroll,   setShowScroll]   = useState(false);
   const [recording,    setRecording]    = useState(null);
   const [transcribing, setTranscribing] = useState(false);
+  const [showAllQuick, setShowAllQuick] = useState(false);
   // Reference to the runtime-loaded Audio module (expo-av)
   const audioRef = useRef(null);
 
@@ -744,12 +750,12 @@ export default function AIAnalysisScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: C.bg, marginBottom: tabBarHeight }}
+      style={{ flex: 1, backgroundColor: C.bg }}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
+      keyboardVerticalOffset={0}
     >
       {/* ── Header ────────────────────────────────────────────────────────── */}
-      <View style={[styles.header, { backgroundColor: C.card, borderBottomColor: C.border, paddingTop: insets.top + 8 }]}>
+      <View style={[styles.header, { backgroundColor: C.card, borderBottomColor: C.border, paddingTop: insets.top + 6 }]}>
         <View style={styles.headerLeft}>
           <View style={[styles.headerIcon, { backgroundColor: isDark ? '#1e3a2f' : '#f0fdf4' }]}>
             <Bot size={20} color={PRIMARY} />
@@ -761,19 +767,29 @@ export default function AIAnalysisScreen() {
             </Text>
           </View>
         </View>
-        {messages.length > 0 && (
-          <TouchableOpacity onPress={clearChat} style={[styles.clearBtn, { backgroundColor: isDark ? '#334155' : '#f1f5f9' }]}>
-            <RefreshCw size={15} color={C.sub} />
-            <Text style={{ color: C.sub, fontSize: 12, fontWeight: '600' }}>清除</Text>
+        <View style={styles.headerActions}>
+          {messages.length > 0 && (
+            <TouchableOpacity onPress={clearChat} style={[styles.clearBtn, { backgroundColor: isDark ? '#334155' : '#f1f5f9' }]}>
+              <RefreshCw size={15} color={C.sub} />
+              <Text style={{ color: C.sub, fontSize: 12, fontWeight: '600' }}>清除</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            onPress={() => navigation.goBack()}
+            style={[styles.closeBtn, { backgroundColor: isDark ? '#334155' : '#f1f5f9' }]}
+            accessibilityRole="button"
+            accessibilityLabel="關閉 AI 助理"
+          >
+            <XCircle size={19} color={C.sub} />
           </TouchableOpacity>
-        )}
+        </View>
       </View>
 
       {/* ── Messages area ─────────────────────────────────────────────────── */}
       <ScrollView
         ref={scrollRef}
         style={{ flex: 1 }}
-        contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 16 }}
+        contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 10, paddingBottom: 12 }}
         onContentSizeChange={() => {
           if (!isEmpty) scrollRef.current?.scrollToEnd({ animated: false });
         }}
@@ -790,26 +806,49 @@ export default function AIAnalysisScreen() {
             <View style={[styles.emptyIcon, { backgroundColor: isDark ? '#1e3a2f' : '#f0fdf4' }]}>
               <Bot size={40} color={PRIMARY} />
             </View>
-            <Text style={[styles.emptyTitle, { color: C.text }]}>WealthTracker AI</Text>
+            <Text style={[styles.emptyTitle, { color: C.text }]}>你的財務副駕</Text>
             <Text style={[styles.emptySub, { color: C.sub }]}>
-              問我任何關於你資產組合的問題{'\n'}或選擇下方的快速分析
+              以你的持倉、損益與現金流為基礎{'\n'}給你可執行的財務觀點
             </Text>
 
             {loadingCtx ? (
               <ActivityIndicator color={PRIMARY} style={{ marginTop: 20 }} />
             ) : (
-              <View style={styles.quickGrid}>
-                {QUICK_QUESTIONS.map((q, i) => (
+              <>
+                <Text style={[styles.taskSectionTitle, { color: C.text }]}>先從一個分析開始</Text>
+                <View style={styles.quickGrid}>
+                {FEATURED_QUESTIONS.map((q, i) => (
                   <TouchableOpacity
                     key={i}
                     style={[styles.quickChip, { backgroundColor: C.card, borderColor: C.border }]}
                     onPress={() => sendMessage(q.text)}
                     activeOpacity={0.75}
                   >
-                    <Text style={{ color: C.text, fontSize: 13, fontWeight: '500' }}>{q.label}</Text>
+                    <View style={[styles.taskIcon, { backgroundColor: `${q.color}18` }]}>
+                      <q.Icon size={19} color={q.color} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: C.text, fontSize: 14, fontWeight: '700' }}>{q.label}</Text>
+                      <Text style={{ color: C.sub, fontSize: 11, marginTop: 3 }}>{q.subtitle}</Text>
+                    </View>
                   </TouchableOpacity>
                 ))}
-              </View>
+                </View>
+                <TouchableOpacity onPress={() => setShowAllQuick(v => !v)} style={styles.moreTasksButton}>
+                  <Text style={{ color: PRIMARY, fontSize: 13, fontWeight: '700' }}>{showAllQuick ? '收起其他任務' : '查看所有快速任務'}</Text>
+                  <ChevronDown size={16} color={PRIMARY} style={showAllQuick ? { transform: [{ rotate: '180deg' }] } : undefined} />
+                </TouchableOpacity>
+                {showAllQuick && (
+                  <View style={[styles.moreTasks, { backgroundColor: C.card, borderColor: C.border }]}>
+                    {QUICK_QUESTIONS.slice(4).map((q, i) => (
+                      <TouchableOpacity key={i} style={[styles.moreTaskRow, i < QUICK_QUESTIONS.slice(4).length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.border }]} onPress={() => sendMessage(q.text)}>
+                        <Text style={{ color: C.text, fontSize: 13, flex: 1 }}>{q.label}</Text>
+                        <ChevronDown size={15} color={C.muted} style={{ transform: [{ rotate: '-90deg' }] }} />
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </>
             )}
           </View>
         )}
@@ -854,7 +893,7 @@ export default function AIAnalysisScreen() {
       <View style={[styles.inputBar, {
         backgroundColor: C.card,
         borderTopColor: C.border,
-        paddingBottom: 12,
+        paddingBottom: Math.max(insets.bottom, 12),
       }]}>
         {/* Quick chips after first message */}
         {!isEmpty && !isThinking && (
@@ -906,6 +945,7 @@ export default function AIAnalysisScreen() {
             multiline
             maxLength={500}
             onSubmitEditing={() => sendMessage()}
+            onFocus={() => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80)}
             editable={!isThinking && !recording && !transcribing}
           />
 
@@ -955,28 +995,30 @@ export default function AIAnalysisScreen() {
 const styles = StyleSheet.create({
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingBottom: 12,
+    paddingHorizontal: 16, paddingBottom: 10,
     borderBottomWidth: 1,
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05, shadowRadius: 8, elevation: 3,
   },
   headerLeft:  { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  headerIcon:  { width: 38, height: 38, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  headerIcon:  { width: 34, height: 34, borderRadius: 11, justifyContent: 'center', alignItems: 'center' },
   headerTitle: { fontSize: 17, fontWeight: '700' },
   headerSub:   { fontSize: 11, marginTop: 1 },
   clearBtn:    { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10 },
+  closeBtn:    { width: 34, height: 34, borderRadius: 17, justifyContent: 'center', alignItems: 'center' },
 
-  emptyState:  { alignItems: 'center', paddingTop: 40, paddingBottom: 20 },
-  emptyIcon:   { width: 72, height: 72, borderRadius: 22, justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
-  emptyTitle:  { fontSize: 22, fontWeight: '800', marginBottom: 8 },
-  emptySub:    { fontSize: 14, textAlign: 'center', lineHeight: 22, marginBottom: 28 },
-
-  quickGrid:   { flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'center', maxWidth: 360 },
-  quickChip:   {
-    borderWidth: 1, borderRadius: 14,
-    paddingHorizontal: 14, paddingVertical: 10,
-    minWidth: '44%',
-  },
+  emptyState:  { alignItems: 'center', paddingTop: 14, paddingBottom: 16 },
+  emptyIcon:   { width: 54, height: 54, borderRadius: 18, justifyContent: 'center', alignItems: 'center', marginBottom: 10 },
+  emptyTitle:  { fontSize: 21, fontWeight: '800', marginBottom: 5 },
+  emptySub:    { fontSize: 14, textAlign: 'center', lineHeight: 21, marginBottom: 18 },
+  taskSectionTitle: { alignSelf: 'flex-start', fontSize: 16, fontWeight: '700', marginBottom: 10 },
+  quickGrid:   { flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'center', width: '100%' },
+  quickChip:   { width: '48%', minHeight: 74, flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderRadius: 16, paddingHorizontal: 12, paddingVertical: 10 },
+  taskIcon:    { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  moreTasksButton: { marginTop: 18, flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 8 },
+  moreTasks: { width: '100%', borderWidth: 1, borderRadius: 16, overflow: 'hidden' },
+  moreTaskRow: { minHeight: 46, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center' },
 
   bubbleRow:     { flexDirection: 'row', marginBottom: 14, alignItems: 'flex-end', gap: 8 },
   bubbleRowUser: { justifyContent: 'flex-end' },
@@ -995,14 +1037,18 @@ const styles = StyleSheet.create({
   },
 
   inputBar: {
-    paddingTop: 12, paddingHorizontal: 16,
+    paddingTop: 10, paddingHorizontal: 16,
     borderTopWidth: 1,
+    shadowColor: '#0B1F3A', shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.05, shadowRadius: 8, elevation: 8,
   },
   inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 10 },
   input: {
     flex: 1, borderWidth: 1, borderRadius: 20,
-    paddingHorizontal: 16, paddingVertical: 10,
-    fontSize: 14, maxHeight: 100,
+    minHeight: 46,
+    paddingHorizontal: 16, paddingVertical: 11,
+    fontSize: 15, lineHeight: 21, maxHeight: 120,
+    textAlignVertical: 'top',
   },
   sendBtn: {
     width: 44, height: 44, borderRadius: 22,

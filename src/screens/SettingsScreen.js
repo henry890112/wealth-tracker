@@ -11,7 +11,7 @@ import {
   ActivityIndicator,
   Platform,
 } from 'react-native';
-import { LogOut, Globe, RefreshCw, Sun, Moon, Smartphone, Download, Upload, CloudUpload, Leaf } from 'lucide-react-native';
+import { Check, LogOut, Globe, RefreshCw, Sun, Moon, Smartphone, Download, Upload, CloudUpload, Leaf, UserRound } from 'lucide-react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
@@ -304,24 +304,33 @@ export default function SettingsScreen() {
   }
 
   return (
-    <ScrollView style={[styles.container, { backgroundColor: colors.bg }]}>
+    <ScrollView
+      style={[styles.container, { backgroundColor: colors.bg }]}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+    >
       {/* User Info */}
       <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: colors.textSub }]}>帳號資訊</Text>
-        <View style={[styles.card, { backgroundColor: colors.card }]}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>帳號資訊</Text>
+        <View
+          style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}
+        >
           <View style={styles.infoRow}>
-            <Text style={[styles.infoLabel, { color: colors.textSub }]}>電子郵件</Text>
-            <Text style={[styles.infoValue, { color: colors.text }]}>
-              {userEmail}
-            </Text>
+            <View style={styles.accountIcon}><UserRound size={22} color="#2563EB" /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.infoLabel, { color: colors.text }]}>個人帳戶</Text>
+              <Text style={[styles.infoValue, { color: colors.textSub }]} numberOfLines={1}>{userEmail}</Text>
+            </View>
           </View>
         </View>
       </View>
 
       {/* Theme */}
       <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: colors.textSub }]}>外觀主題</Text>
-        <View style={[styles.card, { backgroundColor: colors.card }]}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>外觀主題</Text>
+        <View
+          style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}
+        >
           {THEME_OPTIONS.map(({ id, label, Icon }, idx) => (
             <TouchableOpacity
               key={id}
@@ -329,10 +338,10 @@ export default function SettingsScreen() {
               onPress={() => setPreference(id)}
             >
               <View style={styles.optionContent}>
-                <Icon size={20} color={colors.textSub} />
+                <View style={[styles.optionIcon, { backgroundColor: colors.cardAlt }]}><Icon size={19} color={colors.textSub} /></View>
                 <Text style={[styles.optionText, { color: colors.text }]}>{label}</Text>
               </View>
-              {preference === id && <View style={styles.selectedIndicator} />}
+              {preference === id && <View style={styles.selectedIndicator}><Check size={13} color="#FFFFFF" /></View>}
             </TouchableOpacity>
           ))}
         </View>
@@ -340,8 +349,10 @@ export default function SettingsScreen() {
 
       {/* Currency Settings */}
       <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: colors.textSub }]}>基準貨幣</Text>
-        <View style={[styles.card, { backgroundColor: colors.card }]}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>基準貨幣</Text>
+        <View
+          style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}
+        >
           {CURRENCIES.map((currency) => (
             <TouchableOpacity
               key={currency.code}
@@ -350,11 +361,11 @@ export default function SettingsScreen() {
               disabled={saving}
             >
               <View style={styles.optionContent}>
-                <Globe size={20} color={colors.textSub} />
+                <View style={[styles.optionIcon, { backgroundColor: colors.cardAlt }]}><Globe size={19} color="#14B8A6" /></View>
                 <Text style={[styles.optionText, { color: colors.text }]}>{currency.name}</Text>
               </View>
               {profile?.base_currency === currency.code && (
-                <View style={styles.selectedIndicator} />
+                <View style={styles.selectedIndicator}><Check size={13} color="#FFFFFF" /></View>
               )}
             </TouchableOpacity>
           ))}
@@ -363,8 +374,10 @@ export default function SettingsScreen() {
 
 {/* Actions */}
       <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: colors.textSub }]}>操作</Text>
-        <View style={[styles.card, { backgroundColor: colors.card }]}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>資料與帳號</Text>
+        <View
+          style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}
+        >
           <TouchableOpacity
             style={[styles.actionRow, { borderBottomColor: colors.borderLight }]}
             onPress={handleSyncData}
@@ -432,6 +445,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+  content: { paddingBottom: 32 },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -442,14 +456,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   sectionTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 12,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 10,
   },
   card: {
-    borderRadius: 12,
+    borderRadius: 18,
+    borderWidth: 1,
+    overflow: 'hidden',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -460,20 +474,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 16,
+    padding: 14,
+    gap: 12,
   },
+  accountIcon: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EAF2FF' },
   infoLabel: {
     fontSize: 16,
+    fontWeight: '700',
   },
   infoValue: {
-    fontSize: 16,
-    fontWeight: '500',
+    fontSize: 13,
+    marginTop: 3,
   },
   optionRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 16,
+    minHeight: 62,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     borderBottomWidth: 1,
   },
   optionContent: {
@@ -482,14 +501,17 @@ const styles = StyleSheet.create({
     gap: 12,
     flex: 1,
   },
+  optionIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   optionText: {
     fontSize: 16,
   },
   selectedIndicator: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#2563eb',
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#F59E0B',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   actionRow: {
     flexDirection: 'row',
