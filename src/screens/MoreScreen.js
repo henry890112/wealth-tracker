@@ -2,7 +2,7 @@ import React from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  Bot, ChevronRight, CircleHelp, CloudUpload, CreditCard, DollarSign,
+  Bot, ChevronRight, CircleHelp, CloudUpload, CreditCard,
   FileDown, Globe, Info, Palette, Settings2, UserRound,
 } from 'lucide-react-native';
 import { useTheme } from '../lib/ThemeContext';
@@ -14,22 +14,21 @@ const SECTIONS = [
     title: '財務工具',
     items: [
       { title: '固定支出', subtitle: '管理定期扣款與固定支出', Icon: CreditCard, color: '#3B82F6', route: 'FixedExpenses' },
-      { title: '應收款項', subtitle: '追蹤借出款項與收款狀態', Icon: DollarSign, color: '#14B8A6', route: 'Receivables' },
       { title: 'AI 財務分析', subtitle: '資產組合分析與投資建議', Icon: Bot, color: PRIMARY, route: 'AI' },
     ],
   },
   {
     title: '資料',
     items: [
-      { title: '匯出與備份', subtitle: '匯出報表、備份或還原資料', Icon: FileDown, color: '#8B5CF6', route: 'Settings' },
-      { title: '同步狀態', subtitle: '查看報價與資料同步設定', Icon: CloudUpload, color: '#3B82F6', route: 'Settings' },
+      { title: '匯出與備份', subtitle: '匯出報表、備份或還原資料', Icon: FileDown, color: '#8B5CF6', route: 'Settings', params: { section: 'data' } },
+      { title: '同步狀態', subtitle: '查看報價與資料同步設定', Icon: CloudUpload, color: '#3B82F6', route: 'Settings', params: { section: 'sync' } },
     ],
   },
   {
     title: '偏好設定',
     items: [
-      { title: '外觀與主題', subtitle: '調整淺色、深色與系統主題', Icon: Palette, color: '#F97316', route: 'Settings' },
-      { title: '基準貨幣', subtitle: '設定預設貨幣與顯示方式', Icon: Globe, color: '#14B8A6', route: 'Settings' },
+      { title: '外觀與主題', subtitle: '調整淺色、深色與系統主題', Icon: Palette, color: '#F97316', route: 'Settings', params: { section: 'theme' } },
+      { title: '基準貨幣', subtitle: '設定預設貨幣與顯示方式', Icon: Globe, color: '#14B8A6', route: 'Settings', params: { section: 'currency' } },
       { title: '所有設定', subtitle: '帳號、資料與其他選項', Icon: Settings2, color: '#64748B', route: 'Settings' },
     ],
   },
@@ -45,7 +44,7 @@ const SECTIONS = [
 export default function MoreScreen({ navigation }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
-  const open = (route) => route && navigation.navigate(route);
+  const open = (route, params) => route && navigation.navigate(route, params);
 
   return (
     <ScrollView
@@ -54,7 +53,7 @@ export default function MoreScreen({ navigation }) {
     >
       <Text style={[styles.title, { color: colors.text }]}>更多</Text>
 
-      <TouchableOpacity style={[styles.profile, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => open('Settings')}>
+      <TouchableOpacity style={[styles.profile, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => open('Settings', { section: 'account' })}>
         <View style={styles.profileIcon}><UserRound size={26} color="#2563EB" /></View>
         <View style={styles.flex}>
           <Text style={[styles.profileTitle, { color: colors.text }]}>個人帳戶</Text>
@@ -71,7 +70,7 @@ export default function MoreScreen({ navigation }) {
               <TouchableOpacity
                 key={item.title}
                 style={[styles.row, index < section.items.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}
-                onPress={() => open(item.route)}
+                onPress={() => open(item.route, item.params)}
                 disabled={!item.route}
               >
                 <View style={[styles.iconWrap, { backgroundColor: `${item.color}18` }]}>

@@ -19,7 +19,6 @@ import AssetDetailScreen from './src/screens/AssetDetailScreen';
 import AddAssetScreen from './src/screens/AddAssetScreen';
 import FixedExpensesScreen from './src/screens/FixedExpensesScreen';
 import AIAnalysisScreen from './src/screens/AIAnalysisScreen';
-import ReceivablesScreen from './src/screens/ReceivablesScreen';
 import MoreScreen from './src/screens/MoreScreen';
 
 const Tab = createBottomTabNavigator();
@@ -194,8 +193,14 @@ function MainStackScreen() {
         options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }}
       />
       <MainStack.Screen name="FixedExpenses" component={FixedExpensesScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '固定支出' })} />
-      <MainStack.Screen name="Receivables" component={ReceivablesScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '應收款項' })} />
-      <MainStack.Screen name="Settings" component={SettingsScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '設定' })} />
+      <MainStack.Screen
+        name="Settings"
+        component={SettingsScreen}
+        options={({ navigation, route }) => {
+          const titles = { account: '帳號資訊', theme: '外觀與主題', currency: '基準貨幣', sync: '同步狀態', data: '匯出與備份' };
+          return { ...withAI({ navigation }), title: titles[route.params?.section] || '設定' };
+        }}
+      />
     </MainStack.Navigator>
   );
 }

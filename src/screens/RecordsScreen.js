@@ -132,7 +132,7 @@ export default function RecordsScreen() {
             onPress={() => onSelect(item.key)}
             activeOpacity={0.75}
           >
-            <Text style={[styles.chipText, { color: colors.textSub }, isActive && styles.chipTextActive]}>
+            <Text style={[styles.chipText, { color: colors.textSub }, isActive && { color: activeColor === '#F7A600' ? '#0B1F3A' : '#FFFFFF', fontWeight: '700' }]}>
               {item.label}
             </Text>
           </TouchableOpacity>
@@ -265,7 +265,6 @@ const styles = StyleSheet.create({
     borderRadius: 20, borderWidth: 1,
   },
   chipText: { fontSize: 13, fontWeight: '500' },
-  chipTextActive: { color: 'white', fontWeight: '700' },
 
   list: {
     margin: 16, borderRadius: 12, overflow: 'hidden',

@@ -35,8 +35,15 @@ const THEME_OPTIONS = [
 ];
 
 
-export default function SettingsScreen() {
+export default function SettingsScreen({ route }) {
   const { preference, setPreference, colors } = useTheme();
+  const section = route.params?.section || 'all';
+  const showAll = section === 'all';
+  const showAccount = showAll || section === 'account';
+  const showTheme = showAll || section === 'theme';
+  const showCurrency = showAll || section === 'currency';
+  const showSync = showAll || section === 'sync';
+  const showData = showAll || section === 'data';
   const [profile, setProfile] = useState(null);
   const [userEmail, setUserEmail] = useState('');
   const [loading, setLoading] = useState(true);
@@ -310,7 +317,7 @@ export default function SettingsScreen() {
       showsVerticalScrollIndicator={false}
     >
       {/* User Info */}
-      <View style={styles.section}>
+      {showAccount && <View style={styles.section}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>帳號資訊</Text>
         <View
           style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}
@@ -323,10 +330,10 @@ export default function SettingsScreen() {
             </View>
           </View>
         </View>
-      </View>
+      </View>}
 
       {/* Theme */}
-      <View style={styles.section}>
+      {showTheme && <View style={styles.section}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>外觀主題</Text>
         <View
           style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}
@@ -341,14 +348,14 @@ export default function SettingsScreen() {
                 <View style={[styles.optionIcon, { backgroundColor: colors.cardAlt }]}><Icon size={19} color={colors.textSub} /></View>
                 <Text style={[styles.optionText, { color: colors.text }]}>{label}</Text>
               </View>
-              {preference === id && <View style={styles.selectedIndicator}><Check size={13} color="#FFFFFF" /></View>}
+              {preference === id && <View style={styles.selectedIndicator}><Check size={13} color="#0B1F3A" /></View>}
             </TouchableOpacity>
           ))}
         </View>
-      </View>
+      </View>}
 
       {/* Currency Settings */}
-      <View style={styles.section}>
+      {showCurrency && <View style={styles.section}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>基準貨幣</Text>
         <View
           style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}
@@ -365,16 +372,16 @@ export default function SettingsScreen() {
                 <Text style={[styles.optionText, { color: colors.text }]}>{currency.name}</Text>
               </View>
               {profile?.base_currency === currency.code && (
-                <View style={styles.selectedIndicator}><Check size={13} color="#FFFFFF" /></View>
+                <View style={styles.selectedIndicator}><Check size={13} color="#0B1F3A" /></View>
               )}
             </TouchableOpacity>
           ))}
         </View>
-      </View>
+      </View>}
 
-{/* Actions */}
-      <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: colors.text }]}>資料與帳號</Text>
+      {/* Data sync */}
+      {showSync && <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>{showAll ? '資料同步' : '同步狀態'}</Text>
         <View
           style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}
         >
@@ -388,16 +395,19 @@ export default function SettingsScreen() {
             </View>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.actionRow, { borderBottomColor: colors.borderLight }]}
-            onPress={handleExportCSV}
-          >
+        </View>
+      </View>}
+
+      {/* Export and backup */}
+      {showData && <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>匯出與備份</Text>
+        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <TouchableOpacity style={[styles.actionRow, { borderBottomColor: colors.borderLight }]} onPress={handleExportCSV}>
             <View style={styles.optionContent}>
               <Download size={20} color="#F7A600" />
               <Text style={[styles.optionText, { color: '#F7A600', fontWeight: '500' }]}>匯出 CSV</Text>
             </View>
           </TouchableOpacity>
-
           <TouchableOpacity
             style={[styles.actionRow, { borderBottomColor: colors.borderLight }]}
             onPress={handleBackupToCloud}
@@ -417,7 +427,13 @@ export default function SettingsScreen() {
               <Text style={[styles.optionText, { color: '#f59e0b', fontWeight: '500' }]}>還原備份</Text>
             </View>
           </TouchableOpacity>
+        </View>
+      </View>}
 
+      {/* Account actions */}
+      {showAccount && <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>帳號</Text>
+        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <TouchableOpacity
             style={[styles.actionRow, { borderBottomWidth: 0 }]}
             onPress={handleSignOut}
@@ -428,7 +444,7 @@ export default function SettingsScreen() {
             </View>
           </TouchableOpacity>
         </View>
-      </View>
+      </View>}
 
       {/* App Info */}
       <View style={styles.footer}>

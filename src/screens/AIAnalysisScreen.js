@@ -2,15 +2,14 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, ScrollView, TextInput, TouchableOpacity,
   StyleSheet, ActivityIndicator, KeyboardAvoidingView,
-  Platform, Keyboard, Animated,
+  Platform, Keyboard, Animated, Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Bot, Send, RefreshCw, ChevronDown, CheckCircle, XCircle, Mic, MicOff, ShieldAlert, Sparkles, TrendingUp, WalletCards } from 'lucide-react-native';
+import { Bot, Send, RefreshCw, ChevronDown, CheckCircle, XCircle, Mic, MicOff, ShieldAlert, Sparkles, TrendingUp, WalletCards, ExternalLink } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
-// `expo-av` is dynamically imported at runtime to avoid crashing in Expo Go
-// when the native module is not present (e.g. before building a dev client).
 import * as FileSystem from 'expo-file-system/legacy';
+import { useAudioRecorder, RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync } from 'expo-audio';
 import { supabase } from '../lib/supabase';
 import { convertToBaseCurrency, fetchExchangeRatesBatch } from '../services/api';
 import {
@@ -20,6 +19,7 @@ import {
 } from '../services/portfolio';
 import { askAI, transcribeAudio } from '../services/ai';
 import { useTheme } from '../lib/ThemeContext';
+import Svg, { Circle } from 'react-native-svg';
 
 const PRIMARY  = '#F7A600';
 const GREEN    = '#0DBD8B';
@@ -256,16 +256,116 @@ const acStyles = StyleSheet.create({
   },
   cancelText:  { fontSize: 14, fontWeight: '600' },
   confirmBtn:  { flex: 2, paddingVertical: 9, borderRadius: 10, backgroundColor: '#F7A600', alignItems: 'center' },
-  confirmText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  confirmText: { fontSize: 14, fontWeight: '700', color: '#0B1F3A' },
 });
 
 // ── Single message bubble ─────────────────────────────────────────────────
+const CHART_COLORS = ['#F7A600', '#0DBD8B', '#3B82F6', '#A855F7', '#F03030', '#64748B'];
+
+function AIChartCard({ chart, colors, isDark }) {
+  const maxValue = Math.max(...chart.values, 1);
+  const total = chart.values.reduce((sum, value) => sum + value, 0);
+  const isPie = chart.type === 'pie';
+  const size = 116;
+  const strokeWidth = 22;
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  let cumulativePercent = 0;
+  return (
+    <View style={[styles.aiChartCard, { backgroundColor: isDark ? '#172033' : '#FFFFFF', borderColor: isDark ? '#334155' : '#DDE5EF' }]}>
+      <Text style={[styles.aiChartTitle, { color: colors.text }]}>{chart.title}</Text>
+      {isPie ? (
+        <View style={styles.aiPieLayout}>
+          <Svg width={size} height={size}>
+            <Circle cx={size / 2} cy={size / 2} r={radius} stroke={isDark ? '#26334A' : '#EEF2F7'} strokeWidth={strokeWidth} fill="none" />
+            {chart.values.map((value, index) => {
+              const percent = total > 0 ? value / total : 0;
+              const segment = percent * circumference;
+              const rotation = cumulativePercent * 360 - 90;
+              cumulativePercent += percent;
+              return percent > 0 ? (
+                <Circle
+                  key={`${chart.labels[index]}-${index}`}
+                  cx={size / 2}
+                  cy={size / 2}
+                  r={radius}
+                  stroke={CHART_COLORS[index % CHART_COLORS.length]}
+                  strokeWidth={strokeWidth}
+                  strokeDasharray={`${segment} ${circumference - segment}`}
+                  fill="none"
+                  transform={`rotate(${rotation} ${size / 2} ${size / 2})`}
+                />
+              ) : null;
+            })}
+          </Svg>
+          <View style={styles.aiPieLegend}>
+            {chart.values.map((value, index) => (
+              <View key={`${chart.labels[index]}-${index}`} style={styles.aiPieLegendRow}>
+                <View style={[styles.aiPieDot, { backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }]} />
+                <Text style={[styles.aiPieLabel, { color: colors.textSub }]} numberOfLines={1}>{chart.labels[index]}</Text>
+                <Text style={[styles.aiPiePct, { color: colors.text }]}>{total > 0 ? `${((value / total) * 100).toFixed(1)}%` : '0%'}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+      ) : <View style={styles.aiChartBars}>
+        {chart.values.map((value, index) => (
+          <View key={`${chart.labels[index]}-${index}`} style={styles.aiChartBarItem}>
+            <Text style={[styles.aiChartValue, { color: colors.text }]} numberOfLines={1}>
+              {Math.round(value).toLocaleString('zh-TW')}{chart.unit ? ` ${chart.unit}` : ''}
+            </Text>
+            <View style={[styles.aiChartTrack, { backgroundColor: isDark ? '#26334A' : '#EEF2F7' }]}>
+              <View style={[styles.aiChartFill, { height: `${Math.max((value / maxValue) * 100, 6)}%` }]} />
+            </View>
+            <Text style={[styles.aiChartLabel, { color: colors.textSub }]} numberOfLines={2}>{chart.labels[index]}</Text>
+          </View>
+        ))}
+      </View>}
+    </View>
+  );
+}
+
+function createPortfolioChart(query, portfolio) {
+  if (!/(圖|chart|graph|圓餅|比例|配置|視覺)/i.test(query)) return null;
+  const labels = { liquid: '流動資產', investment: '投資資產', fixed: '固定資產', receivable: '應收款項' };
+  const totals = (portfolio?.assets || []).reduce((result, asset) => {
+    if (asset.category !== 'liability' && labels[asset.category]) {
+      result[asset.category] = (result[asset.category] || 0) + Number(asset.converted_amount || 0);
+    }
+    return result;
+  }, {});
+  const entries = Object.entries(totals).filter(([, value]) => value > 0);
+  if (entries.length < 2) return null;
+  return {
+    type: /(圓餅|pie|比例|配置)/i.test(query) ? 'pie' : 'bar',
+    title: /(圓餅|pie|比例|配置)/i.test(query) ? '資產配置' : '資產視覺摘要',
+    unit: portfolio.currency || 'TWD',
+    labels: entries.map(([category]) => labels[category]),
+    values: entries.map(([, value]) => value),
+  };
+}
+
+function SourceLinks({ sources, colors, isDark }) {
+  if (!sources?.length) return null;
+  return (
+    <View style={[styles.sourceCard, { backgroundColor: isDark ? '#172033' : '#FFFFFF', borderColor: isDark ? '#334155' : '#DDE5EF' }]}>
+      <Text style={[styles.sourceHeading, { color: colors.textSub }]}>網路來源</Text>
+      {sources.map(source => (
+        <TouchableOpacity key={source.uri} style={styles.sourceRow} onPress={() => Linking.openURL(source.uri).catch(() => {})} activeOpacity={0.7}>
+          <ExternalLink size={13} color={PRIMARY} />
+          <Text style={[styles.sourceTitle, { color: colors.text }]} numberOfLines={1}>{source.title}</Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
+}
+
 function MessageBubble({ msg, msgIdx, colors, isDark, onConfirmAction, onCancelAction }) {
   const isUser = msg.role === 'user';
   const bubbleBg = isUser
     ? PRIMARY
     : (isDark ? '#1e293b' : '#f1f5f9');
-  const textColor = isUser ? '#fff' : colors.text;
+  const textColor = isUser ? '#0B1F3A' : colors.text;
 
   return (
     <View style={[
@@ -299,10 +399,12 @@ function MessageBubble({ msg, msgIdx, colors, isDark, onConfirmAction, onCancelA
           />
         )}
         {msg.model && (
-          <Text style={{ color: isUser ? 'rgba(255,255,255,0.55)' : colors.textMuted, fontSize: 10, marginTop: 6 }}>
+          <Text style={{ color: isUser ? 'rgba(11,31,58,0.62)' : colors.textMuted, fontSize: 10, marginTop: 6 }}>
             {msg.model.split('/')[1]?.replace(':free', '') || msg.model}
           </Text>
         )}
+        {msg.chart && <AIChartCard chart={msg.chart} colors={colors} isDark={isDark} />}
+        {msg.sources && <SourceLinks sources={msg.sources} colors={colors} isDark={isDark} />}
       </View>
     </View>
   );
@@ -323,20 +425,7 @@ export default function AIAnalysisScreen({ navigation }) {
   const [recording,    setRecording]    = useState(null);
   const [transcribing, setTranscribing] = useState(false);
   const [showAllQuick, setShowAllQuick] = useState(false);
-  // Reference to the runtime-loaded Audio module (expo-av)
-  const audioRef = useRef(null);
-
-  const ensureAudio = async () => {
-    if (audioRef.current) return audioRef.current;
-    try {
-      const mod = await import('expo-av');
-      audioRef.current = mod.Audio;
-      return audioRef.current;
-    } catch (e) {
-      console.warn('expo-av dynamic import failed:', e?.message || e);
-      throw e;
-    }
-  };
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
   // ── Load saved messages + portfolio on first focus ──────────────────────
   const didLoadRef = useRef(false);
@@ -520,8 +609,8 @@ export default function AIAnalysisScreen({ navigation }) {
     try {
       // Send only role + content to API (no model field)
       const apiMessages = history.map(m => ({ role: m.role, content: m.content }));
-      const { content, model, action } = await askAI(apiMessages, portfolio || {});
-      const aiMsg = { role: 'assistant', content, model };
+      const { content, model, action, chart, sources } = await askAI(apiMessages, portfolio || {});
+      const aiMsg = { role: 'assistant', content, model, chart: chart || createPortfolioChart(trimmed, portfolio), sources };
       if (action) { aiMsg.action = action; aiMsg.actionConfirmed = null; }
       const updated = [...history, aiMsg];
       setMessages(updated);
@@ -664,30 +753,21 @@ export default function AIAnalysisScreen({ navigation }) {
   // ── Voice recording ────────────────────────────────────────────────────
   const startRecording = async () => {
     try {
-      let AudioModule;
-      try {
-        AudioModule = await ensureAudio();
-      } catch (err) {
-        alert('語音功能目前在此環境不可用。請使用 EAS dev client 或預建原生應用以啟用錄音/播放。');
-        return;
-      }
-
-      const { granted } = await AudioModule.requestPermissionsAsync();
+      const { granted } = await requestRecordingPermissionsAsync();
       if (!granted) {
         alert('需要麥克風權限才能使用語音輸入');
         return;
       }
-      await AudioModule.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
       });
-      const { recording: rec } = await AudioModule.Recording.createAsync(
-        AudioModule.RecordingOptionsPresets.HIGH_QUALITY
-      );
-      setRecording(rec);
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      setRecording(true);
     } catch (e) {
       console.warn('startRecording error:', e.message);
-      alert('無法啟動錄音，請確認麥克風權限');
+      alert('無法啟動錄音，請確認麥克風權限後重試');
     }
   };
 
@@ -695,15 +775,15 @@ export default function AIAnalysisScreen({ navigation }) {
     if (!recording) return;
     setTranscribing(true);
     try {
-      await recording.stopAndUnloadAsync();
+      await recorder.stop();
+      const uri = recorder.uri;
+      setRecording(false);
       try {
-        const AudioModule = await ensureAudio();
-        await AudioModule.setAudioModeAsync({ allowsRecordingIOS: false });
+        await setAudioModeAsync({ allowsRecording: false });
       } catch (e) {
-        // ignore: audio module not available at runtime
+        // Audio mode reset is best-effort only.
       }
-      const uri = recording.getURI();
-      setRecording(null);
+      if (!uri) throw new Error('找不到錄音檔案');
 
       // Read file as base64
       const base64 = await FileSystem.readAsStringAsync(uri, {
@@ -981,8 +1061,8 @@ export default function AIAnalysisScreen({ navigation }) {
             activeOpacity={0.8}
           >
             {isThinking
-              ? <ActivityIndicator size="small" color="#fff" />
-              : <Send size={18} color={inputText.trim() && !recording ? '#fff' : C.muted} />
+              ? <ActivityIndicator size="small" color="#0B1F3A" />
+              : <Send size={18} color={inputText.trim() && !recording ? '#0B1F3A' : C.muted} />
             }
           </TouchableOpacity>
         </View>
@@ -1027,6 +1107,24 @@ const styles = StyleSheet.create({
   bubble:        { borderRadius: 18, paddingHorizontal: 14, paddingVertical: 10 },
   bubbleUser:    { borderBottomRightRadius: 4 },
   bubbleAI:      { borderBottomLeftRadius: 4 },
+  aiChartCard: { marginTop: 10, borderWidth: 1, borderRadius: 12, padding: 10 },
+  aiChartTitle: { fontSize: 13, fontWeight: '800', marginBottom: 10 },
+  aiChartBars: { flexDirection: 'row', alignItems: 'flex-end', gap: 6, minHeight: 126 },
+  aiChartBarItem: { flex: 1, alignItems: 'center', minWidth: 28 },
+  aiChartValue: { fontSize: 9, fontWeight: '700', marginBottom: 5, textAlign: 'center' },
+  aiChartTrack: { height: 64, width: '100%', borderRadius: 6, justifyContent: 'flex-end', overflow: 'hidden' },
+  aiChartFill: { width: '100%', borderRadius: 6, backgroundColor: PRIMARY },
+  aiChartLabel: { fontSize: 9, lineHeight: 12, marginTop: 6, textAlign: 'center' },
+  aiPieLayout: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  aiPieLegend: { flex: 1, gap: 6 },
+  aiPieLegendRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  aiPieDot: { width: 8, height: 8, borderRadius: 4 },
+  aiPieLabel: { flex: 1, fontSize: 10 },
+  aiPiePct: { fontSize: 10, fontWeight: '800' },
+  sourceCard: { marginTop: 10, borderWidth: 1, borderRadius: 12, padding: 10 },
+  sourceHeading: { fontSize: 11, fontWeight: '700', marginBottom: 5 },
+  sourceRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4 },
+  sourceTitle: { flex: 1, fontSize: 11, fontWeight: '600' },
 
   scrollDownBtn: {
     position: 'absolute', bottom: 120, right: 20,

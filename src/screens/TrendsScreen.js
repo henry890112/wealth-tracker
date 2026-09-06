@@ -452,7 +452,6 @@ export default function TrendsScreen() {
 
   const [selectedFilter, setSelectedFilter] = useState('all');
   const [refreshing, setRefreshing] = useState(false);
-  const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Refs so that stable callbacks (onRefresh, useFocusEffect) always see the
   // latest selectedFilter and the latest loadData without needing to be
@@ -1000,7 +999,7 @@ export default function TrendsScreen() {
                 }}
                 activeOpacity={0.75}
               >
-                <Text style={{ color: active ? '#fff' : colors.textSub, fontSize: 13, fontWeight: active ? '700' : '500' }}>
+                <Text style={{ color: active ? '#0B1F3A' : colors.textSub, fontSize: 13, fontWeight: active ? '700' : '500' }}>
                   {opt.label}
                 </Text>
               </TouchableOpacity>
@@ -1037,7 +1036,7 @@ export default function TrendsScreen() {
                     onPress={() => handlePeriodSelect(p)}
                     activeOpacity={0.75}
                   >
-                    {p.days === null && <Calendar size={10} color={active ? 'white' : PRIMARY} style={{ marginRight: 3 }} />}
+                    {p.days === null && <Calendar size={10} color={active ? '#0B1F3A' : PRIMARY} style={{ marginRight: 3 }} />}
                     <Text style={[styles.periodLabel, { color: colors.textSub }, active && styles.periodLabelActive]}>
                       {p.label}
                     </Text>
@@ -1180,20 +1179,8 @@ export default function TrendsScreen() {
           </View>
         )}
 
-        <TouchableOpacity
-          style={[styles.advancedToggle, { backgroundColor: colors.card, borderColor: colors.border }]}
-          onPress={() => setShowAdvanced(v => !v)}
-          activeOpacity={0.8}
-        >
-          <View>
-            <Text style={[styles.advancedTitle, { color: colors.text }]}>進階分析</Text>
-            <Text style={[styles.advancedSub, { color: colors.textSub }]}>月度績效與每日損益日曆</Text>
-          </View>
-          <Text style={styles.advancedAction}>{showAdvanced ? '收起' : '展開'}</Text>
-        </TouchableOpacity>
-
         {/* ── MONTHLY BREAKDOWN ─────────────────────────────────────────── */}
-        {showAdvanced && monthlyBreakdown.length > 0 && (
+        {monthlyBreakdown.length > 0 && (
           <View style={[styles.card, { marginHorizontal: 16, marginTop: 16, marginBottom: 8, backgroundColor: colors.card }]}>
             <Text style={[styles.cardTitle, { color: colors.text, marginBottom: 12 }]}>月度績效</Text>
             {[...monthlyBreakdown].reverse().map((m, i) => {
@@ -1223,7 +1210,7 @@ export default function TrendsScreen() {
         )}
 
         {/* ── DAILY P&L CALENDAR ──────────────────────────────────────────── */}
-        {showAdvanced && <View
+        <View
           style={[styles.card, { marginHorizontal: 16, marginTop: 16, marginBottom: 8, backgroundColor: colors.card }]}
         >
           {/* Card header */}
@@ -1346,7 +1333,7 @@ export default function TrendsScreen() {
             </View>
           ));
           })()}
-        </View>}
+        </View>
 
       </ScrollView>
 
@@ -1634,7 +1621,7 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   periodLabel: { fontSize: 12, color: PRIMARY, fontWeight: '600' },
-  periodLabelActive: { color: 'white', fontWeight: '700' },
+  periodLabelActive: { color: '#0B1F3A', fontWeight: '700' },
 
   emptyText: { textAlign: 'center', lineHeight: 22, paddingVertical: 32 },
   changeDetail: { fontSize: 13, fontWeight: '500', marginTop: 12, textAlign: 'right' },
@@ -1653,11 +1640,6 @@ const styles = StyleSheet.create({
   legendValue: { fontSize: 13, fontWeight: '600', marginTop: 4 },
   barBg: { height: 4, borderRadius: 2, overflow: 'hidden' },
   barFill: { height: 4, borderRadius: 2 },
-  advancedToggle: { marginHorizontal: 16, marginTop: 16, borderWidth: 1, borderRadius: 18, paddingHorizontal: 16, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  advancedTitle: { fontSize: 16, fontWeight: '700' },
-  advancedSub: { fontSize: 12, marginTop: 3 },
-  advancedAction: { color: '#D97706', fontSize: 13, fontWeight: '700' },
-
   // ── Custom date modal ──
   modalOverlay: {
     flex: 1,
@@ -1727,5 +1709,5 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 5,
   },
-  applyBtnText: { color: 'white', fontSize: 16, fontWeight: '700' },
+  applyBtnText: { color: '#0B1F3A', fontSize: 16, fontWeight: '700' },
 });

@@ -474,7 +474,7 @@ const styles = StyleSheet.create({
   },
   totalHeader: { width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
   addAction: { height: 34, borderRadius: 17, paddingHorizontal: 12, backgroundColor: '#F59E0B', flexDirection: 'row', alignItems: 'center', gap: 5 },
-  addActionText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
+  addActionText: { color: '#0B1F3A', fontSize: 13, fontWeight: '700' },
   totalLabel: { fontSize: 13, marginBottom: 4 },
   totalAmount: { fontSize: 32, fontWeight: '700' },
   totalCurrency: { fontSize: 16, fontWeight: '400' },
@@ -525,7 +525,7 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 8,
   },
-  fabText: { color: '#fff', fontSize: 28, lineHeight: 32, fontWeight: '300' },
+  fabText: { color: '#0B1F3A', fontSize: 28, lineHeight: 32, fontWeight: '300' },
 
   modalOverlay: {
     flex: 1,
@@ -571,7 +571,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
     marginBottom: 8,
   },
-  saveBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  saveBtnText: { color: '#0B1F3A', fontSize: 16, fontWeight: '700' },
 
   deleteBtn: {
     paddingVertical: 12,

@@ -21,6 +21,46 @@ function cleanResponse(text) {
   return text.trim();
 }
 
+function extractTaggedJson(content, tagName) {
+  const match = content.match(new RegExp(`<${tagName}>([\\s\\S]*?)<\\/${tagName}>`, 'i'));
+  if (!match) return { content, value: null };
+
+  let value = null;
+  try { value = JSON.parse(match[1].trim()); } catch {}
+  return {
+    content: content.replace(new RegExp(`<${tagName}>[\\s\\S]*?<\\/${tagName}>`, 'gi'), '').trim(),
+    value,
+  };
+}
+
+function normalizeChart(chart) {
+  if (!chart || !Array.isArray(chart.labels) || !Array.isArray(chart.values)) return null;
+  const pairs = chart.labels
+    .map((label, index) => ({ label: String(label || '').slice(0, 12), value: Number(chart.values[index]) }))
+    .filter(item => item.label && Number.isFinite(item.value) && item.value >= 0)
+    .slice(0, 6);
+  if (pairs.length < 2) return null;
+  return {
+    type: chart.type === 'pie' ? 'pie' : 'bar',
+    title: String(chart.title || '資產視覺摘要').slice(0, 28),
+    unit: String(chart.unit || '').slice(0, 10),
+    labels: pairs.map(item => item.label),
+    values: pairs.map(item => item.value),
+  };
+}
+
+function extractSources(data) {
+  const chunks = data.candidates?.[0]?.groundingMetadata?.groundingChunks
+    || data.candidates?.[0]?.grounding_metadata?.grounding_chunks
+    || [];
+  const seen = new Set();
+  return chunks
+    .map(chunk => chunk.web || chunk.webSearchResult || null)
+    .filter(source => source?.uri && !seen.has(source.uri) && seen.add(source.uri))
+    .slice(0, 4)
+    .map(source => ({ title: source.title || new URL(source.uri).hostname, uri: source.uri }));
+}
+
 // ── Build system prompt from portfolio context ────────────────────────────
 function buildSystemPrompt(ctx) {
   const cur = ctx.currency || 'TWD';
@@ -93,6 +133,10 @@ function buildSystemPrompt(ctx) {
   lines.push('════════════════════');
   lines.push('請基於以上資料回答用戶問題。');
   lines.push('若問題與財務或投資無直接關聯，仍可提供理財建議與知識。');
+  lines.push('若問題涉及最新新聞、即時行情、近期事件或明確要求搜尋，請使用網路搜尋工具，並只根據搜尋結果回答。');
+  lines.push('當用戶要求圖表、視覺化、配置比較或趨勢摘要，而且快照中有足夠數據時，在文字回答後加上一個 <chart> JSON 標籤。');
+  lines.push('格式：<chart>{"type":"pie","title":"資產配置","unit":"TWD","labels":["投資","現金"],"values":[120000,80000]}</chart>');
+  lines.push('圖表 labels 和 values 必須一一對應、最多 6 組，且所有數字都必須直接來自快照，不得估算或捏造。');
   lines.push('');
   lines.push('【自然語言操作】');
   lines.push('若用戶明確要求執行交易操作（買入/賣出/調整某資產），在回答文字的最後附上一個 <action> 標籤，格式如下：');
@@ -135,6 +179,7 @@ export async function askAI(messages, portfolioContext = {}) {
           body: JSON.stringify({
             system_instruction: { parts: [{ text: systemPrompt }] },
             contents,
+            tools: [{ google_search: {} }],
             generationConfig: {
               maxOutputTokens: 4096,
               temperature: 0.65,
@@ -163,16 +208,16 @@ export async function askAI(messages, portfolioContext = {}) {
         continue;
       }
 
-      // Extract <action> JSON block if present
-      let action = null;
-      const actionMatch = content.match(/<action>([\s\S]*?)<\/action>/i);
-      if (actionMatch) {
-        try { action = JSON.parse(actionMatch[1].trim()); } catch {}
-        content = content.replace(/<action>[\s\S]*?<\/action>/gi, '').trim();
-      }
+      const actionResult = extractTaggedJson(content, 'action');
+      content = actionResult.content;
+      const action = actionResult.value;
+      const chartResult = extractTaggedJson(content, 'chart');
+      content = chartResult.content;
+      const chart = normalizeChart(chartResult.value);
+      const sources = extractSources(data);
 
       console.log(`[AI] responded via ${model}${action ? ' [action:' + action.type + ']' : ''}`);
-      return { content, model, action };
+      return { content, model, action, chart, sources };
     } catch (e) {
       if (e.message?.includes('fetch') || e.message?.includes('network')) {
         throw new Error('無法連線，請檢查網路');

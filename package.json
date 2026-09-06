@@ -16,6 +16,7 @@
     "@react-navigation/native-stack": "^6.9.18",
     "@supabase/supabase-js": "^2.39.0",
     "expo": "^57.0.20",
+    "expo-audio": "~57.0.4",
     "expo-av": "~16.0.8",
     "expo-background-fetch": "~57.0.16",
     "expo-blur": "~57.0.2",

@@ -291,8 +291,8 @@ export default function AddAssetScreen() {
           activeOpacity={0.85}
         >
           {saving
-            ? <ActivityIndicator color="white" />
-            : <Text style={styles.saveFullBtnText}>儲存{cat?.label}</Text>
+            ? <ActivityIndicator color={cat?.color === PRIMARY || !cat ? '#0B1F3A' : 'white'} />
+            : <Text style={[styles.saveFullBtnText, { color: cat?.color === PRIMARY || !cat ? '#0B1F3A' : 'white' }]}>儲存{cat?.label}</Text>
           }
         </TouchableOpacity>
       </ScrollView>
@@ -365,7 +365,7 @@ const styles = StyleSheet.create({
     shadowColor: PRIMARY, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4, elevation: 3,
   },
   currencyLabel: { fontSize: 13, color: PRIMARY, fontWeight: '600' },
-  currencyLabelActive: { color: 'white' },
+  currencyLabelActive: { color: '#0B1F3A', fontWeight: '700' },
 
   divider: { height: 1, marginBottom: 12 },
   investHint: { fontSize: 12, marginBottom: 12 },

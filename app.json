@@ -31,6 +31,14 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "WealthTracker 需要麥克風權限以進行語音輸入",
+          "enableBackgroundRecording": false,
+          "enableBackgroundPlayback": false
+        }
+      ],
       "expo-sharing",
       "expo-status-bar",
       [

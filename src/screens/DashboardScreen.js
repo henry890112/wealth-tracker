@@ -542,7 +542,7 @@ export default function DashboardScreen() {
               onPress={() => navigation.navigate('AddAsset')}
               activeOpacity={0.85}
             >
-              <Plus size={20} color={PRIMARY} />
+              <Plus size={21} color="#0B1F3A" strokeWidth={2.7} />
             </TouchableOpacity>
           </View>
 
@@ -935,7 +935,7 @@ const styles = StyleSheet.create({
   heroLabel:  { fontSize: 13, fontWeight: '500' },
   addBtn: {
     width: 36, height: 36, borderRadius: 18,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F7A600',
     justifyContent: 'center', alignItems: 'center',
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 6, elevation: 4,
   },

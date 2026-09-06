@@ -1206,10 +1206,6 @@ export default function SearchScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={90}
     >
-      <View style={styles.searchIntro}>
-        <Text style={[styles.searchIntroTitle, { color: colors.text }]}>快速尋找</Text>
-        <Text style={[styles.searchIntroSub, { color: colors.textSub }]}>股票、加密貨幣與外幣都能一次搜尋</Text>
-      </View>
       {/* Search Bar */}
       <View
         style={[styles.searchContainer, { backgroundColor: colors.card, borderColor: colors.border }]}
@@ -1503,7 +1499,7 @@ export default function SearchScreen() {
                   </Text>
                 )}
                 <TouchableOpacity style={[styles.addButton, adding && styles.addButtonDisabled]} onPress={handleAddAsset} disabled={adding}>
-                  <Plus size={20} color="white" />
+                  <Plus size={20} color="#0B1F3A" />
                   <Text style={styles.addButtonText}>{adding ? '新增中...' : '新增資產'}</Text>
                 </TouchableOpacity>
               </>
@@ -1643,7 +1639,7 @@ export default function SearchScreen() {
                       onPress={() => handleFxPeriodSelect(p)}
                       activeOpacity={0.75}
                     >
-                      {p.days === null && <Calendar size={10} color={active ? 'white' : PRIMARY} style={{ marginRight: 3 }} />}
+                      {p.days === null && <Calendar size={10} color={active ? '#0B1F3A' : PRIMARY} style={{ marginRight: 3 }} />}
                       <Text style={[styles.fxPeriodLabel, { color: colors.textSub }, active && styles.fxPeriodLabelActive]}>
                         {p.label}
                       </Text>
@@ -1745,7 +1741,7 @@ export default function SearchScreen() {
                         style={[styles.fxCustomDateBtn, { backgroundColor: PRIMARY, flex: 1 }]}
                         onPress={applyFxCustomRange}
                       >
-                        <Text style={[styles.fxCustomDateBtnText, { color: 'white' }]}>確認</Text>
+                        <Text style={[styles.fxCustomDateBtnText, { color: '#0B1F3A' }]}>確認</Text>
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -1788,7 +1784,7 @@ export default function SearchScreen() {
                     await loadAlerts();
                   }}
                 >
-                  <Bell size={18} color="white" />
+                  <Bell size={18} color="#0B1F3A" />
                   <Text style={styles.addButtonText}>重新啟用警報</Text>
                 </TouchableOpacity>
               )}
@@ -1808,7 +1804,7 @@ export default function SearchScreen() {
                   style={[styles.alertDirectionBtn, alertDirection === 'below' && styles.alertDirectionBtnActiveRed]}
                   onPress={() => setAlertDirection('below')}
                 >
-                  <Text style={[styles.alertDirectionText, alertDirection === 'below' && styles.alertDirectionTextActive]}>
+                  <Text style={[styles.alertDirectionText, alertDirection === 'below' && styles.alertDirectionTextActiveRed]}>
                     低於 ↓
                   </Text>
                 </TouchableOpacity>
@@ -1827,7 +1823,7 @@ export default function SearchScreen() {
               />
 
               <TouchableOpacity style={styles.addButton} onPress={handleSaveAlert}>
-                <Bell size={18} color="white" />
+                <Bell size={18} color="#0B1F3A" />
                 <Text style={styles.addButtonText}>儲存提醒</Text>
               </TouchableOpacity>
             </View>
@@ -1890,9 +1886,6 @@ export default function SearchScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  searchIntro: { paddingHorizontal: 16, paddingTop: 16 },
-  searchIntroTitle: { fontSize: 18, fontWeight: '700' },
-  searchIntroSub: { fontSize: 13, marginTop: 3 },
   searchContainer: {
     flexDirection: 'row', alignItems: 'center',
     marginHorizontal: 16, marginTop: 12, marginBottom: 12, paddingHorizontal: 14,
@@ -1950,7 +1943,7 @@ const styles = StyleSheet.create({
   sortBtn: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, backgroundColor: '#fef3c7' },
   sortBtnActive: { backgroundColor: '#f59e0b' },
   sortBtnText: { fontSize: 11, color: '#92400e', fontWeight: '500' },
-  sortBtnTextActive: { color: 'white', fontWeight: '700' },
+  sortBtnTextActive: { color: '#0B1F3A', fontWeight: '700' },
   resultsContainer: { flex: 1 },
   loadingContainer: { padding: 48, alignItems: 'center' },
   resultCard: {
@@ -1982,7 +1975,8 @@ const styles = StyleSheet.create({
   alertDirectionBtnActive: { backgroundColor: '#F7A600', borderColor: '#F7A600' },
   alertDirectionBtnActiveRed: { backgroundColor: '#F03030', borderColor: '#F03030' },
   alertDirectionText: { fontSize: 15, fontWeight: '600', color: '#6b7280' },
-  alertDirectionTextActive: { color: 'white' },
+  alertDirectionTextActive: { color: '#0B1F3A' },
+  alertDirectionTextActiveRed: { color: 'white' },
   recentHeader: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingHorizontal: 16, paddingVertical: 10,
@@ -2013,12 +2007,12 @@ const styles = StyleSheet.create({
   categoryChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 16, marginRight: 8, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#F7A600' },
   categoryChipActive: { backgroundColor: '#F7A600', borderWidth: 1, borderColor: '#F7A600' },
   categoryChipText: { fontSize: 14, color: '#F7A600' },
-  categoryChipTextActive: { color: '#FFFFFF', fontWeight: '600' },
+  categoryChipTextActive: { color: '#0B1F3A', fontWeight: '600' },
   input: { borderWidth: 1, borderRadius: 8, padding: 12, fontSize: 16, marginBottom: 16 },
   totalText: { fontSize: 16, fontWeight: '600', color: PRIMARY, marginBottom: 16, textAlign: 'right' },
   addButton: { flexDirection: 'row', backgroundColor: PRIMARY, padding: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center', gap: 8 },
   addButtonDisabled: { backgroundColor: '#94a3b8' },
-  addButtonText: { color: 'white', fontSize: 16, fontWeight: '600' },
+  addButtonText: { color: '#0B1F3A', fontSize: 16, fontWeight: '600' },
   chartModalContainer: { flex: 1 },
   chartModalHeader: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
@@ -2053,7 +2047,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 16, marginTop: 16, marginBottom: 8,
     backgroundColor: '#F7A600', padding: 16, borderRadius: 12, alignItems: 'center',
   },
-  fxDetailRecordBtnText: { color: 'white', fontSize: 16, fontWeight: '700' },
+  fxDetailRecordBtnText: { color: '#0B1F3A', fontSize: 16, fontWeight: '700' },
   fxPeriodRow: { flexDirection: 'row', gap: 6, marginBottom: 12, flexWrap: 'wrap' },
   fxPeriodBtn: {
     flexDirection: 'row', alignItems: 'center',
@@ -2062,7 +2056,7 @@ const styles = StyleSheet.create({
   },
   fxPeriodBtnActive: { backgroundColor: '#F7A600', borderColor: '#F7A600' },
   fxPeriodLabel: { fontSize: 12, fontWeight: '500' },
-  fxPeriodLabelActive: { color: 'white', fontWeight: '700' },
+  fxPeriodLabelActive: { color: '#0B1F3A', fontWeight: '700' },
   fxChartLegend: { flexDirection: 'row', justifyContent: 'center', gap: 16, marginTop: 8 },
   fxLegendItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   fxLegendDot: { width: 8, height: 8, borderRadius: 4 },
