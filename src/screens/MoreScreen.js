@@ -2,7 +2,7 @@ import React from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  Bot, ChevronRight, CircleHelp, CloudUpload, CreditCard,
+  Bot, ChevronRight, CircleHelp, CloudUpload, CreditCard, Landmark,
   FileDown, Globe, Info, Palette, Settings2, UserRound,
 } from 'lucide-react-native';
 import { useTheme } from '../lib/ThemeContext';
@@ -22,6 +22,7 @@ const SECTIONS = [
     items: [
       { title: '匯出與備份', subtitle: '匯出報表、備份或還原資料', Icon: FileDown, color: '#8B5CF6', route: 'Settings', params: { section: 'data' } },
       { title: '同步狀態', subtitle: '查看報價與資料同步設定', Icon: CloudUpload, color: '#3B82F6', route: 'Settings', params: { section: 'sync' } },
+      { title: '玉山證券', subtitle: '查看持倉、即時市值與未實現損益', Icon: Landmark, color: '#0DBD8B', route: 'EsunSync' },
     ],
   },
   {

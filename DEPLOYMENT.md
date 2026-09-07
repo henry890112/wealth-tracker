@@ -162,24 +162,138 @@ npm start
 - 按 `w` 在瀏覽器開啟
 - 按 `a` 在 Android 模擬器開啟
 - 按 `i` 在 iOS 模擬器開啟
-- 掃描 QR code 在手機上開啟（需安裝 Expo Go）
+- 若要安裝到實體 iPhone，請依下方「在 iPhone 使用（免費 Xcode Personal Team）」的步驟操作
 
 ---
 
-## 📱 在手機上測試
+## 📱 在 iPhone 使用（免費 Xcode Personal Team）
 
-### 1. 安裝 Expo Go App
+本專案採用 **Xcode 本機 Development Build**，不需要付費的 Apple Developer Program，也不需要 EAS Build 或 Expo Go。這個方式僅限自己使用的 iPhone，App 的免費簽章每 7 天會到期一次。
 
-- **iOS**: 從 App Store 下載 "Expo Go"
-- **Android**: 從 Google Play 下載 "Expo Go"
+### 前置需求
 
-### 2. 連接到開發伺服器
+- Mac 已安裝最新版 Xcode，並至少開啟一次以完成授權。
+- 在 Xcode 的 **Settings → Accounts** 登入自己的 Apple Account；未付費帳號會顯示為 **Personal Team**。
+- iPhone 以 USB 連接 Mac、解鎖並按下「信任這部電腦」。
+- 若要在 iPhone 正常登入與同步資料，請先完成下方的「部署到雲端（Supabase Cloud）」設定。手機無法使用 `http://localhost:54321` 連到 Mac 的本機 Supabase。
 
-確保手機和電腦在同一個 Wi-Fi 網路下，然後：
+### 第一次安裝到 iPhone
 
-1. 在電腦上執行 `npm start`
-2. 使用手機掃描終端機顯示的 QR code
-3. Expo Go 會自動開啟應用程式
+在專案目錄執行：
+
+```bash
+npx expo run:ios --device
+```
+
+依提示選擇已連線的 iPhone。Expo 會產生必要的 iOS 專案、呼叫 Xcode 編譯，並把 WealthTracker 安裝到手機。
+
+若 Xcode 顯示簽章錯誤，請開啟 iOS workspace，選擇 App target 的 **Signing & Capabilities**，在 **Team** 選擇自己的 **Personal Team**，然後再次執行上述命令：
+
+```bash
+open ios/WealthTracker.xcworkspace
+```
+
+### 日常使用與程式更新
+
+建議讓手機與 Mac 在同一個 Wi-Fi，然後在 Mac 啟動開發伺服器：
+
+```bash
+npx expo start --dev-client --lan
+```
+
+用手機上的 WealthTracker 開啟專案或掃描顯示的 QR code。正常時網址會是 `192.168.x.x` 或 `10.x.x.x`。
+
+若手機與 Mac 不在同一個網路，仍可使用 Tunnel；兩台裝置都必須能上網，且 Mac 必須持續運行開發伺服器：
+
+```bash
+npx expo start --dev-client --tunnel --clear
+```
+
+Tunnel 產生的 `exp.direct` 網址可跨網路連線，但載入與熱更新較慢，且依賴 ngrok 服務。若終端機顯示 `failed to start tunnel`、`session closed`，或 App 無法連到 `exp.direct`，請改用同一個 Wi-Fi 的 LAN 模式；外出時也可讓 Mac 連上 iPhone 個人熱點後使用 LAN 模式。
+
+## 玉山證券唯讀同步
+
+玉山同步由 Mac 上的 `esun-bridge` 處理憑證與 SDK 登入。bridge 僅提供庫存、報價與帳務餘額讀取；App 預覽後，必須由使用者確認才會把持股數、平均成本與市值寫入 WealthTracker。可用餘額、交割餘額與股票預收款只供 App 顯示，不會寫入資產。它**不會**送出、修改或取消任何券商委託。
+
+> Expo Tunnel 只提供 App 的開發載入，**不會**轉送玉山 bridge。iPhone 使用 bridge 時，請透過 Tailscale 的私有 HTTPS 連線。
+
+### 1. 準備私有檔案
+
+以下檔案只能存在 Mac，且不得提交到 Git：
+
+- 玉山提供的 `config.ini` 與 `.p12` 憑證
+- `esun-bridge/.env`
+- 券商登入密碼、憑證密碼與 `ESUN_BRIDGE_TOKEN`
+
+在 `esun-bridge/.env` 設定：
+
+```ini
+ESUN_CONFIG_PATH=/absolute/path/to/ESUN_API/config.ini
+HOST=0.0.0.0
+PORT=8787
+ESUN_BRIDGE_TOKEN=<至少 24 字元的隨機安全碼>
+```
+
+首次讀取庫存時，SDK 會在執行 bridge 的 Mac 終端機要求輸入券商登入密碼與憑證密碼；這是玉山 SDK 的安全設計，密碼不會傳給 App。
+
+### 2. 建立 Tailscale 私有 HTTPS bridge
+
+在 Mac 與 iPhone 安裝 Tailscale、登入同一個帳號後，於 Mac 執行：
+
+```bash
+cd ~/WealthTracker/esun-bridge
+tailscale serve --bg --https=8443 http://127.0.0.1:8787
+```
+
+指令會顯示僅限你的 tailnet 使用的 HTTPS 網址，例如：
+
+```text
+https://your-mac.your-tailnet.ts.net:8443
+```
+
+將此網址填入專案根目錄 `.env`，然後重啟 Expo：
+
+```ini
+EXPO_PUBLIC_ESUN_BRIDGE_URL=https://your-mac.your-tailnet.ts.net:8443
+```
+
+請勿使用 `EXPO_PUBLIC_ESUN_API_KEY`、`EXPO_PUBLIC_ESUN_BRIDGE_TOKEN` 或把憑證資訊放進 Expo `.env`；任何 `EXPO_PUBLIC_*` 值都會進入 App bundle。
+
+### 3. 啟動與 App 設定
+
+終端機 A：
+
+```bash
+cd ~/WealthTracker/esun-bridge
+npm start
+```
+
+終端機 B：
+
+```bash
+cd ~/WealthTracker
+npx expo start --dev-client --tunnel --clear
+```
+
+在 iPhone 確認 Tailscale 已連線，再到「更多 → 玉山證券 → 設定橋接安全碼」，輸入與 `ESUN_BRIDGE_TOKEN` 相同的值。安全碼會儲存在裝置安全儲存區；瀏覽器版的儲存空間與 iPhone 分開，需各自設定一次。
+
+Mac 必須保持開機、連網，且 `esun-bridge` 持續運行。更新庫存後請先確認平均成本、成本、市值與未實現損益，再按「確認同步至 WealthTracker」。
+
+修改畫面、文字、JavaScript 或 React Native 邏輯後，App 會自動重新載入，不必重新執行 Xcode 編譯。
+
+### 何時需要再用 Xcode
+
+| 情況 | 操作 |
+|---|---|
+| 純畫面、功能或 JavaScript 修改 | 保持 `npx expo start --dev-client --lan` 運行即可 |
+| 新增原生套件、修改權限、icon、splash screen、Expo SDK 或 `app.json` 原生設定 | 再執行 `npx expo run:ios --device` |
+| 免費簽章在 7 天後到期、App 無法開啟 | 以 USB 接回 iPhone，再執行 `npx expo run:ios --device` 安裝新簽章版本 |
+
+### 免費方案的限制
+
+- 免費 Personal Team 只能供自己測試，不能用 TestFlight、App Store 或 EAS 內部發佈。
+- App 每 7 天需要重新簽章與安裝一次。
+- Development Build 需連到持續運行的 Mac 開發伺服器；跨網路時可用 Tunnel，但 ngrok 連線可能不穩定且速度較慢。
 
 ---
 
@@ -261,9 +375,9 @@ npm start
 **解決方案：**
 1. 確認手機和電腦在同一個 Wi-Fi
 2. 檢查防火牆設定
-3. 使用 Tunnel 模式：
+3. 使用 Development Build 的 LAN 模式：
    ```bash
-   npx expo start --tunnel
+   npx expo start --dev-client --lan
    ```
 
 ---
@@ -309,5 +423,5 @@ npm start
 
 ---
 
-**最後更新：** 2026-03-27
+**最後更新：** 2026-09-07
 **版本：** 1.0.0

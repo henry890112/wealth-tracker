@@ -1,0 +1,15 @@
+{
+  "name": "wealthtracker-esun-bridge",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "simulate:login": "node src/check-simulation.mjs",
+    "simulate:reset-login": "node src/reset-simulation-credentials.mjs",
+    "simulate:order": "node src/place-simulation-order.mjs"
+  },
+  "dependencies": {
+    "@esun/marketdata": "file:./vendor/esun-marketdata.tgz",
+    "@esun/trade": "file:./vendor/esun-trade.tgz"
+  }
+}
