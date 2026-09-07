@@ -213,7 +213,7 @@ Tunnel 產生的 `exp.direct` 網址可跨網路連線，但載入與熱更新�
 
 ## 玉山證券唯讀同步
 
-玉山同步由 Mac 上的 `esun-bridge` 處理憑證與 SDK 登入。bridge 僅提供庫存、報價與帳務餘額讀取；App 預覽後，必須由使用者確認才會把持股數、平均成本與市值寫入 WealthTracker。可用餘額、交割餘額與股票預收款只供 App 顯示，不會寫入資產。它**不會**送出、修改或取消任何券商委託。
+玉山同步由 Mac 上的 `esun-bridge` 處理憑證與 SDK 登入。bridge 僅提供庫存、報價與帳務餘額讀取；App 預覽後，必須由使用者確認才會把持股數、平均成本與市值寫入 WealthTracker。可用餘額會以「玉山證券可用餘額」同步至流動資產；交割餘額與股票預收款只供 App 顯示。它**不會**送出、修改或取消任何券商委託。
 
 > Expo Tunnel 只提供 App 的開發載入，**不會**轉送玉山 bridge。iPhone 使用 bridge 時，請透過 Tailscale 的私有 HTTPS 連線。
 

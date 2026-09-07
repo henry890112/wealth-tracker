@@ -19,23 +19,24 @@ export default function EsunSyncScreen({ navigation }) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(Number(value) || 0);
-  const totalCost = holdings.reduce((sum, item) => sum + (Number(item.costBasis) || item.averageCost * item.quantity), 0);
+  const totalCost = holdings.reduce((sum, item) => sum + (Math.abs(Number(item.costBasis)) || item.averageCost * item.quantity), 0);
   const totalValue = holdings.reduce((sum, item) => sum + item.marketValue, 0);
   const totalPnl = totalValue - totalCost;
   const totalPnlPct = totalCost ? (totalPnl / totalCost) * 100 : 0;
 
-  const applyHoldings = async (holdings) => {
+  const applyHoldings = async (holdings, accountBalance) => {
     setSyncing(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('未登入');
       const { data: assets, error: assetsError } = await supabase
         .from('assets')
-        .select('id, symbol, market_type, average_cost')
+        .select('id, name, symbol, category, currency, market_type, average_cost')
         .eq('user_id', user.id);
       if (assetsError) throw assetsError;
 
-      const changes = compareEsunHoldings(holdings, assets);
+      const assetRows = assets || [];
+      const changes = compareEsunHoldings(holdings, assetRows);
       let added = 0;
       let updated = 0;
       for (const item of changes) {
@@ -58,9 +59,30 @@ export default function EsunSyncScreen({ navigation }) {
         if (result.error) throw result.error;
         item.existingAsset ? updated++ : added++;
       }
+      let cashSynced = false;
+      if (accountBalance) {
+        const cashAsset = assetRows.find((asset) =>
+          asset.symbol === 'ESUN-CASH-TWD' && asset.category === 'liquid' && asset.currency === 'TWD'
+        );
+        const cashPayload = {
+          name: '玉山證券可用餘額',
+          symbol: 'ESUN-CASH-TWD',
+          category: 'liquid',
+          currency: 'TWD',
+          current_amount: Number(accountBalance.availableBalance) || 0,
+          current_shares: 0,
+          average_cost: 0,
+          updated_at: new Date().toISOString(),
+        };
+        const cashResult = cashAsset
+          ? await supabase.from('assets').update(cashPayload).eq('id', cashAsset.id).eq('user_id', user.id)
+          : await supabase.from('assets').insert({ ...cashPayload, user_id: user.id });
+        if (cashResult.error) throw cashResult.error;
+        cashSynced = true;
+      }
       await supabase.rpc('create_daily_snapshot', { p_user_id: user.id });
       await AsyncStorage.setItem('@wt_needs_refresh', '1');
-      Alert.alert('同步完成', `已更新 ${updated} 筆，新增 ${added} 筆持倉。`);
+      Alert.alert('同步完成', `已更新 ${updated} 筆，新增 ${added} 筆持倉。${cashSynced ? '玉山證券可用餘額已同步至流動資產。' : ''}`);
     } catch (error) {
       console.error('E.Sun sync error:', error);
       Alert.alert('玉山同步失敗', error.message || '請確認橋接服務已啟動');
@@ -88,18 +110,25 @@ export default function EsunSyncScreen({ navigation }) {
   };
 
   const confirmSyncToApp = async () => {
-    if (!holdings.length) return;
+    if (!holdings.length && !balance) return;
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('未登入');
-      const { data: assets, error } = await supabase.from('assets').select('id, symbol, market_type, average_cost').eq('user_id', user.id);
+      const { data: assets, error } = await supabase.from('assets').select('id, name, symbol, category, currency, market_type, average_cost').eq('user_id', user.id);
       if (error) throw error;
-      const changes = compareEsunHoldings(holdings, assets);
+      const assetRows = assets || [];
+      const changes = compareEsunHoldings(holdings, assetRows);
       const added = changes.filter((item) => !item.existingAsset).length;
+      const hasCashAsset = assetRows.some((asset) =>
+        asset.symbol === 'ESUN-CASH-TWD' && asset.category === 'liquid' && asset.currency === 'TWD'
+      );
+      const cashMessage = balance
+        ? `並${hasCashAsset ? '更新' : '新增'}「玉山證券可用餘額」${formatMoney(balance.availableBalance)} TWD 至流動資產。`
+        : '';
       Alert.alert(
         '確認同步到 WealthTracker',
-        `將更新 ${changes.length - added} 筆、新增 ${added} 筆 App 資產。玉山端不會被修改。`,
-        [{ text: '取消', style: 'cancel' }, { text: '確認同步', onPress: () => applyHoldings(holdings) }]
+        `將更新 ${changes.length - added} 筆、新增 ${added} 筆投資資產；${cashMessage}玉山端不會被修改。`,
+        [{ text: '取消', style: 'cancel' }, { text: '確認同步', onPress: () => applyHoldings(holdings, balance) }]
       );
     } catch (error) {
       Alert.alert('無法準備同步', error.message || '請稍後再試');
@@ -141,7 +170,7 @@ export default function EsunSyncScreen({ navigation }) {
 
       <View style={[styles.notice, { backgroundColor: colors.cardAlt }]}>
         <ShieldCheck size={19} color="#0DBD8B" />
-        <Text style={[styles.noticeText, { color: colors.textSub }]}>同步前會先顯示新增與更新筆數，必須確認後才會寫入 WealthTracker。</Text>
+        <Text style={[styles.noticeText, { color: colors.textSub }]}>同步前會先顯示新增與更新筆數；確認後才會寫入持倉與可用餘額。</Text>
       </View>
 
       <TouchableOpacity style={[styles.primaryButton, syncing && styles.disabled]} onPress={previewSync} disabled={syncing}>
@@ -157,7 +186,7 @@ export default function EsunSyncScreen({ navigation }) {
 
       {!!balance && <View style={[styles.balanceCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
         <Text style={[styles.balanceTitle, { color: colors.text }]}>玉山證券帳務</Text>
-        <Text style={[styles.balanceSubtitle, { color: colors.textSub }]}>僅供參考，以玉山帳務系統為準</Text>
+        <Text style={[styles.balanceSubtitle, { color: colors.textSub }]}>可用餘額可同步至流動資產；其餘欄位僅供參考</Text>
         <View style={styles.balanceGrid}>
           <View style={styles.balanceMetric}><Text style={[styles.metricLabel, { color: colors.textSub }]}>可用餘額</Text><Text style={[styles.balanceValue, { color: colors.text }]}>{formatMoney(balance.availableBalance)}</Text></View>
           <View style={styles.balanceMetric}><Text style={[styles.metricLabel, { color: colors.textSub }]}>交割餘額</Text><Text style={[styles.balanceValue, { color: colors.text }]}>{formatMoney(balance.exchangeBalance)}</Text></View>
@@ -176,7 +205,7 @@ export default function EsunSyncScreen({ navigation }) {
         </View>
         <Text style={[styles.listTitle, { color: colors.text }]}>目前庫存</Text>
         {holdings.map((item) => {
-          const costBasis = Number(item.costBasis) || item.averageCost * item.quantity;
+          const costBasis = Math.abs(Number(item.costBasis)) || item.averageCost * item.quantity;
           const pnl = item.marketValue - costBasis;
           const pnlPct = costBasis ? (pnl / costBasis) * 100 : 0;
           const positive = pnl >= 0;
@@ -190,8 +219,9 @@ export default function EsunSyncScreen({ navigation }) {
             </View>
           </View>;
         })}
-        <TouchableOpacity style={[styles.syncButton, { borderColor: '#0DBD8B' }]} onPress={confirmSyncToApp} disabled={syncing}><Text style={styles.syncButtonText}>確認同步至 WealthTracker</Text></TouchableOpacity>
       </>}
+
+      {(holdings.length > 0 || balance) && <TouchableOpacity style={[styles.syncButton, { borderColor: '#0DBD8B' }]} onPress={confirmSyncToApp} disabled={syncing}><Text style={styles.syncButtonText}>確認同步至 WealthTracker</Text></TouchableOpacity>}
 
       <TouchableOpacity style={[styles.tokenRow, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={setBridgeToken}>
         <View style={styles.tokenIcon}><LockKeyhole size={19} color="#64748B" /></View>

@@ -51,7 +51,7 @@ React Native (Expo) + Supabase 的個人資產管理 App，支援多幣別、即
 
 ### 玉山證券唯讀同步
 
-玉山憑證與帳密只會留在 Mac 的 `esun-bridge/` 私有環境。App 從「更多 → 玉山證券」先讀取庫存預覽，使用者確認後才會將持股數、平均成本與市值同步至 WealthTracker；bridge 不提供下單、改價或取消委託端點。
+玉山憑證與帳密只會留在 Mac 的 `esun-bridge/` 私有環境。App 從「更多 → 玉山證券」先讀取庫存與帳務預覽，使用者確認後才會將持股數、平均成本、市值與可用餘額同步至 WealthTracker；可用餘額會以「玉山證券可用餘額」寫入流動資產。bridge 不提供下單、改價或取消委託端點。
 
 若要讓 iPhone 在不同網路下使用，建議 Mac 與 iPhone 登入同一個 [Tailscale](https://tailscale.com/) 帳號，並讓 bridge 使用 Tailscale 私有 HTTPS 位址。完整設定與啟動方式請見 [DEPLOYMENT.md](DEPLOYMENT.md#玉山證券唯讀同步)。請勿把 `.p12`、`config.ini`、券商帳密或 `ESUN_BRIDGE_TOKEN` 提交至 Git，也不要放進任何 `EXPO_PUBLIC_*` 環境變數。
 

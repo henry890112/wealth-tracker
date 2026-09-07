@@ -70,9 +70,13 @@ async function getHoldings() {
       // Market may be closed or the quote endpoint may be temporarily unavailable.
     }
     const quantity = asNumber(item.stkDats?.reduce((sum, row) => sum + asNumber(row.qty), 0)) || asNumber(item.qty);
-    const costBasis = asNumber(item.costSum);
+    // The broker returns purchase cost as a negative cash outflow. WealthTracker
+    // stores cost basis as a positive amount so P&L remains market value − cost.
+    const costBasis = Math.abs(asNumber(item.costSum));
     const averageCost = asNumber(item.priceAvg) || (quantity > 0 ? costBasis / quantity : 0);
-    const marketPrice = asNumber(quote?.lastPrice || quote?.closePrice || quote?.previousClose);
+    // Prefer the price and value from the broker inventory response. They use
+    // the same valuation basis as the broker's own unrealized P&L screen.
+    const marketPrice = asNumber(item.priceMkt) || asNumber(quote?.lastPrice || quote?.closePrice || quote?.previousClose);
     const marketValue = asNumber(item.valueMkt) || marketPrice * quantity;
     return {
       symbol,
