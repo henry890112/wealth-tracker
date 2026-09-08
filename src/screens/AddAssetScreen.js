@@ -12,14 +12,12 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/ThemeContext';
 
-const PRIMARY = '#F7A600';
-
 const CATEGORIES = [
-  { key: 'liquid',     label: '流動資產', color: '#0DBD8B', bg: '#dcfce7', desc: '現金、銀行存款、活存' },
-  { key: 'investment', label: '投資資產', color: '#f59e0b', bg: '#fef3c7', desc: '股票、基金、虛擬貨幣' },
-  { key: 'fixed',      label: '固定資產', color: '#94a3b8', bg: '#f1f5f9', desc: '不動產、車輛、設備' },
-  { key: 'receivable', label: '應收款項', color: '#0d9488', bg: '#ccfbf1', desc: '借給他人的款項' },
-  { key: 'liability',  label: '負債',     color: '#F03030', bg: '#fee2e2', desc: '貸款、信用卡、債務' },
+  { key: 'liquid', label: '流動資產', desc: '現金、銀行存款、活存' },
+  { key: 'investment', label: '投資資產', desc: '股票、基金、虛擬貨幣' },
+  { key: 'fixed', label: '固定資產', desc: '不動產、車輛、設備' },
+  { key: 'receivable', label: '應收款項', desc: '借給他人的款項' },
+  { key: 'liability', label: '負債', desc: '貸款、信用卡、債務' },
 ];
 
 const CURRENCIES = ['TWD', 'USD', 'EUR', 'JPY', 'CNY', 'HKD', 'GBP', 'AUD'];
@@ -29,6 +27,12 @@ export default function AddAssetScreen() {
   const route = useRoute();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
+  const PRIMARY = colors.accent;
+  const themedCategories = CATEGORIES.map((category, index) => ({
+    ...category,
+    color: category.key === 'liability' ? colors.negative : colors.chartPalette[index % colors.chartPalette.length],
+    bg: category.key === 'liability' ? colors.negativeSoft : `${colors.chartPalette[index % colors.chartPalette.length]}20`,
+  }));
 
   const defaultCategory = route.params?.defaultCategory || 'liquid';
 
@@ -117,7 +121,7 @@ export default function AddAssetScreen() {
     }
   };
 
-  const cat = CATEGORIES.find(c => c.key === selectedCategory);
+  const cat = themedCategories.find(c => c.key === selectedCategory);
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
@@ -133,12 +137,12 @@ export default function AddAssetScreen() {
         <Text style={[styles.headerTitle, { color: colors.text }]}>新增資產</Text>
         <TouchableOpacity
           onPress={handleSave}
-          style={[styles.saveBtn, saving && { opacity: 0.6 }]}
+          style={[styles.saveBtn, { backgroundColor: PRIMARY, shadowColor: PRIMARY }, saving && { opacity: 0.6 }]}
           disabled={saving}
         >
           {saving
-            ? <ActivityIndicator size="small" color="white" />
-            : <Check size={18} color="white" />
+            ? <ActivityIndicator size="small" color={colors.accentContrast} />
+            : <Check size={18} color={colors.accentContrast} />
           }
         </TouchableOpacity>
       </View>
@@ -148,7 +152,7 @@ export default function AddAssetScreen() {
         {/* Category selector */}
         <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>資產類別</Text>
         <View style={styles.catGrid}>
-          {CATEGORIES.map(c => {
+          {themedCategories.map(c => {
             const active = selectedCategory === c.key;
             return (
               <TouchableOpacity
@@ -199,18 +203,18 @@ export default function AddAssetScreen() {
             <Text style={[styles.fieldLabel, { color: colors.textSub }]}>幣別</Text>
             {/* Liquid glass currency selector */}
             <View style={styles.currencyGlass}>
-              <BlurView intensity={20} tint="light" style={StyleSheet.absoluteFill} />
+              <BlurView intensity={20} tint={colors.blurTint} style={StyleSheet.absoluteFill} />
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.currencyRow}>
                 {CURRENCIES.map(cur => {
                   const active = currency === cur;
                   return (
                     <TouchableOpacity
                       key={cur}
-                      style={[styles.currencyBtn, { backgroundColor: colors.card, borderColor: colors.border }, active && styles.currencyBtnActive]}
+                      style={[styles.currencyBtn, { backgroundColor: colors.card, borderColor: active ? PRIMARY : colors.border }, active && { backgroundColor: PRIMARY }]}
                       onPress={() => setCurrency(cur)}
                       activeOpacity={0.75}
                     >
-                      <Text style={[styles.currencyLabel, { color: colors.textSub }, active && styles.currencyLabelActive]}>{cur}</Text>
+                      <Text style={[styles.currencyLabel, { color: active ? colors.accentContrast : colors.textSub }]}>{cur}</Text>
                     </TouchableOpacity>
                   );
                 })}
@@ -285,14 +289,14 @@ export default function AddAssetScreen() {
 
         {/* Save button */}
         <TouchableOpacity
-          style={[styles.saveFullBtn, { backgroundColor: cat?.color || PRIMARY }, saving && { opacity: 0.6 }]}
+          style={[styles.saveFullBtn, { backgroundColor: PRIMARY, shadowColor: PRIMARY }, saving && { opacity: 0.6 }]}
           onPress={handleSave}
           disabled={saving}
           activeOpacity={0.85}
         >
           {saving
-            ? <ActivityIndicator color={cat?.color === PRIMARY || !cat ? '#0B1F3A' : 'white'} />
-            : <Text style={[styles.saveFullBtnText, { color: cat?.color === PRIMARY || !cat ? '#0B1F3A' : 'white' }]}>儲存{cat?.label}</Text>
+            ? <ActivityIndicator color={colors.accentContrast} />
+            : <Text style={[styles.saveFullBtnText, { color: colors.accentContrast }]}>儲存{cat?.label}</Text>
           }
         </TouchableOpacity>
       </ScrollView>
@@ -316,8 +320,8 @@ const styles = StyleSheet.create({
   headerTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '700' },
   saveBtn: {
     width: 36, height: 36, borderRadius: 18,
-    backgroundColor: PRIMARY, justifyContent: 'center', alignItems: 'center',
-    shadowColor: PRIMARY, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.35, shadowRadius: 6, elevation: 4,
+    justifyContent: 'center', alignItems: 'center',
+    shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.35, shadowRadius: 6, elevation: 4,
   },
 
   sectionLabel: { fontSize: 13, fontWeight: '600', marginHorizontal: 16, marginTop: 16, marginBottom: 8 },
@@ -360,11 +364,10 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(22,163,74,0.35)',
   },
   currencyBtnActive: {
-    backgroundColor: PRIMARY,
     borderColor: 'rgba(255,255,255,0.3)',
-    shadowColor: PRIMARY, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4, elevation: 3,
+    shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4, elevation: 3,
   },
-  currencyLabel: { fontSize: 13, color: PRIMARY, fontWeight: '600' },
+  currencyLabel: { fontSize: 13, fontWeight: '600' },
   currencyLabelActive: { color: '#0B1F3A', fontWeight: '700' },
 
   divider: { height: 1, marginBottom: 12 },
@@ -373,7 +376,7 @@ const styles = StyleSheet.create({
 
   saveFullBtn: {
     marginHorizontal: 16, borderRadius: 14, paddingVertical: 15, alignItems: 'center',
-    shadowColor: PRIMARY, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 5,
+    shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 5,
   },
   saveFullBtnText: { color: 'white', fontSize: 16, fontWeight: '700' },
 });

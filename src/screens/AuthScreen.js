@@ -8,27 +8,26 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
-  useColorScheme,
   Keyboard,
   TouchableWithoutFeedback,
 } from 'react-native';
 import { supabase } from '../lib/supabase';
+import { useTheme } from '../lib/ThemeContext';
 
 export default function AuthScreen() {
-  const scheme = useColorScheme();
-  const dark = scheme === 'dark';
+  const { colors } = useTheme();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
 
-  const bg       = dark ? '#0f172a' : '#f1f5f9';
-  const cardBg   = dark ? '#1e293b' : '#ffffff';
-  const textMain = dark ? '#f8fafc' : '#0f172a';
-  const textSub  = dark ? '#94a3b8' : '#64748b';
-  const border   = dark ? '#334155' : '#e2e8f0';
-  const inputBg  = dark ? '#0f172a' : '#f8fafc';
+  const bg = colors.bg;
+  const cardBg = colors.card;
+  const textMain = colors.text;
+  const textSub = colors.textSub;
+  const border = colors.border;
+  const inputBg = colors.input;
 
   const handleAuth = async () => {
     if (!email || !password) {
@@ -62,7 +61,7 @@ export default function AuthScreen() {
       <View style={styles.content}>
         {/* Logo area */}
         <View style={styles.logoArea}>
-          <View style={styles.logoIcon}>
+          <View style={[styles.logoIcon, { backgroundColor: colors.accent, shadowColor: colors.accent }]}>
             <Text style={styles.logoEmoji}>💰</Text>
           </View>
           <Text style={[styles.title, { color: textMain }]}>WealthTracker</Text>
@@ -97,11 +96,11 @@ export default function AuthScreen() {
           />
 
           <TouchableOpacity
-            style={[styles.button, loading && styles.buttonDisabled]}
+            style={[styles.button, { backgroundColor: colors.accent, shadowColor: colors.accent }, loading && styles.buttonDisabled]}
             onPress={handleAuth}
             disabled={loading}
           >
-            <Text style={styles.buttonText}>
+            <Text style={[styles.buttonText, { color: colors.accentContrast }]}>
               {loading ? '處理中...' : isSignUp ? '註冊' : '登入'}
             </Text>
           </TouchableOpacity>
@@ -111,7 +110,7 @@ export default function AuthScreen() {
             onPress={() => setIsSignUp(!isSignUp)}
             disabled={loading}
           >
-            <Text style={[styles.linkText, { color: '#F7A600' }]}>
+            <Text style={[styles.linkText, { color: colors.accent }]}>
               {isSignUp ? '已有帳號？登入' : '沒有帳號？註冊'}
             </Text>
           </TouchableOpacity>
@@ -140,11 +139,9 @@ const styles = StyleSheet.create({
     width: 72,
     height: 72,
     borderRadius: 20,
-    backgroundColor: '#F7A600',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 16,
-    shadowColor: '#F7A600',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 12,
@@ -187,7 +184,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   button: {
-    backgroundColor: '#F7A600',
     borderRadius: 10,
     padding: 16,
     alignItems: 'center',

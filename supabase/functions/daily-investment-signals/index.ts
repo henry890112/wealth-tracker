@@ -34,12 +34,50 @@ const percentile = (values: number[], p: number) => {
   return lower === upper ? sorted[lower] : sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
 };
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function fetchJson(url: string, headers: Record<string, string>, timeoutMs = 15_000) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, { headers, signal: controller.signal });
+      if (!response.ok) {
+        const error = new Error(`HTTP ${response.status}`);
+        if (response.status !== 429 && response.status < 500) throw error;
+        lastError = error;
+      } else {
+        return await response.json();
+      }
+    } catch (error) {
+      lastError = error;
+      if (error instanceof Error && /^HTTP 4(?!29)/.test(error.message)) throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (attempt < 2) await sleep(700 * (attempt + 1));
+  }
+  throw lastError instanceof Error ? lastError : new Error("Market data request failed");
+}
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, worker: (item: T) => Promise<R>) {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await worker(items[index]);
+    }
+  }));
+  return results;
+}
+
 async function finmind(dataset: string, symbol: string, startDate: string, token: string) {
   const params = new URLSearchParams({ dataset, data_id: symbol, start_date: startDate, end_date: dateInTaipei() });
-  const headers = token ? { Authorization: `Bearer ${token}` } : {};
-  const response = await fetch(`${FINMIND_BASE}?${params}`, { headers });
-  if (!response.ok) throw new Error(`FinMind ${dataset} HTTP ${response.status}`);
-  const payload = await response.json();
+  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  const payload = await fetchJson(`${FINMIND_BASE}?${params}`, headers);
   if (payload.status !== 200) throw new Error(`FinMind ${dataset}: ${payload.msg || payload.status}`);
   return (payload.data || []) as MarketRow[];
 }
@@ -51,10 +89,8 @@ async function taiwanStockNames(token: string) {
       // TaiwanStockInfo is a catalogue: FinMind documents it as a bulk endpoint
       // without data_id or date filters. Filtering it returned an empty list.
       const params = new URLSearchParams({ dataset: "TaiwanStockInfo" });
-      const headers = token ? { Authorization: `Bearer ${token}` } : {};
-      const response = await fetch(`${FINMIND_BASE}?${params}`, { headers });
-      if (!response.ok) throw new Error(`FinMind TaiwanStockInfo HTTP ${response.status}`);
-      const payload = await response.json();
+      const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+      const payload = await fetchJson(`${FINMIND_BASE}?${params}`, headers, 20_000);
       if (payload.status !== 200) throw new Error(`FinMind TaiwanStockInfo: ${payload.msg || payload.status}`);
       const names = new Map<string, string>();
       for (const row of (payload.data || []) as MarketRow[]) {
@@ -184,7 +220,7 @@ Deno.serve(async (req) => {
       supabase.from("watchlist").select("user_id, symbol, market_type").eq("market_type", "TW"),
     ]);
     if (prefError || assetError || watchError) throw prefError || assetError || watchError;
-    const names = new Map((assets || []).map(asset => [`${asset.user_id}:${asset.symbol}`, asset.name]));
+    const names = new Map<string, string>((assets || []).map((asset: { user_id: string; symbol: string; name: string }) => [`${asset.user_id}:${asset.symbol}`, asset.name]));
     const candidates = new Map<string, Map<string, string>>();
     for (const preference of preferences || []) candidates.set(preference.user_id, new Map());
     for (const item of [...(assets || []), ...(watchlist || [])]) {
@@ -202,27 +238,43 @@ Deno.serve(async (req) => {
     const newEvents = new Map<string, { id: string; symbol: string }[]>();
     let analyzedSymbols = 0;
     let qualifiedSymbols = 0;
+    let failedSymbols = 0;
     for (const preference of preferences || []) {
       const symbols = [...(candidates.get(preference.user_id)?.entries() || [])].slice(0, Math.min(preference.max_symbols || MAX_SYMBOLS_PER_USER, MAX_SYMBOLS_PER_USER));
-      for (const [symbol, name] of symbols) {
-        if (!marketCache.has(symbol)) {
-          const [prices, pers, institutional] = await Promise.all([
-            finmind("TaiwanStockPrice", symbol, dateBefore(100), finmindToken),
-            finmind("TaiwanStockPER", symbol, dateBefore(1095), finmindToken),
-            finmind("TaiwanStockInstitutionalInvestorsBuySell", symbol, dateBefore(35), finmindToken),
-          ]);
-          marketCache.set(symbol, scoreSymbol(symbol, symbol, prices, pers, institutional, Boolean(requestedUserId)));
-        }
+      const analyses = await mapWithConcurrency(symbols, 3, async ([symbol, name]) => {
         let displayName = name;
-        if (!displayName || displayName === symbol) {
-          if (!nameCache.has(symbol)) nameCache.set(symbol, await stockName(symbol, finmindToken));
-          displayName = nameCache.get(symbol) || symbol;
+        try {
+          if (!marketCache.has(symbol)) {
+            const [prices, pers, institutional] = await Promise.all([
+              finmind("TaiwanStockPrice", symbol, dateBefore(100), finmindToken),
+              finmind("TaiwanStockPER", symbol, dateBefore(1095), finmindToken),
+              finmind("TaiwanStockInstitutionalInvestorsBuySell", symbol, dateBefore(35), finmindToken),
+            ]);
+            marketCache.set(symbol, scoreSymbol(symbol, symbol, prices, pers, institutional, Boolean(requestedUserId)));
+          }
+          if (!displayName || displayName === symbol) {
+            if (!nameCache.has(symbol)) nameCache.set(symbol, await stockName(symbol, finmindToken));
+            displayName = nameCache.get(symbol) || symbol;
+          }
+          return { signal: { ...marketCache.get(symbol)!, name: displayName }, failed: false };
+        } catch (error) {
+          console.error(`market data ${symbol}`, error);
+          return {
+            failed: true,
+            signal: {
+              eligible: false, symbol, name: displayName || symbol, score: 0, reasons: [],
+              risks: ["市場資料暫時無法讀取，請稍後重新分析"], sourceAsOf: dateInTaipei(),
+              metrics: { per: null, per_p25: null, foreign_net_buy: null, trust_net_buy: null, institutional_net_buy: null, avg_trading_money: null, close: null, ma20: null, ma60: null },
+            },
+          };
         }
-        const signal = { ...marketCache.get(symbol)!, name: displayName };
+      });
+      for (const { signal, failed } of analyses) {
         analyzedSymbols += 1;
+        if (failed) failedSymbols += 1;
         if (signal.eligible) qualifiedSymbols += 1;
         const { data: event, error } = await supabase.from("investment_signal_events").upsert({
-          user_id: preference.user_id, symbol, name, signal_date: dateInTaipei(), strategy: STRATEGY, score: signal.score,
+          user_id: preference.user_id, symbol: signal.symbol, name: signal.name, signal_date: dateInTaipei(), strategy: STRATEGY, score: signal.score,
           is_candidate: signal.eligible, reasons: signal.reasons, metrics: signal.metrics, risk_flags: signal.risks, source_as_of: signal.sourceAsOf,
         }, { onConflict: "user_id,symbol,signal_date,strategy" }).select("id, symbol").single();
         if (error) throw error;
@@ -233,7 +285,7 @@ Deno.serve(async (req) => {
       const events = newEvents.get(preference.user_id) || [];
       if (!requestedUserId && preference.push_enabled && events.length) await sendExpoSummary(supabase, preference.user_id, events);
     }
-    return new Response(JSON.stringify({ mode: requestedUserId ? "on_demand" : "scheduled", processed_users: (preferences || []).length, analyzed_symbols: analyzedSymbols, qualified_symbols: qualifiedSymbols, as_of: dateInTaipei() }), { headers: { ...CORS, "Content-Type": "application/json" } });
+    return new Response(JSON.stringify({ mode: requestedUserId ? "on_demand" : "scheduled", processed_users: (preferences || []).length, analyzed_symbols: analyzedSymbols, qualified_symbols: qualifiedSymbols, failed_symbols: failedSymbols, as_of: dateInTaipei() }), { headers: { ...CORS, "Content-Type": "application/json" } });
   } catch (error) {
     console.error("daily-investment-signals", error);
     return new Response(JSON.stringify({ error: error instanceof Error ? error.message : "Signal job failed" }), { status: 500, headers: { ...CORS, "Content-Type": "application/json" } });

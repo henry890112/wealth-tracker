@@ -9,6 +9,7 @@ import { useTheme } from '../lib/ThemeContext';
 
 export default function EsunSyncScreen({ navigation }) {
   const { colors } = useTheme();
+  const PRIMARY = colors.accent;
   const insets = useSafeAreaInsets();
   const [syncing, setSyncing] = useState(false);
   const [holdings, setHoldings] = useState([]);
@@ -161,7 +162,7 @@ export default function EsunSyncScreen({ navigation }) {
       </View>
 
       <View style={[styles.hero, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        <View style={styles.heroIcon}><Landmark size={25} color="#0DBD8B" /></View>
+        <View style={[styles.heroIcon, { backgroundColor: colors.accentSoft }]}><Landmark size={25} color={PRIMARY} /></View>
         <View style={{ flex: 1 }}>
           <Text style={[styles.heroTitle, { color: colors.text }]}>唯讀持倉同步</Text>
           <Text style={[styles.heroText, { color: colors.textSub }]}>讀取持倉、最新市值與未實現損益；不會送出或修改任何委託。</Text>
@@ -169,13 +170,13 @@ export default function EsunSyncScreen({ navigation }) {
       </View>
 
       <View style={[styles.notice, { backgroundColor: colors.cardAlt }]}>
-        <ShieldCheck size={19} color="#0DBD8B" />
+        <ShieldCheck size={19} color={PRIMARY} />
         <Text style={[styles.noticeText, { color: colors.textSub }]}>同步前會先顯示新增與更新筆數；確認後才會寫入持倉與可用餘額。</Text>
       </View>
 
-      <TouchableOpacity style={[styles.primaryButton, syncing && styles.disabled]} onPress={previewSync} disabled={syncing}>
-        {syncing ? <ActivityIndicator color="#0B1F3A" /> : <RefreshCw size={20} color="#0B1F3A" />}
-        <Text style={styles.primaryText}>{syncing ? '讀取中…' : '更新庫存與餘額'}</Text>
+      <TouchableOpacity style={[styles.primaryButton, { backgroundColor: PRIMARY }, syncing && styles.disabled]} onPress={previewSync} disabled={syncing}>
+        {syncing ? <ActivityIndicator color={colors.accentContrast} /> : <RefreshCw size={20} color={colors.accentContrast} />}
+        <Text style={[styles.primaryText, { color: colors.accentContrast }]}>{syncing ? '讀取中…' : '更新庫存與餘額'}</Text>
       </TouchableOpacity>
 
       {!!loadError && <View style={styles.errorBox}>
@@ -221,10 +222,10 @@ export default function EsunSyncScreen({ navigation }) {
         })}
       </>}
 
-      {(holdings.length > 0 || balance) && <TouchableOpacity style={[styles.syncButton, { borderColor: '#0DBD8B' }]} onPress={confirmSyncToApp} disabled={syncing}><Text style={styles.syncButtonText}>確認同步至 WealthTracker</Text></TouchableOpacity>}
+      {(holdings.length > 0 || balance) && <TouchableOpacity style={[styles.syncButton, { borderColor: PRIMARY }]} onPress={confirmSyncToApp} disabled={syncing}><Text style={[styles.syncButtonText, { color: PRIMARY }]}>確認同步至 WealthTracker</Text></TouchableOpacity>}
 
       <TouchableOpacity style={[styles.tokenRow, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={setBridgeToken}>
-        <View style={styles.tokenIcon}><LockKeyhole size={19} color="#64748B" /></View>
+        <View style={[styles.tokenIcon, { backgroundColor: colors.cardAlt }]}><LockKeyhole size={19} color={colors.textMuted} /></View>
         <View style={{ flex: 1 }}>
           <Text style={[styles.tokenTitle, { color: colors.text }]}>設定橋接安全碼</Text>
           <Text style={[styles.tokenText, { color: colors.textSub }]}>僅在手機透過同 Wi‑Fi 連線時需要</Text>
@@ -245,7 +246,7 @@ const styles = StyleSheet.create({
   heroText: { fontSize: 13, lineHeight: 19 },
   notice: { marginHorizontal: 20, marginTop: 14, borderRadius: 14, padding: 14, flexDirection: 'row', gap: 10 },
   noticeText: { flex: 1, fontSize: 13, lineHeight: 19 },
-  primaryButton: { marginHorizontal: 20, marginTop: 22, height: 52, borderRadius: 15, backgroundColor: '#F7A600', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  primaryButton: { marginHorizontal: 20, marginTop: 22, height: 52, borderRadius: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   primaryText: { color: '#0B1F3A', fontSize: 16, fontWeight: '800' },
   disabled: { opacity: 0.65 },
   balanceCard: { marginHorizontal: 20, marginTop: 18, borderRadius: 18, borderWidth: 1, padding: 16 },

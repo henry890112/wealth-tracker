@@ -12,6 +12,31 @@ const DEFAULT_PREFERENCES = {
   max_symbols: 50,
 };
 
+const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+const isNetworkFunctionError = (error) => {
+  const text = `${error?.name || ''} ${error?.message || ''}`.toLowerCase();
+  return text.includes('functionsfetcherror')
+    || text.includes('fetch failed')
+    || text.includes('network connection was lost')
+    || text.includes('network request failed');
+};
+
+async function functionErrorMessage(error) {
+  if (isNetworkFunctionError(error)) {
+    return '與研究伺服器的連線中斷，請確認網路後再試；先前的分析結果仍會保留。';
+  }
+  let message = error?.message || '研究伺服器暫時無法使用，請稍後再試。';
+  try {
+    const details = await error?.context?.json?.();
+    if (details?.error) message = details.error;
+  } catch {}
+  if (/non-2xx|functionshttperror/i.test(message)) {
+    return '研究伺服器執行失敗，請稍後重試；若持續發生，請檢查 Edge Function 執行紀錄。';
+  }
+  return message;
+}
+
 async function currentUser() {
   const { data: { user }, error } = await supabase.auth.getUser();
   if (error) throw error;
@@ -69,17 +94,19 @@ export async function runInvestmentSignalNow() {
   const { data: { session }, error: sessionError } = await supabase.auth.getSession();
   if (sessionError) throw sessionError;
   if (!session?.access_token) throw new Error('登入已失效，請重新登入後再分析。');
-  const { data, error } = await supabase.functions.invoke('daily-investment-signals', {
+  const invoke = () => supabase.functions.invoke('daily-investment-signals', {
     body: { mode: 'on_demand' },
     headers: { Authorization: `Bearer ${session.access_token}` },
   });
+  let { data, error } = await invoke();
+  // On iOS a brief network hand-off can surface as FunctionsFetchError. The
+  // operation is idempotent (daily rows are upserted), so one retry is safe.
+  if (error && isNetworkFunctionError(error)) {
+    await wait(900);
+    ({ data, error } = await invoke());
+  }
   if (error) {
-    let message = error.message;
-    try {
-      const details = await error.context?.json?.();
-      if (details?.error) message = details.error;
-    } catch {}
-    throw new Error(message);
+    throw new Error(await functionErrorMessage(error));
   }
   if (data?.error) throw new Error(data.error);
   return data;

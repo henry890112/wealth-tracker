@@ -12,7 +12,7 @@ import { useTheme } from '../lib/ThemeContext';
 const TYPE_CONFIG = {
   BUY:    { label: '買入', color: '#0DBD8B', bg: 'rgba(13,189,139,0.12)' },
   SELL:   { label: '賣出', color: '#F03030', bg: 'rgba(240,48,48,0.12)' },
-  ADJUST: { label: '調整', color: '#2563eb', bg: '#dbeafe' },
+  ADJUST: { label: '調整' },
 };
 
 const TYPE_FILTERS = [
@@ -32,6 +32,7 @@ const MARKET_FILTERS = [
 
 export default function RecordsScreen() {
   const { colors } = useTheme();
+  const PRIMARY = colors.accent || '#8B8CF6';
   const insets = useSafeAreaInsets();
   const [transactions, setTransactions] = useState([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -115,7 +116,7 @@ export default function RecordsScreen() {
   if (loading) {
     return (
       <View style={[styles.loading, { backgroundColor: colors.bg }]}>
-        <ActivityIndicator size="large" color="#F7A600" />
+        <ActivityIndicator size="large" color={PRIMARY} />
       </View>
     );
   }
@@ -132,7 +133,7 @@ export default function RecordsScreen() {
             onPress={() => onSelect(item.key)}
             activeOpacity={0.75}
           >
-            <Text style={[styles.chipText, { color: colors.textSub }, isActive && { color: activeColor === '#F7A600' ? '#0B1F3A' : '#FFFFFF', fontWeight: '700' }]}>
+            <Text style={[styles.chipText, { color: colors.textSub }, isActive && { color: colors.accentContrast, fontWeight: '700' }]}>
               {item.label}
             </Text>
           </TouchableOpacity>
@@ -153,34 +154,34 @@ export default function RecordsScreen() {
             <Text style={[styles.filterCount, { color: colors.textMuted }]}>顯示 {filtered.length} 筆紀錄</Text>
           </View>
           <TouchableOpacity
-            style={[styles.filterToggle, { backgroundColor: advancedFilterCount ? '#FFF3D6' : colors.cardAlt, borderColor: advancedFilterCount ? '#F59E0B' : colors.border }]}
+            style={[styles.filterToggle, { backgroundColor: advancedFilterCount ? colors.hotBg : colors.cardAlt, borderColor: advancedFilterCount ? PRIMARY : colors.border }]}
             onPress={() => setFiltersExpanded(v => !v)}
           >
-            <SlidersHorizontal size={16} color={advancedFilterCount ? '#D97706' : colors.textSub} />
-            <Text style={[styles.filterToggleText, { color: advancedFilterCount ? '#D97706' : colors.textSub }]}>進階{advancedFilterCount ? ` · ${advancedFilterCount}` : ''}</Text>
+            <SlidersHorizontal size={16} color={advancedFilterCount ? PRIMARY : colors.textSub} />
+            <Text style={[styles.filterToggleText, { color: advancedFilterCount ? PRIMARY : colors.textSub }]}>進階{advancedFilterCount ? ` · ${advancedFilterCount}` : ''}</Text>
           </TouchableOpacity>
         </View>
-        {renderChip(TYPE_FILTERS,   typeFilter,   setTypeFilter,   '#F7A600')}
+        {renderChip(TYPE_FILTERS,   typeFilter,   setTypeFilter,   PRIMARY)}
         {filtersExpanded && (
           <View style={styles.advancedFilters}>
             <View style={styles.advancedHeader}>
               <Text style={[styles.advancedLabel, { color: colors.textMuted }]}>市場與資產</Text>
               {advancedFilterCount > 0 && (
                 <TouchableOpacity style={styles.resetButton} onPress={resetAdvancedFilters}>
-                  <X size={13} color="#D97706" />
-                  <Text style={styles.resetText}>清除</Text>
+                  <X size={13} color={PRIMARY} />
+                  <Text style={[styles.resetText, { color: PRIMARY }]}>清除</Text>
                 </TouchableOpacity>
               )}
             </View>
-            {renderChip(MARKET_FILTERS, marketFilter, setMarketFilter, '#2563eb')}
-            {assetFilters.length > 2 && renderChip(assetFilters, assetFilter, setAssetFilter, '#7c3aed')}
+            {renderChip(MARKET_FILTERS, marketFilter, setMarketFilter, PRIMARY)}
+            {assetFilters.length > 2 && renderChip(assetFilters, assetFilter, setAssetFilter, PRIMARY)}
           </View>
         )}
       </View>
 
       <ScrollView
         contentContainerStyle={{ paddingBottom: insets.bottom + 80 }}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#F7A600" />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={PRIMARY} />}
       >
         {filtered.length === 0 ? (
           <View style={styles.empty}>
@@ -189,7 +190,10 @@ export default function RecordsScreen() {
         ) : (
           <View style={[styles.list, { backgroundColor: colors.card }]}>
             {filtered.map((tx, idx) => {
-              const cfg = TYPE_CONFIG[tx.type] || TYPE_CONFIG.ADJUST;
+              const baseCfg = TYPE_CONFIG[tx.type] || TYPE_CONFIG.ADJUST;
+              const cfg = !['BUY', 'SELL'].includes(tx.type)
+                ? { ...baseCfg, color: PRIMARY, bg: colors.hotBg }
+                : baseCfg;
               const date = new Date(tx.trans_date);
               const nowYear = new Date().getFullYear();
               const timeStr = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
@@ -258,7 +262,7 @@ const styles = StyleSheet.create({
   advancedHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16 },
   advancedLabel: { fontSize: 12, fontWeight: '600' },
   resetButton: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  resetText: { color: '#D97706', fontSize: 12, fontWeight: '600' },
+  resetText: { fontSize: 12, fontWeight: '600' },
   chipRow: { flexDirection: 'row', paddingHorizontal: 12, gap: 6 },
   chip: {
     paddingHorizontal: 12, paddingVertical: 6,

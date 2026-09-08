@@ -11,8 +11,6 @@ import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/ThemeContext';
 import { fetchExchangeRate } from '../services/api';
 
-const PRIMARY = '#F7A600';
-
 const CATEGORIES = ['住房', '交通', '訂閱', '保險', '貸款', '餐飲', '其他'];
 const CURRENCIES = ['TWD', 'USD', 'JPY', 'EUR', 'CNY'];
 
@@ -23,16 +21,6 @@ const FREQUENCIES = [
   { key: 'yearly', label: '每年' },
 ];
 const FREQUENCY_MONTHS = { monthly: 1, quarterly: 3, semi_annual: 6, yearly: 12 };
-
-const CATEGORY_COLORS = {
-  住房: '#3b82f6',
-  交通: '#f59e0b',
-  訂閱: '#8b5cf6',
-  保險: '#06b6d4',
-  貸款: '#F03030',
-  餐飲: '#f97316',
-  其他: '#6b7280',
-};
 
 const EMPTY_FORM = {
   name: '',
@@ -46,6 +34,8 @@ const EMPTY_FORM = {
 
 export default function FixedExpensesScreen() {
   const { colors } = useTheme();
+  const PRIMARY = colors.accent;
+  const categoryPalette = colors.chartPalette;
   const insets = useSafeAreaInsets();
   const [expenses, setExpenses] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -212,9 +202,9 @@ export default function FixedExpensesScreen() {
       >
         <View style={styles.totalHeader}>
           <Text style={[styles.totalLabel, { color: c.textSub }]}>月均固定支出（{baseCurrency}）</Text>
-          <TouchableOpacity style={styles.addAction} onPress={openNew} activeOpacity={0.8}>
-            <Plus size={16} color="#FFFFFF" />
-            <Text style={styles.addActionText}>新增</Text>
+          <TouchableOpacity style={[styles.addAction, { backgroundColor: PRIMARY }]} onPress={openNew} activeOpacity={0.8}>
+            <Plus size={16} color={colors.accentContrast} />
+            <Text style={[styles.addActionText, { color: colors.accentContrast }]}>新增</Text>
           </TouchableOpacity>
         </View>
         <Text
@@ -227,7 +217,7 @@ export default function FixedExpensesScreen() {
       </View>
 
       {loading ? (
-        <ActivityIndicator size="large" color="#F7A600" style={{ marginTop: 40 }} />
+        <ActivityIndicator size="large" color={PRIMARY} style={{ marginTop: 40 }} />
       ) : (
         <ScrollView
           contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 100 }}
@@ -240,7 +230,8 @@ export default function FixedExpensesScreen() {
             </View>
           ) : (
             grouped.map(group => {
-              const categoryColor = CATEGORY_COLORS[group.category] || '#6b7280';
+              const categoryIndex = Math.max(0, CATEGORIES.indexOf(group.category));
+              const categoryColor = categoryPalette[categoryIndex % categoryPalette.length];
               const categoryTotal = group.items.reduce((sum, e) => {
                 const amt = Number(e.amount);
                 if (e.currency === baseCurrency) return sum + amt;
@@ -285,7 +276,7 @@ export default function FixedExpensesScreen() {
                             <Text style={[styles.itemDue, { color: c.textMuted }]}>每月 {item.due_day} 日</Text>
                           ) : null}
                           {(item.frequency && item.frequency !== 'monthly') && (
-                            <Text style={{ color: '#f59e0b', fontSize: 11 }}>
+                            <Text style={{ color: PRIMARY, fontSize: 11 }}>
                               {FREQUENCIES.find(f => f.key === item.frequency)?.label}
                             </Text>
                           )}
@@ -352,11 +343,11 @@ export default function FixedExpensesScreen() {
                         <TouchableOpacity
                           key={cur}
                           style={[styles.chip, form.currency === cur && styles.chipActive,
-                            { borderColor: form.currency === cur ? '#F7A600' : c.border,
-                              backgroundColor: form.currency === cur ? 'rgba(22,163,74,0.12)' : c.input }]}
+                            { borderColor: form.currency === cur ? PRIMARY : c.border,
+                              backgroundColor: form.currency === cur ? c.accentSoft : c.input }]}
                           onPress={() => setForm(f => ({ ...f, currency: cur }))}
                         >
-                          <Text style={[styles.chipText, { color: form.currency === cur ? '#F7A600' : c.textSub }]}>
+                          <Text style={[styles.chipText, { color: form.currency === cur ? PRIMARY : c.textSub }]}>
                             {cur}
                           </Text>
                         </TouchableOpacity>
@@ -383,11 +374,11 @@ export default function FixedExpensesScreen() {
                     <TouchableOpacity
                       key={f.key}
                       style={[styles.chip, form.frequency === f.key && styles.chipActive,
-                        { borderColor: form.frequency === f.key ? '#F7A600' : c.border,
-                          backgroundColor: form.frequency === f.key ? 'rgba(22,163,74,0.12)' : c.input }]}
+                        { borderColor: form.frequency === f.key ? PRIMARY : c.border,
+                          backgroundColor: form.frequency === f.key ? c.accentSoft : c.input }]}
                       onPress={() => setForm(p => ({ ...p, frequency: f.key }))}
                     >
-                      <Text style={[styles.chipText, { color: form.frequency === f.key ? '#F7A600' : c.textSub }]}>
+                      <Text style={[styles.chipText, { color: form.frequency === f.key ? PRIMARY : c.textSub }]}>
                         {f.label}
                       </Text>
                     </TouchableOpacity>
@@ -401,11 +392,11 @@ export default function FixedExpensesScreen() {
                     <TouchableOpacity
                       key={cat}
                       style={[styles.chip, form.category === cat && styles.chipActive,
-                        { borderColor: form.category === cat ? '#F7A600' : c.border,
-                          backgroundColor: form.category === cat ? 'rgba(22,163,74,0.12)' : c.input }]}
+                        { borderColor: form.category === cat ? PRIMARY : c.border,
+                          backgroundColor: form.category === cat ? c.accentSoft : c.input }]}
                       onPress={() => setForm(f => ({ ...f, category: cat }))}
                     >
-                      <Text style={[styles.chipText, { color: form.category === cat ? '#F7A600' : c.textSub }]}>
+                      <Text style={[styles.chipText, { color: form.category === cat ? PRIMARY : c.textSub }]}>
                         {cat}
                       </Text>
                     </TouchableOpacity>
@@ -424,13 +415,13 @@ export default function FixedExpensesScreen() {
               </FormField>
 
               <TouchableOpacity
-                style={[styles.saveBtn, saving && { opacity: 0.6 }]}
+                style={[styles.saveBtn, { backgroundColor: PRIMARY }, saving && { opacity: 0.6 }]}
                 onPress={handleSave}
                 disabled={saving}
               >
                 {saving
-                  ? <ActivityIndicator color="#fff" size="small" />
-                  : <Text style={styles.saveBtnText}>{editing ? '儲存變更' : '新增'}</Text>
+                  ? <ActivityIndicator color={c.accentContrast} size="small" />
+                  : <Text style={[styles.saveBtnText, { color: c.accentContrast }]}>{editing ? '儲存變更' : '新增'}</Text>
                 }
               </TouchableOpacity>
 
@@ -473,7 +464,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   totalHeader: { width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
-  addAction: { height: 34, borderRadius: 17, paddingHorizontal: 12, backgroundColor: '#F59E0B', flexDirection: 'row', alignItems: 'center', gap: 5 },
+  addAction: { height: 34, borderRadius: 17, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 5 },
   addActionText: { color: '#0B1F3A', fontSize: 13, fontWeight: '700' },
   totalLabel: { fontSize: 13, marginBottom: 4 },
   totalAmount: { fontSize: 32, fontWeight: '700' },
@@ -516,7 +507,6 @@ const styles = StyleSheet.create({
     width: 54,
     height: 54,
     borderRadius: 27,
-    backgroundColor: '#F7A600',
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
@@ -564,7 +554,6 @@ const styles = StyleSheet.create({
   chipText: { fontSize: 13 },
 
   saveBtn: {
-    backgroundColor: '#F7A600',
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',

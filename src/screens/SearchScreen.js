@@ -155,10 +155,10 @@ const allData = ${dataJson};
 if (allData.length > 0) {
   const chart = LightweightCharts.createChart(document.getElementById('chart'), {
     width: window.innerWidth, height: window.innerHeight,
-    layout: { background: { color: '#1a1a2e' }, textColor: '#d1d4dc' },
-    grid: { vertLines: { color: '#2a2a3e' }, horzLines: { color: '#2a2a3e' } },
-    timeScale: { borderColor: '#485c7b' },
-    rightPriceScale: { borderColor: '#485c7b' },
+    layout: { background: { color: '#0B0E11' }, textColor: '#A7B0BE' },
+    grid: { vertLines: { color: '#2B3139' }, horzLines: { color: '#2B3139' } },
+    timeScale: { borderColor: '#2B3139' },
+    rightPriceScale: { borderColor: '#2B3139' },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
   });
   const series = chart.addCandlestickSeries({
@@ -187,8 +187,6 @@ if (allData.length > 0) {
 </body>
 </html>`;
 };
-
-const PRIMARY = '#F7A600';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -253,7 +251,7 @@ function buildLinePath(pts) {
   return pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
 }
 
-function FxLineChart({ history, isDark: dark, hasBuySell }) {
+function FxLineChart({ history, isDark: dark, hasBuySell, colors }) {
   const CHART_W = screenWidth - 64;
   const CHART_H = 180;
   const PAD_TOP = 16;
@@ -329,15 +327,15 @@ function FxLineChart({ history, isDark: dark, hasBuySell }) {
   const minLY = Math.min(PAD_TOP + plotH - 4, toY(minVal) + 14);
 
   // Theme
-  const chartBg       = dark ? '#0f1117' : 'transparent';
-  const labelColor    = dark ? '#9ca3af' : '#6b7280';
-  const xLabelColor   = dark ? '#4b5563' : '#6b7280';
+  const chartBg       = dark ? colors.bg : 'transparent';
+  const labelColor    = colors.textSub;
+  const xLabelColor   = colors.textMuted;
   const crosshairLine = dark ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.18)';
-  const dotBg         = dark ? '#0f1117' : '#ffffff';
-  const tooltipBg     = dark ? 'rgba(10,10,20,0.93)' : 'rgba(255,255,255,0.96)';
-  const tooltipBorder = dark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.09)';
+  const dotBg         = colors.card;
+  const tooltipBg     = colors.cardAlt;
+  const tooltipBorder = colors.border;
   const gradStop1Opacity = dark ? 0.45 : 0.35;
-  const gradStop2Color   = dark ? '#0f1117' : '#f0fdf4';
+  const gradStop2Color   = colors.card;
 
   const touchPt     = touchIdx != null ? buyPts[touchIdx]  : null;
   const touchSellPt = (touchIdx != null && hasBuySell) ? sellPts[touchIdx] : null;
@@ -435,6 +433,7 @@ export default function SearchScreen() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const { colors, isDark } = useTheme();
+  const PRIMARY = colors.accent;
   const [query, setQuery] = useState('');
   const [activeTab, setActiveTab] = useState('all');
   const [results, setResults] = useState([]);
@@ -1142,7 +1141,7 @@ export default function SearchScreen() {
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
                 {hasAlert
-                  ? <Bell size={16} color={isTriggered ? '#9ca3af' : '#F7A600'} fill={isTriggered ? 'none' : 'rgba(247,166,0,0.20)'} />
+                  ? <Bell size={16} color={isTriggered ? '#9ca3af' : PRIMARY} fill={isTriggered ? 'none' : `${PRIMARY}33`} />
                   : <Bell size={16} color={colors.textMuted} />
                 }
               </TouchableOpacity>
@@ -1155,8 +1154,8 @@ export default function SearchScreen() {
           >
             <Star
               size={16}
-              color={isInWatchlist(asset.symbol) ? '#f59e0b' : colors.textSub}
-              fill={isInWatchlist(asset.symbol) ? '#f59e0b' : 'none'}
+              color={isInWatchlist(asset.symbol) ? PRIMARY : colors.textSub}
+              fill={isInWatchlist(asset.symbol) ? PRIMARY : 'none'}
             />
           </TouchableOpacity>
         </View>
@@ -1239,10 +1238,10 @@ export default function SearchScreen() {
           {MARKET_TABS.map(tab => (
             <TouchableOpacity
               key={tab.id}
-              style={[styles.tab, { backgroundColor: activeTab === tab.id ? '#FFF3D6' : colors.card, borderColor: activeTab === tab.id ? '#F59E0B' : colors.border }]}
+              style={[styles.tab, { backgroundColor: activeTab === tab.id ? colors.hotBg : colors.card, borderColor: activeTab === tab.id ? PRIMARY : colors.border }]}
               onPress={() => setActiveTab(tab.id)}
             >
-              <Text style={[styles.tabText, { color: activeTab === tab.id ? '#D97706' : colors.textSub }, activeTab === tab.id && styles.activeTabText]}>
+              <Text style={[styles.tabText, { color: activeTab === tab.id ? PRIMARY : colors.textSub }, activeTab === tab.id && styles.activeTabText]}>
                 {tab.label}
               </Text>
             </TouchableOpacity>
@@ -1261,21 +1260,21 @@ export default function SearchScreen() {
             <RefreshControl
               refreshing={activeTab === 'watchlist' ? watchlistLoading : hotLoading}
               onRefresh={activeTab === 'watchlist' ? () => fetchWatchlistPrices(watchlist) : loadHotPrices}
-              tintColor="#f59e0b"
+              tintColor={PRIMARY}
             />
           ) : undefined
         }
       >
         {loading ? (
           <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#2563eb" />
+            <ActivityIndicator size="large" color={PRIMARY} />
           </View>
         ) : query.length > 0 ? (
           results.length > 0
             ? <>
                 {searchPriceLoading && (
                   <View style={styles.priceLoadingBar}>
-                    <ActivityIndicator size="small" color="#f59e0b" />
+                    <ActivityIndicator size="small" color={PRIMARY} />
                     <Text style={[styles.priceLoadingText, { color: colors.textMuted }]}>載入即時價格中...</Text>
                   </View>
                 )}
@@ -1292,13 +1291,13 @@ export default function SearchScreen() {
             </View>
           ) : watchlistLoading && Object.keys(watchlistPrices).length === 0 ? (
             <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color="#f59e0b" />
+              <ActivityIndicator size="large" color={PRIMARY} />
             </View>
           ) : (
             watchlistGrouped.map(group => (
               <React.Fragment key={group.id}>
                 <View style={[styles.indexHeader, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
-                  <Star size={14} color="#f59e0b" fill="#f59e0b" />
+                  <Star size={14} color={PRIMARY} fill={PRIMARY} />
                   <Text style={[styles.indexHeaderText, { color: colors.textSub }]}>{group.label}</Text>
                   <Text style={[{ color: colors.textMuted, fontSize: 12, marginLeft: 4 }]}>({group.items.length})</Text>
                 </View>
@@ -1375,28 +1374,28 @@ export default function SearchScreen() {
             {indexAssets.length > 0 && !hotLoading && (
               <>
                 <View style={[styles.indexHeader, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
-                  <LineChartIcon size={16} color="#2563eb" />
-                  <Text style={styles.indexHeaderText}>大盤指數</Text>
+                  <LineChartIcon size={16} color={PRIMARY} />
+                  <Text style={[styles.indexHeaderText, { color: PRIMARY }]}>大盤指數</Text>
                 </View>
                 {indexAssets.map((asset, i) => renderAssetCard(asset, 'index', i))}
               </>
             )}
             <View style={[styles.hotHeader, { backgroundColor: colors.hotBg, borderBottomColor: colors.hotBorder }]}>
-              <Flame size={16} color="#f59e0b" />
+              <Flame size={16} color={PRIMARY} />
               <View>
-                <Text style={styles.hotHeaderText}>熱門標的</Text>
+                <Text style={[styles.hotHeaderText, { color: PRIMARY }]}>熱門標的</Text>
                 {hotUpdatedAt && (
-                  <Text style={styles.hotUpdatedText}>
+                  <Text style={[styles.hotUpdatedText, { color: colors.textMuted }]}>
                     更新 {hotUpdatedAt.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                   </Text>
                 )}
               </View>
               <View style={styles.sortBtns}>
                 <TouchableOpacity
-                  style={[styles.sortBtn, (sortBy === 'change_desc' || sortBy === 'change_asc') && styles.sortBtnActive]}
+                  style={[styles.sortBtn, { backgroundColor: colors.cardAlt }, (sortBy === 'change_desc' || sortBy === 'change_asc') && { backgroundColor: PRIMARY }]}
                   onPress={() => setSortBy(sortBy === 'change_desc' ? 'change_asc' : 'change_desc')}
                 >
-                  <Text style={[styles.sortBtnText, (sortBy === 'change_desc' || sortBy === 'change_asc') && styles.sortBtnTextActive]}>
+                  <Text style={[styles.sortBtnText, { color: colors.textSub }, (sortBy === 'change_desc' || sortBy === 'change_asc') && { color: colors.accentContrast, fontWeight: '700' }]}>
                     {'漲跌幅 ' + (sortBy === 'change_asc' ? '↑' : '↓')}
                   </Text>
                 </TouchableOpacity>
@@ -1406,17 +1405,17 @@ export default function SearchScreen() {
                 ].map(opt => (
                   <TouchableOpacity
                     key={opt.key}
-                    style={[styles.sortBtn, sortBy === opt.key && styles.sortBtnActive]}
+                    style={[styles.sortBtn, { backgroundColor: colors.cardAlt }, sortBy === opt.key && { backgroundColor: PRIMARY }]}
                     onPress={() => setSortBy(opt.key)}
                   >
-                    <Text style={[styles.sortBtnText, sortBy === opt.key && styles.sortBtnTextActive]}>{opt.label}</Text>
+                    <Text style={[styles.sortBtnText, { color: colors.textSub }, sortBy === opt.key && { color: colors.accentContrast, fontWeight: '700' }]}>{opt.label}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
             </View>
             {hotLoading ? (
               <View style={styles.loadingContainer}>
-                <ActivityIndicator size="large" color="#f59e0b" />
+                <ActivityIndicator size="large" color={PRIMARY} />
               </View>
             ) : (
               hotAssets.map((asset, i) => renderAssetCard(asset, 'hot', i))
@@ -1450,10 +1449,10 @@ export default function SearchScreen() {
                   {CATEGORIES.map(cat => (
                     <TouchableOpacity
                       key={cat.id}
-                      style={[styles.categoryChip, category === cat.id && styles.categoryChipActive]}
+                      style={[styles.categoryChip, { backgroundColor: colors.cardAlt, borderColor: PRIMARY }, category === cat.id && { backgroundColor: PRIMARY, borderColor: PRIMARY }]}
                       onPress={() => setCategory(cat.id)}
                     >
-                      <Text style={[styles.categoryChipText, category === cat.id && styles.categoryChipTextActive]}>
+                      <Text style={[styles.categoryChipText, { color: category === cat.id ? colors.accentContrast : PRIMARY }, category === cat.id && styles.categoryChipTextActive]}>
                         {cat.label}
                       </Text>
                     </TouchableOpacity>
@@ -1497,12 +1496,12 @@ export default function SearchScreen() {
                   onSubmitEditing={Keyboard.dismiss}
                 />
                 {shares && price && (
-                  <Text style={styles.totalText}>
+                  <Text style={[styles.totalText, { color: PRIMARY }]}>
                     保證金：{(parseFloat(shares) * parseFloat(price) / (parseFloat(leverage) || 1)).toFixed(2)}
                     {parseFloat(leverage) > 1 ? `　合約價值：${(parseFloat(shares) * parseFloat(price)).toFixed(2)}` : ''}
                   </Text>
                 )}
-                <TouchableOpacity style={[styles.addButton, adding && styles.addButtonDisabled]} onPress={handleAddAsset} disabled={adding}>
+                <TouchableOpacity style={[styles.addButton, { backgroundColor: PRIMARY }, adding && styles.addButtonDisabled]} onPress={handleAddAsset} disabled={adding}>
                   <Plus size={20} color="#0B1F3A" />
                   <Text style={styles.addButtonText}>{adding ? '新增中...' : '新增資產'}</Text>
                 </TouchableOpacity>
@@ -1547,7 +1546,7 @@ export default function SearchScreen() {
                 </Text>
               )}
               <TouchableOpacity
-                style={[styles.addButton, fxAdding && styles.addButtonDisabled]}
+                style={[styles.addButton, { backgroundColor: PRIMARY }, fxAdding && styles.addButtonDisabled]}
                 onPress={handleFxRecord}
                 disabled={fxAdding}
               >
@@ -1638,13 +1637,13 @@ export default function SearchScreen() {
                       style={[
                         styles.fxPeriodBtn,
                         { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)', borderColor: colors.borderLight },
-                        active && styles.fxPeriodBtnActive,
+                        active && { backgroundColor: PRIMARY, borderColor: PRIMARY },
                       ]}
                       onPress={() => handleFxPeriodSelect(p)}
                       activeOpacity={0.75}
                     >
-                      {p.days === null && <Calendar size={10} color={active ? '#0B1F3A' : PRIMARY} style={{ marginRight: 3 }} />}
-                      <Text style={[styles.fxPeriodLabel, { color: colors.textSub }, active && styles.fxPeriodLabelActive]}>
+                      {p.days === null && <Calendar size={10} color={active ? colors.accentContrast : PRIMARY} style={{ marginRight: 3 }} />}
+                      <Text style={[styles.fxPeriodLabel, { color: active ? colors.accentContrast : colors.textSub }, active && styles.fxPeriodLabelActive]}>
                         {p.label}
                       </Text>
                     </TouchableOpacity>
@@ -1663,6 +1662,7 @@ export default function SearchScreen() {
                     history={fxDetailHistory}
                     isDark={isDark}
                     hasBuySell={fxChartData.hasBuySell}
+                    colors={colors}
                   />
                   {fxChartData.hasBuySell && (
                     <View style={styles.fxChartLegend}>
@@ -1698,7 +1698,7 @@ export default function SearchScreen() {
 
             {/* Record FX */}
             <TouchableOpacity
-              style={styles.fxDetailRecordBtn}
+              style={[styles.fxDetailRecordBtn, { backgroundColor: PRIMARY }]}
               onPress={() => { setFxDetailVisible(false); setTimeout(() => openFxModal(fxDetailFx), 300); }}
             >
               <Text style={styles.fxDetailRecordBtnText}>記錄外幣</Text>
@@ -1764,7 +1764,7 @@ export default function SearchScreen() {
             <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
               <View style={styles.modalHeader}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <Bell size={20} color="#F7A600" />
+                  <Bell size={20} color={PRIMARY} />
                   <Text style={[styles.modalTitle, { color: colors.text }]}>設定價格提醒</Text>
                 </View>
                 <TouchableOpacity onPress={() => setAlertModalVisible(false)}>
@@ -1782,7 +1782,7 @@ export default function SearchScreen() {
               {/* Re-enable button — shown when the alert has already triggered */}
               {alertAsset && alerts[alertAsset.symbol]?.triggered && (
                 <TouchableOpacity
-                  style={[styles.addButton, { backgroundColor: '#f59e0b', marginBottom: 16 }]}
+                  style={[styles.addButton, { backgroundColor: PRIMARY, marginBottom: 16 }]}
                   onPress={async () => {
                     await resetAlert(alertAsset.symbol);
                     await loadAlerts();
@@ -1797,7 +1797,7 @@ export default function SearchScreen() {
               <Text style={[styles.label, { color: colors.text }]}>觸發條件</Text>
               <View style={styles.alertDirectionRow}>
                 <TouchableOpacity
-                  style={[styles.alertDirectionBtn, alertDirection === 'above' && styles.alertDirectionBtnActive]}
+                  style={[styles.alertDirectionBtn, alertDirection === 'above' && { backgroundColor: PRIMARY, borderColor: PRIMARY }]}
                   onPress={() => setAlertDirection('above')}
                 >
                   <Text style={[styles.alertDirectionText, alertDirection === 'above' && styles.alertDirectionTextActive]}>
@@ -1826,7 +1826,7 @@ export default function SearchScreen() {
                 autoFocus
               />
 
-              <TouchableOpacity style={styles.addButton} onPress={handleSaveAlert}>
+              <TouchableOpacity style={[styles.addButton, { backgroundColor: PRIMARY }]} onPress={handleSaveAlert}>
                 <Bell size={18} color="#0B1F3A" />
                 <Text style={styles.addButtonText}>儲存提醒</Text>
               </TouchableOpacity>
@@ -1852,7 +1852,7 @@ export default function SearchScreen() {
           ) ? (
             twChartLoading ? (
               <View style={[styles.chartLoading, { backgroundColor: colors.card }]}>
-                <ActivityIndicator size="large" color="#2563eb" />
+                <ActivityIndicator size="large" color={PRIMARY} />
                 <Text style={[styles.chartLoadingText, { color: colors.textSub }]}>載入圖表中...</Text>
               </View>
             ) : (
@@ -1875,7 +1875,7 @@ export default function SearchScreen() {
               startInLoadingState
               renderLoading={() => (
                 <View style={[styles.chartLoading, { backgroundColor: colors.card }]}>
-                  <ActivityIndicator size="large" color="#2563eb" />
+                  <ActivityIndicator size="large" color={PRIMARY} />
                   <Text style={[styles.chartLoadingText, { color: colors.textSub }]}>載入圖表中...</Text>
                 </View>
               )}
@@ -1935,7 +1935,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 10,
     borderBottomWidth: 1,
   },
-  indexHeaderText: { fontSize: 14, fontWeight: '600', color: '#2563eb' },
+  indexHeaderText: { fontSize: 14, fontWeight: '600' },
   hotHeader: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingHorizontal: 16, paddingVertical: 10,
@@ -1944,8 +1944,8 @@ const styles = StyleSheet.create({
   hotHeaderText: { fontSize: 14, fontWeight: '600', color: '#b45309' },
   hotUpdatedText: { fontSize: 10, color: '#b45309', opacity: 0.7, marginTop: 1 },
   sortBtns: { flexDirection: 'row', marginLeft: 'auto', gap: 4 },
-  sortBtn: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, backgroundColor: '#fef3c7' },
-  sortBtnActive: { backgroundColor: '#f59e0b' },
+  sortBtn: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, backgroundColor: '#E8EEF6' },
+  sortBtnActive: {},
   sortBtnText: { fontSize: 11, color: '#92400e', fontWeight: '500' },
   sortBtnTextActive: { color: '#0B1F3A', fontWeight: '700' },
   resultsContainer: { flex: 1 },
@@ -1976,7 +1976,7 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: '#d1d5db',
     alignItems: 'center',
   },
-  alertDirectionBtnActive: { backgroundColor: '#F7A600', borderColor: '#F7A600' },
+  alertDirectionBtnActive: {},
   alertDirectionBtnActiveRed: { backgroundColor: '#F03030', borderColor: '#F03030' },
   alertDirectionText: { fontSize: 15, fontWeight: '600', color: '#6b7280' },
   alertDirectionTextActive: { color: '#0B1F3A' },
@@ -2008,13 +2008,13 @@ const styles = StyleSheet.create({
   assetInfoName: { fontSize: 14 },
   label: { fontSize: 14, fontWeight: '600', marginBottom: 8 },
   categoryScroll: { marginBottom: 16 },
-  categoryChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 16, marginRight: 8, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#F7A600' },
-  categoryChipActive: { backgroundColor: '#F7A600', borderWidth: 1, borderColor: '#F7A600' },
-  categoryChipText: { fontSize: 14, color: '#F7A600' },
+  categoryChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 16, marginRight: 8, borderWidth: 1 },
+  categoryChipActive: { borderWidth: 1 },
+  categoryChipText: { fontSize: 14 },
   categoryChipTextActive: { color: '#0B1F3A', fontWeight: '600' },
   input: { borderWidth: 1, borderRadius: 8, padding: 12, fontSize: 16, marginBottom: 16 },
-  totalText: { fontSize: 16, fontWeight: '600', color: PRIMARY, marginBottom: 16, textAlign: 'right' },
-  addButton: { flexDirection: 'row', backgroundColor: PRIMARY, padding: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center', gap: 8 },
+  totalText: { fontSize: 16, fontWeight: '600', marginBottom: 16, textAlign: 'right' },
+  addButton: { flexDirection: 'row', padding: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center', gap: 8 },
   addButtonDisabled: { backgroundColor: '#94a3b8' },
   addButtonText: { color: '#0B1F3A', fontSize: 16, fontWeight: '600' },
   chartModalContainer: { flex: 1 },
@@ -2049,7 +2049,7 @@ const styles = StyleSheet.create({
   fxDetailEmptyText: { textAlign: 'center', paddingVertical: 32, fontSize: 14 },
   fxDetailRecordBtn: {
     marginHorizontal: 16, marginTop: 16, marginBottom: 8,
-    backgroundColor: '#F7A600', padding: 16, borderRadius: 12, alignItems: 'center',
+    padding: 16, borderRadius: 12, alignItems: 'center',
   },
   fxDetailRecordBtnText: { color: '#0B1F3A', fontSize: 16, fontWeight: '700' },
   fxPeriodRow: { flexDirection: 'row', gap: 6, marginBottom: 12, flexWrap: 'wrap' },
@@ -2058,7 +2058,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10, paddingVertical: 5,
     borderRadius: 20, borderWidth: 1,
   },
-  fxPeriodBtnActive: { backgroundColor: '#F7A600', borderColor: '#F7A600' },
+  fxPeriodBtnActive: {},
   fxPeriodLabel: { fontSize: 12, fontWeight: '500' },
   fxPeriodLabelActive: { color: '#0B1F3A', fontWeight: '700' },
   fxChartLegend: { flexDirection: 'row', justifyContent: 'center', gap: 16, marginTop: 8 },

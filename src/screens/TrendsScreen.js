@@ -11,6 +11,7 @@ import Svg, {
 import { X, Calendar, ChevronLeft, ChevronRight } from 'lucide-react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../lib/supabase';
+import { getTaipeiDateString, getTaipeiMonthStart } from '../lib/date';
 import { fetchExchangeRatesBatch } from '../services/api';
 import {
   calculatePortfolioTotals,
@@ -22,8 +23,6 @@ import {
 import { useTheme } from '../lib/ThemeContext';
 
 const { width: screenWidth } = Dimensions.get('window');
-const PRIMARY = '#F7A600';
-
 const PERIODS = [
   { label: '7d',   days: 7 },
   { label: '30d',  days: 30 },
@@ -33,20 +32,16 @@ const PERIODS = [
 ];
 
 const CATEGORY_CONFIG = {
-  liquid:     { label: '流動資產', color: '#0DBD8B' },
-  investment: { label: '投資資產', color: '#f59e0b' },
-  fixed:      { label: '固定資產', color: '#94a3b8' },
-  receivable: { label: '應收款項', color: '#0d9488' },
+  liquid: { label: '流動資產' }, investment: { label: '投資資產' },
+  fixed: { label: '固定資產' }, receivable: { label: '應收款項' },
 };
 
 const MARKET_TYPE_CONFIG = {
-  TW:     { label: '台股', color: '#e11d48' },
-  US:     { label: '美股', color: '#2563eb' },
-  Crypto: { label: '虛幣', color: '#f59e0b' },
-  other:  { label: '其他', color: '#94a3b8' },
+  TW: { label: '台股' }, US: { label: '美股' },
+  Crypto: { label: '虛幣' }, other: { label: '其他' },
 };
 
-const DRILL_PALETTE = ['#6366f1', '#ec4899', '#14b8a6', '#f97316', '#8b5cf6', '#06b6d4'];
+const DRILL_PALETTE = ['#6366f1', '#ec4899', '#14b8a6', '#8092AE', '#8b5cf6', '#06b6d4'];
 const DRILL_LIMIT = 20; // how many items to show in drilldown / donut legend
 
 const FILTER_OPTIONS = [
@@ -142,7 +137,8 @@ function buildSmoothPath(pts) {
 
 // ── Amber Gradient Area Chart with Crosshair Tooltip ──
 function TrendLineChart({ snapshots, currency }) {
-  const { isDark } = useTheme();
+  const { isDark, colors } = useTheme();
+  const accent = colors.accent;
   const CHART_W = screenWidth - 64;
   const CHART_H = 200;
   const PAD_TOP = 16;
@@ -221,27 +217,27 @@ function TrendLineChart({ snapshots, currency }) {
     : 0;
 
   // ── Theme-dependent colours ──
-  const chartBg        = isDark ? '#0f1117' : 'transparent';
-  const labelColor     = isDark ? '#9ca3af' : '#6b7280';
-  const xLabelColor    = isDark ? '#4b5563' : '#6b7280';
-  const crosshairDotBg = isDark ? '#0f1117' : '#ffffff';
+  const chartBg        = isDark ? colors.bg : 'transparent';
+  const labelColor     = colors.textSub;
+  const xLabelColor    = colors.textMuted;
+  const crosshairDotBg = isDark ? colors.bg : '#ffffff';
   const crosshairLine  = isDark ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.18)';
-  const tooltipBg      = isDark ? 'rgba(10,10,20,0.93)' : 'rgba(255,255,255,0.96)';
-  const tooltipBorder  = isDark ? 'rgba(245,158,11,0.35)' : 'rgba(245,158,11,0.4)';
+  const tooltipBg      = isDark ? colors.cardAlt : 'rgba(255,255,255,0.96)';
+  const tooltipBorder  = `${accent}66`;
   const tooltipDateColor = '#6b7280';
 
   const gradId = `trendAreaGrad_main`;
 
   return (
     <View
-      style={{ borderRadius: 12, overflow: 'hidden', backgroundColor: isDark ? '#0f1117' : 'transparent', marginTop: 8 }}
+      style={{ borderRadius: 12, overflow: 'hidden', backgroundColor: chartBg, marginTop: 8 }}
       {...panResponder.panHandlers}
     >
       <Svg width={CHART_W} height={CHART_H} style={{ overflow: 'hidden', backgroundColor: 'transparent' }}>
         <Defs>
           <LinearGradient id={gradId} x1="0" y1="0" x2="0" y2={CHART_H} gradientUnits="userSpaceOnUse">
-            <Stop offset="0" stopColor="#f59e0b" stopOpacity={isDark ? 0.5 : 0.4} />
-            <Stop offset="1" stopColor={isDark ? '#0f1117' : '#fff7ed'} stopOpacity={1} />
+            <Stop offset="0" stopColor={accent} stopOpacity={isDark ? 0.5 : 0.4} />
+            <Stop offset="1" stopColor={isDark ? colors.bg : '#F2F5F9'} stopOpacity={1} />
           </LinearGradient>
         </Defs>
 
@@ -252,7 +248,7 @@ function TrendLineChart({ snapshots, currency }) {
         <Path
           d={linePath}
           fill="none"
-          stroke="#f59e0b"
+          stroke={accent}
           strokeWidth="2.5"
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -301,8 +297,8 @@ function TrendLineChart({ snapshots, currency }) {
               strokeWidth="1"
               strokeDasharray="4 4"
             />
-            <Circle cx={touchPt.x} cy={touchPt.y} r={7} fill={crosshairDotBg} stroke="#f59e0b" strokeWidth="2.5" />
-            <Circle cx={touchPt.x} cy={touchPt.y} r={3} fill="#f59e0b" />
+            <Circle cx={touchPt.x} cy={touchPt.y} r={7} fill={crosshairDotBg} stroke={accent} strokeWidth="2.5" />
+            <Circle cx={touchPt.x} cy={touchPt.y} r={3} fill={accent} />
           </>
         )}
       </Svg>
@@ -329,7 +325,7 @@ function TrendLineChart({ snapshots, currency }) {
           pointerEvents="none"
         >
           <Text style={{ color: tooltipDateColor, fontSize: 10, marginBottom: 2 }}>{touchPt.date}</Text>
-          <Text style={{ color: '#f59e0b', fontSize: 13, fontWeight: '700' }}>
+          <Text style={{ color: accent, fontSize: 13, fontWeight: '700' }}>
             {Math.round(touchPt.value).toLocaleString('zh-TW')}
           </Text>
         </View>
@@ -429,6 +425,16 @@ function DonutChart({ data, size = 180, strokeWidth = 28, selectedIndex, onSelec
 
 export default function TrendsScreen() {
   const { colors, isDark } = useTheme();
+  const PRIMARY = colors.accent;
+  const chartPalette = colors.chartPalette || DRILL_PALETTE;
+  const categoryColor = (category) => ({
+    investment: chartPalette[0], liquid: chartPalette[1],
+    fixed: chartPalette[4], receivable: chartPalette[2],
+  })[category] || chartPalette[5];
+  const marketColor = (marketType) => ({
+    TW: chartPalette[0], US: chartPalette[1],
+    Crypto: chartPalette[2], other: chartPalette[4],
+  })[marketType] || chartPalette[5];
   const [loading, setLoading] = useState(true);
   const [snapshots, setSnapshots] = useState([]);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
@@ -527,7 +533,7 @@ export default function TrendsScreen() {
         } else {
           const since = new Date();
           since.setDate(since.getDate() - days);
-          query = query.gte('snapshot_date', since.toISOString().split('T')[0]);
+          query = query.gte('snapshot_date', getTaipeiDateString(since));
         }
 
         const { data } = await query;
@@ -544,7 +550,7 @@ export default function TrendsScreen() {
         } else {
           const since = new Date();
           since.setDate(since.getDate() - days);
-          query = query.gte('date', since.toISOString().split('T')[0]);
+          query = query.gte('date', getTaipeiDateString(since));
         }
 
         const { data } = await query;
@@ -611,7 +617,7 @@ export default function TrendsScreen() {
         const nonLiabilityAssets = converted.filter(asset => asset.category !== 'liability');
         setDetailedAssets(nonLiabilityAssets);
 
-        const today      = new Date().toISOString().split('T')[0];
+        const today      = getTaipeiDateString();
         const { netWorth: totalValue } = calculatePortfolioTotals(converted);
 
         // Upsert today's snapshot with live-price-accurate total
@@ -633,7 +639,7 @@ export default function TrendsScreen() {
               key: cat,
               label: CATEGORY_CONFIG[cat]?.label || cat,
               value,
-              color: CATEGORY_CONFIG[cat]?.color || '#888',
+              color: categoryColor(cat),
             }))
         );
 
@@ -659,13 +665,10 @@ export default function TrendsScreen() {
 
       // ── Monthly Breakdown — last 24 months
       try {
-        const since = new Date();
-        since.setMonth(since.getMonth() - 23);
-        since.setDate(1);
         const { data: monthSnaps } = await supabase
           .from('daily_snapshots').select('snapshot_date, net_worth_base')
           .eq('user_id', user.id)
-          .gte('snapshot_date', since.toISOString().split('T')[0])
+          .gte('snapshot_date', getTaipeiMonthStart(23))
           .order('snapshot_date', { ascending: true });
 
         if (monthSnaps && monthSnaps.length > 1) {
@@ -708,8 +711,8 @@ export default function TrendsScreen() {
       // Fetch the day before the month starts so we can compute day-1 diff
       const prevDay = new Date(year, month - 1, 0); // last day of previous month
       const lastDay = new Date(year, month, 0);     // last day of this month
-      const startStr = prevDay.toISOString().split('T')[0];
-      const endStr   = lastDay.toISOString().split('T')[0];
+      const startStr = getTaipeiDateString(prevDay);
+      const endStr   = getTaipeiDateString(lastDay);
 
       const { data } = await supabase
         .from('daily_snapshots')
@@ -903,7 +906,7 @@ export default function TrendsScreen() {
           key: mt,
           label: MARKET_TYPE_CONFIG[mt]?.label || mt,
           value,
-          color: MARKET_TYPE_CONFIG[mt]?.color || '#94a3b8',
+          color: marketColor(mt),
         }));
     }
       return mergeBySymbol(catAssets)
@@ -914,7 +917,7 @@ export default function TrendsScreen() {
         key: a.symbol || a.name,
         label: a.name,
         value: a.converted_amount,
-        color: DRILL_PALETTE[i % DRILL_PALETTE.length],
+        color: chartPalette[i % chartPalette.length],
       }));
   };
 
@@ -952,7 +955,7 @@ export default function TrendsScreen() {
         key: a.symbol || a.name,
         label: a.name,
         value: a.converted_amount,
-        color: DRILL_PALETTE[i % DRILL_PALETTE.length],
+        color: chartPalette[i % chartPalette.length],
       }));
   };
 
@@ -993,13 +996,13 @@ export default function TrendsScreen() {
                 }}
                 style={{
                   paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20,
-                  backgroundColor: active ? PRIMARY : (isDark ? '#16213e' : '#f1f5f9'),
+                  backgroundColor: active ? PRIMARY : colors.cardAlt,
                   borderWidth: 1,
-                  borderColor: active ? PRIMARY : (isDark ? '#2a3a5e' : '#e2e8f0'),
+                  borderColor: active ? PRIMARY : colors.border,
                 }}
                 activeOpacity={0.75}
               >
-                <Text style={{ color: active ? '#0B1F3A' : colors.textSub, fontSize: 13, fontWeight: active ? '700' : '500' }}>
+                <Text style={{ color: active ? colors.accentContrast : colors.textSub, fontSize: 13, fontWeight: active ? '700' : '500' }}>
                   {opt.label}
                 </Text>
               </TouchableOpacity>
@@ -1032,12 +1035,12 @@ export default function TrendsScreen() {
                     key={p.label}
                     style={[styles.periodBtn,
                       { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)', borderColor: colors.borderLight },
-                      active && styles.periodBtnActive]}
+                      active && { backgroundColor: PRIMARY, borderColor: PRIMARY, shadowColor: PRIMARY }]}
                     onPress={() => handlePeriodSelect(p)}
                     activeOpacity={0.75}
                   >
-                    {p.days === null && <Calendar size={10} color={active ? '#0B1F3A' : PRIMARY} style={{ marginRight: 3 }} />}
-                    <Text style={[styles.periodLabel, { color: colors.textSub }, active && styles.periodLabelActive]}>
+                    {p.days === null && <Calendar size={10} color={active ? colors.accentContrast : PRIMARY} style={{ marginRight: 3 }} />}
+                    <Text style={[styles.periodLabel, { color: active ? colors.accentContrast : colors.textSub }, active && styles.periodLabelActive]}>
                       {p.label}
                     </Text>
                   </TouchableOpacity>
@@ -1303,7 +1306,7 @@ export default function TrendsScreen() {
                     <Text style={{
                       fontSize: 11,
                       color: isToday ? PRIMARY
-                        : hasPnl ? (isDark ? '#cbd5e1' : '#475569') : colors.textMuted,
+                        : hasPnl ? colors.textSub : colors.textMuted,
                       fontWeight: isToday ? '800' : '600',
                       marginBottom: 3,
                     }}>
@@ -1465,7 +1468,7 @@ export default function TrendsScreen() {
 
                 {/* Selection highlight bar */}
                 <View pointerEvents="none" style={styles.wheelSelectionOverlay}>
-                  <View style={[styles.wheelSelectionBar, { borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.08)' }]} />
+                  <View style={[styles.wheelSelectionBar, { borderColor: PRIMARY, backgroundColor: `${PRIMARY}14` }]} />
                 </View>
 
                 {/* The three columns */}
@@ -1550,8 +1553,8 @@ export default function TrendsScreen() {
                 >
                   <Text style={{ color: colors.textSub, fontSize: 15, fontWeight: '600' }}>重置</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.applyBtn} onPress={applyCustomRange}>
-                  <Text style={styles.applyBtnText}>確定</Text>
+                <TouchableOpacity style={[styles.applyBtn, { backgroundColor: PRIMARY, shadowColor: PRIMARY }]} onPress={applyCustomRange}>
+                  <Text style={[styles.applyBtnText, { color: colors.accentContrast }]}>確定</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -1584,12 +1587,12 @@ const styles = StyleSheet.create({
   glassContainer: {
     borderRadius: 14,
     overflow: 'hidden',
-    backgroundColor: 'rgba(247,166,0,0.08)',
+    backgroundColor: 'rgba(148,163,184,0.08)',
     borderWidth: 1,
-    borderColor: 'rgba(247,166,0,0.15)',
+    borderColor: 'rgba(148,163,184,0.15)',
     marginBottom: 14,
     // subtle inner shadow illusion
-    shadowColor: PRIMARY,
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.08,
     shadowRadius: 6,
@@ -1612,15 +1615,13 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.7)',
   },
   periodBtnActive: {
-    backgroundColor: PRIMARY,
     borderColor: 'rgba(255,255,255,0.3)',
-    shadowColor: PRIMARY,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.35,
     shadowRadius: 5,
     elevation: 4,
   },
-  periodLabel: { fontSize: 12, color: PRIMARY, fontWeight: '600' },
+  periodLabel: { fontSize: 12, fontWeight: '600' },
   periodLabelActive: { color: '#0B1F3A', fontWeight: '700' },
 
   emptyText: { textAlign: 'center', lineHeight: 22, paddingVertical: 32 },
@@ -1699,11 +1700,9 @@ const styles = StyleSheet.create({
   },
   applyBtn: {
     flex: 1,
-    backgroundColor: PRIMARY,
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
-    shadowColor: PRIMARY,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.35,
     shadowRadius: 8,

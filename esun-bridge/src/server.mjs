@@ -32,6 +32,12 @@ if (host !== '127.0.0.1' && !bridgeToken) {
 
 let clients;
 let clientsPromise;
+
+function resetClients() {
+  clients = undefined;
+  clientsPromise = undefined;
+}
+
 async function getClients() {
   if (clients) return clients;
   if (!clientsPromise) {
@@ -58,6 +64,22 @@ async function getClients() {
   return clientsPromise;
 }
 
+async function withClientRetry(operation) {
+  try {
+    return await operation(await getClients());
+  } catch (firstError) {
+    // Broker sessions can expire while this long-running bridge process stays
+    // alive. Recreate both SDK clients once before surfacing the error.
+    resetClients();
+    try {
+      return await operation(await getClients());
+    } catch (retryError) {
+      retryError.cause ??= firstError;
+      throw retryError;
+    }
+  }
+}
+
 // The broker SDK returns numeric fields as formatted strings (for example
 // "1,234.50"). `Number()` cannot parse the thousands separator and silently
 // produced zero before, which could erase an existing cost basis on sync.
@@ -68,49 +90,51 @@ const asNumber = (value) => {
 };
 
 async function getHoldings() {
-  const { trade, stock } = await getClients();
-  const inventories = await trade.getInventories();
-  const holdings = await Promise.all((inventories || []).map(async (item) => {
-    const symbol = item.stkNo;
-    let quote = null;
-    try {
-      quote = await stock.intraday.quote({ symbol });
-    } catch {
-      // Market may be closed or the quote endpoint may be temporarily unavailable.
-    }
-    const quantity = asNumber(item.stkDats?.reduce((sum, row) => sum + asNumber(row.qty), 0)) || asNumber(item.qty);
-    // The broker returns purchase cost as a negative cash outflow. WealthTracker
-    // stores cost basis as a positive amount so P&L remains market value − cost.
-    const costBasis = Math.abs(asNumber(item.costSum));
-    const averageCost = asNumber(item.priceAvg) || (quantity > 0 ? costBasis / quantity : 0);
-    // Prefer the price and value from the broker inventory response. They use
-    // the same valuation basis as the broker's own unrealized P&L screen.
-    const marketPrice = asNumber(item.priceMkt) || asNumber(quote?.lastPrice || quote?.closePrice || quote?.previousClose);
-    const marketValue = asNumber(item.valueMkt) || marketPrice * quantity;
-    return {
-      symbol,
-      name: item.stkNa || quote?.name || symbol,
-      quantity,
-      averageCost,
-      costBasis,
-      marketPrice,
-      marketValue,
-      currency: 'TWD',
-      marketType: 'TW',
-    };
-  }));
-  return holdings.filter((item) => item.symbol && item.quantity > 0);
+  return withClientRetry(async ({ trade, stock }) => {
+    const inventories = await trade.getInventories();
+    const holdings = await Promise.all((inventories || []).map(async (item) => {
+      const symbol = item.stkNo;
+      let quote = null;
+      try {
+        quote = await stock.intraday.quote({ symbol });
+      } catch {
+        // Market may be closed or the quote endpoint may be temporarily unavailable.
+      }
+      const quantity = asNumber(item.stkDats?.reduce((sum, row) => sum + asNumber(row.qty), 0)) || asNumber(item.qty);
+      // The broker returns purchase cost as a negative cash outflow. WealthTracker
+      // stores cost basis as a positive amount so P&L remains market value − cost.
+      const costBasis = Math.abs(asNumber(item.costSum));
+      const averageCost = asNumber(item.priceAvg) || (quantity > 0 ? costBasis / quantity : 0);
+      // Prefer the price and value from the broker inventory response. They use
+      // the same valuation basis as the broker's own unrealized P&L screen.
+      const marketPrice = asNumber(item.priceMkt) || asNumber(quote?.lastPrice || quote?.closePrice || quote?.previousClose);
+      const marketValue = asNumber(item.valueMkt) || marketPrice * quantity;
+      return {
+        symbol,
+        name: item.stkNa || quote?.name || symbol,
+        quantity,
+        averageCost,
+        costBasis,
+        marketPrice,
+        marketValue,
+        currency: 'TWD',
+        marketType: 'TW',
+      };
+    }));
+    return holdings.filter((item) => item.symbol && item.quantity > 0);
+  });
 }
 
 async function getBalance() {
-  const { trade } = await getClients();
-  const balance = await trade.getBalance();
-  return {
-    availableBalance: asNumber(balance?.availableBalance),
-    exchangeBalance: asNumber(balance?.exchangeBalance),
-    stockPreSaveAmount: asNumber(balance?.stockPreSaveAmount),
-    currency: 'TWD',
-  };
+  return withClientRetry(async ({ trade }) => {
+    const balance = await trade.getBalance();
+    return {
+      availableBalance: asNumber(balance?.availableBalance),
+      exchangeBalance: asNumber(balance?.exchangeBalance),
+      stockPreSaveAmount: asNumber(balance?.stockPreSaveAmount),
+      currency: 'TWD',
+    };
+  });
 }
 
 function respond(req, res, status, body) {

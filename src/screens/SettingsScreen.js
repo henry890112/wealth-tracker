@@ -11,7 +11,7 @@ import {
   ActivityIndicator,
   Platform,
 } from 'react-native';
-import { Check, LogOut, Globe, RefreshCw, Sun, Moon, Smartphone, Download, Upload, CloudUpload, Leaf, UserRound } from 'lucide-react-native';
+import { Check, LogOut, Globe, RefreshCw, Sun, Moon, Smartphone, Download, Upload, CloudUpload, Leaf, UserRound, Waves, Sparkles, Flame, Palette } from 'lucide-react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
@@ -28,15 +28,26 @@ const CURRENCIES = [
 ];
 
 const THEME_OPTIONS = [
-  { id: 'system', label: '跟隨系統', Icon: Smartphone },
-  { id: 'light',  label: '淺色模式', Icon: Sun        },
-  { id: 'dark',   label: '深色模式', Icon: Moon       },
-  { id: 'sage',   label: '鼠尾草',   Icon: Leaf       },
+  { id: 'system', label: '跟隨系統', Icon: Smartphone, swatches: ['#CBD5E1', '#475569', '#94A3B8'] },
+  { id: 'light',  label: '晨霧淺色', Icon: Sun,        swatches: ['#F6F7FF', '#8B8CF6', '#38BDF8'] },
+  { id: 'dark',   label: '深海極光', Icon: Sparkles,   swatches: ['#0B1020', '#8B8CF6', '#38BDF8'] },
+  { id: 'ocean',  label: '深海青綠', Icon: Waves,      swatches: ['#071B24', '#2DD4BF', '#38BDF8'] },
+  { id: 'plum',   label: '暮光紫',   Icon: Moon,       swatches: ['#171022', '#D8A7FF', '#A78BFA'] },
+  { id: 'amber',  label: '琥珀深夜', Icon: Flame,      swatches: ['#0F1117', '#F7B43A', '#55C5A5'] },
+  { id: 'trading', label: '交易黑金', Icon: Flame,     swatches: ['#0B0E11', '#F7A600', '#16C784'] },
+  { id: 'sage',   label: '鼠尾草',   Icon: Leaf,       swatches: ['#F2EFE9', '#6B7C5C', '#B7A07D'] },
+  { id: 'matisse2', label: 'Matisse 2', Icon: Palette, swatches: ['#3456D1', '#5B57D9', '#32C85A'] },
+  { id: 'matisse',  label: 'Matisse',   Icon: Palette, swatches: ['#D6A0EE', '#FF7C5C', '#14C9C7'] },
+  { id: 'pissarro', label: 'Pissarro',  Icon: Palette, swatches: ['#A9C96D', '#75C400', '#B5E23A'] },
+  { id: 'miro',     label: 'Miro',      Icon: Palette, swatches: ['#408FE5', '#38CFCA', '#FFE15C'] },
+  { id: 'mondrian', label: 'Mondrian',  Icon: Palette, swatches: ['#FF971A', '#F4463D', '#4178D8'] },
+  { id: 'macke',    label: 'Macke',     Icon: Palette, swatches: ['#FFD081', '#FF5B61', '#5860F2'] },
 ];
 
 
 export default function SettingsScreen({ route }) {
   const { preference, setPreference, colors } = useTheme();
+  const PRIMARY = colors.accent;
   const section = route.params?.section || 'all';
   const showAll = section === 'all';
   const showAccount = showAll || section === 'account';
@@ -305,7 +316,7 @@ export default function SettingsScreen({ route }) {
   if (loading) {
     return (
       <View style={[styles.loadingContainer, { backgroundColor: colors.bg }]}>
-        <ActivityIndicator size="large" color="#2563eb" />
+        <ActivityIndicator size="large" color={PRIMARY} />
       </View>
     );
   }
@@ -323,7 +334,7 @@ export default function SettingsScreen({ route }) {
           style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}
         >
           <View style={styles.infoRow}>
-            <View style={styles.accountIcon}><UserRound size={22} color="#2563EB" /></View>
+            <View style={[styles.accountIcon, { backgroundColor: colors.accentSoft }]}><UserRound size={22} color={PRIMARY} /></View>
             <View style={{ flex: 1 }}>
               <Text style={[styles.infoLabel, { color: colors.text }]}>個人帳戶</Text>
               <Text style={[styles.infoValue, { color: colors.textSub }]} numberOfLines={1}>{userEmail}</Text>
@@ -338,7 +349,7 @@ export default function SettingsScreen({ route }) {
         <View
           style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}
         >
-          {THEME_OPTIONS.map(({ id, label, Icon }, idx) => (
+          {THEME_OPTIONS.map(({ id, label, Icon, swatches }, idx) => (
             <TouchableOpacity
               key={id}
               style={[styles.optionRow, { borderBottomColor: colors.borderLight }, idx === THEME_OPTIONS.length - 1 && { borderBottomWidth: 0 }]}
@@ -346,9 +357,14 @@ export default function SettingsScreen({ route }) {
             >
               <View style={styles.optionContent}>
                 <View style={[styles.optionIcon, { backgroundColor: colors.cardAlt }]}><Icon size={19} color={colors.textSub} /></View>
-                <Text style={[styles.optionText, { color: colors.text }]}>{label}</Text>
+                <View>
+                  <Text style={[styles.optionText, { color: colors.text }]}>{label}</Text>
+                  <View style={styles.themeSwatches}>
+                    {swatches.map(color => <View key={color} style={[styles.themeSwatch, { backgroundColor: color }]} />)}
+                  </View>
+                </View>
               </View>
-              {preference === id && <View style={styles.selectedIndicator}><Check size={13} color="#0B1F3A" /></View>}
+              {preference === id && <View style={[styles.selectedIndicator, { backgroundColor: PRIMARY }]}><Check size={13} color={colors.accentContrast} /></View>}
             </TouchableOpacity>
           ))}
         </View>
@@ -368,11 +384,11 @@ export default function SettingsScreen({ route }) {
               disabled={saving}
             >
               <View style={styles.optionContent}>
-                <View style={[styles.optionIcon, { backgroundColor: colors.cardAlt }]}><Globe size={19} color="#14B8A6" /></View>
+                <View style={[styles.optionIcon, { backgroundColor: colors.cardAlt }]}><Globe size={19} color={PRIMARY} /></View>
                 <Text style={[styles.optionText, { color: colors.text }]}>{currency.name}</Text>
               </View>
               {profile?.base_currency === currency.code && (
-                <View style={styles.selectedIndicator}><Check size={13} color="#0B1F3A" /></View>
+                <View style={[styles.selectedIndicator, { backgroundColor: PRIMARY }]}><Check size={13} color={colors.accentContrast} /></View>
               )}
             </TouchableOpacity>
           ))}
@@ -390,8 +406,8 @@ export default function SettingsScreen({ route }) {
             onPress={handleSyncData}
           >
             <View style={styles.optionContent}>
-              <RefreshCw size={20} color="#2563eb" />
-              <Text style={[styles.optionText, styles.actionText]}>立即同步資料</Text>
+              <RefreshCw size={20} color={PRIMARY} />
+              <Text style={[styles.optionText, { color: PRIMARY, fontWeight: '500' }]}>立即同步資料</Text>
             </View>
           </TouchableOpacity>
 
@@ -404,8 +420,8 @@ export default function SettingsScreen({ route }) {
         <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <TouchableOpacity style={[styles.actionRow, { borderBottomColor: colors.borderLight }]} onPress={handleExportCSV}>
             <View style={styles.optionContent}>
-              <Download size={20} color="#F7A600" />
-              <Text style={[styles.optionText, { color: '#F7A600', fontWeight: '500' }]}>匯出 CSV</Text>
+              <Download size={20} color={PRIMARY} />
+              <Text style={[styles.optionText, { color: PRIMARY, fontWeight: '500' }]}>匯出 CSV</Text>
             </View>
           </TouchableOpacity>
           <TouchableOpacity
@@ -413,8 +429,8 @@ export default function SettingsScreen({ route }) {
             onPress={handleBackupToCloud}
           >
             <View style={styles.optionContent}>
-              <CloudUpload size={20} color="#F7A600" />
-              <Text style={[styles.optionText, { color: '#F7A600', fontWeight: '500' }]}>備份到 iCloud</Text>
+              <CloudUpload size={20} color={PRIMARY} />
+              <Text style={[styles.optionText, { color: PRIMARY, fontWeight: '500' }]}>備份到 iCloud</Text>
             </View>
           </TouchableOpacity>
 
@@ -423,8 +439,8 @@ export default function SettingsScreen({ route }) {
             onPress={handleRestoreBackup}
           >
             <View style={styles.optionContent}>
-              <Upload size={20} color="#f59e0b" />
-              <Text style={[styles.optionText, { color: '#f59e0b', fontWeight: '500' }]}>還原備份</Text>
+              <Upload size={20} color={PRIMARY} />
+              <Text style={[styles.optionText, { color: PRIMARY, fontWeight: '500' }]}>還原備份</Text>
             </View>
           </TouchableOpacity>
         </View>
@@ -525,10 +541,11 @@ const styles = StyleSheet.create({
     width: 22,
     height: 22,
     borderRadius: 11,
-    backgroundColor: '#F59E0B',
     alignItems: 'center',
     justifyContent: 'center',
   },
+  themeSwatches: { flexDirection: 'row', marginTop: 7, paddingLeft: 5 },
+  themeSwatch: { width: 28, height: 14, borderRadius: 7, marginLeft: -5, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(148,163,184,0.35)' },
   actionRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -537,7 +554,6 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
   },
   actionText: {
-    color: '#2563eb',
     fontWeight: '500',
   },
   dangerText: {

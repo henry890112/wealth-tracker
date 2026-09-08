@@ -8,6 +8,7 @@ import { Wallet, TrendingUp, Home, DollarSign, CreditCard, Plus, RefreshCw, Eye,
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Circle, Polyline } from 'react-native-svg';
 import { supabase } from '../lib/supabase';
+import { getTaipeiDateString, getTaipeiMonthStart } from '../lib/date';
 import { fetchExchangeRatesBatch } from '../services/api';
 import {
   calculatePortfolioTotals,
@@ -21,33 +22,27 @@ import { useTheme } from '../lib/ThemeContext';
 
 const DASHBOARD_CACHE_KEY = '@wt_dashboard_cache';
 
-const PRIMARY = '#F7A600';
 const GREEN   = '#0DBD8B';
 const RED     = '#F03030';
 
 const CATEGORY_CONFIG = {
-  liquid:     { label: '流動資產', Icon: Wallet,      color: '#0DBD8B', bg: '#dcfce7', bgDark: 'rgba(13,189,139,0.12)' },
-  investment: { label: '投資資產', Icon: TrendingUp,  color: '#F7A600', bg: '#fef3c7', bgDark: '#78350f33' },
-  fixed:      { label: '固定資產', Icon: Home,        color: '#94a3b8', bg: '#f1f5f9', bgDark: '#33415533' },
-  receivable: { label: '應收款項', Icon: DollarSign,  color: '#0d9488', bg: '#ccfbf1', bgDark: '#13403c33' },
-  liability:  { label: '負債',     Icon: CreditCard,  color: '#F03030', bg: '#fee2e2', bgDark: 'rgba(240,48,48,0.12)' },
+  liquid:     { label: '流動資產', Icon: Wallet },
+  investment: { label: '投資資產', Icon: TrendingUp },
+  fixed:      { label: '固定資產', Icon: Home },
+  receivable: { label: '應收款項', Icon: DollarSign },
+  liability:  { label: '負債', Icon: CreditCard },
 };
 
 const ASSET_CATEGORIES = ['liquid', 'investment', 'fixed', 'receivable'];
 
 const MARKET_TYPE_CONFIG = {
-  TW:     { label: '台股', color: '#e11d48' },
-  US:     { label: '美股', color: '#2563eb' },
-  Crypto: { label: '虛幣', color: '#f59e0b' },
-  other:  { label: '其他', color: '#94a3b8' },
+  TW: { label: '台股' }, US: { label: '美股' },
+  Crypto: { label: '虛幣' }, other: { label: '其他' },
 };
 
-const DONUT_COLORS = {
-  investment: '#F7A600',
-  liquid:     '#0DBD8B',
-  fixed:      '#6B7280',
-  receivable: '#94A3B8',
-};
+const getAllocationColors = (palette) => ({
+  investment: palette[0], liquid: palette[1], fixed: palette[4], receivable: palette[2],
+});
 
 const formatAmount = (amount) => Math.round(amount).toLocaleString('zh-TW');
 
@@ -93,7 +88,7 @@ const Sparkline = ({ data, width, height = 40, color = GREEN }) => {
 };
 
 // ─── Donut Chart ─────────────────────────────────────────────────────────────
-const DonutChart = ({ data, size = 110, strokeWidth = 18, bgColor = '#2D3451' }) => {
+const DonutChart = ({ data, size = 110, strokeWidth = 18, bgColor = '#2A3A61' }) => {
   const radius       = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
   const cx           = size / 2;
@@ -136,7 +131,13 @@ const DonutChart = ({ data, size = 110, strokeWidth = 18, bgColor = '#2D3451' })
 export default function DashboardScreen() {
   const navigation          = useNavigation();
   const insets              = useSafeAreaInsets();
-  const { colors, isDark }  = useTheme();
+  const { colors, isDark, theme }  = useTheme();
+  const primary = colors.accent;
+  const allocationColors = getAllocationColors(colors.chartPalette);
+  const marketColors = {
+    TW: colors.chartPalette[0], US: colors.chartPalette[1],
+    Crypto: colors.chartPalette[2], other: colors.chartPalette[4],
+  };
   const { width: SW }       = useWindowDimensions();
 
   const [assets,             setAssets]             = useState([]);
@@ -158,13 +159,13 @@ export default function DashboardScreen() {
 
   // ── theme tokens ─────────────────────────────────────────────────────────
   const C = {
-    bg:       isDark ? '#0F1117'  : colors.bg,
-    card:     isDark ? '#1E2436'  : colors.card,
-    border:   isDark ? '#2D3451'  : '#E5E7EB',
-    text:     isDark ? '#FFFFFF'  : colors.text,
-    textSub:  isDark ? '#A0AEC0'  : colors.textSub  || '#6B7280',
-    textMuted:isDark ? '#6B7280'  : colors.textMuted || '#9CA3AF',
-    donutBg:  isDark ? '#2D3451'  : '#E5E7EB',
+    bg:       colors.bg,
+    card:     colors.card,
+    border:   colors.border,
+    text:     colors.text,
+    textSub:  colors.textSub,
+    textMuted:colors.textMuted,
+    donutBg:  colors.cardAlt,
   };
 
   const cardWidth = (SW - 16 * 2 - 10) / 2;
@@ -188,10 +189,10 @@ export default function DashboardScreen() {
   }, []);
 
   const cycleSortOrder = () =>
-    setSortOrder(prev => 
-      prev === 'default' ? 'desc' : 
-      prev === 'desc' ? 'asc' : 
-      prev === 'asc' ? 'pnl_desc' : 
+    setSortOrder(prev =>
+      prev === 'default' ? 'desc' :
+      prev === 'desc' ? 'asc' :
+      prev === 'asc' ? 'pnl_desc' :
       prev === 'pnl_desc' ? 'pnl_asc' : 'default'
     );
 
@@ -239,7 +240,7 @@ export default function DashboardScreen() {
     return [...filteredAssets].sort((a, b) => {
       if (sortOrder === 'desc') return (b.converted_amount || 0) - (a.converted_amount || 0);
       if (sortOrder === 'asc') return (a.converted_amount || 0) - (b.converted_amount || 0);
-      
+
       if (sortOrder === 'pnl_desc' || sortOrder === 'pnl_asc') {
         const valA = typeof a.pnl_pct === 'number' && !isNaN(a.pnl_pct) ? a.pnl_pct : null;
         const valB = typeof b.pnl_pct === 'number' && !isNaN(b.pnl_pct) ? b.pnl_pct : null;
@@ -255,11 +256,11 @@ export default function DashboardScreen() {
   }, [filteredAssets, sortOrder]);
 
   const donutData = useMemo(() => [
-    { label: '投資資產', value: categoryTotals.investment?.total || 0, color: DONUT_COLORS.investment },
-    { label: '流動資產', value: categoryTotals.liquid?.total     || 0, color: DONUT_COLORS.liquid },
-    { label: '固定資產', value: categoryTotals.fixed?.total      || 0, color: DONUT_COLORS.fixed },
-    { label: '其他資產', value: categoryTotals.receivable?.total || 0, color: DONUT_COLORS.receivable },
-  ], [categoryTotals]);
+    { label: '投資資產', value: categoryTotals.investment?.total || 0, color: allocationColors.investment },
+    { label: '流動資產', value: categoryTotals.liquid?.total     || 0, color: allocationColors.liquid },
+    { label: '固定資產', value: categoryTotals.fixed?.total      || 0, color: allocationColors.fixed },
+    { label: '其他資產', value: categoryTotals.receivable?.total || 0, color: allocationColors.receivable },
+  ], [categoryTotals, allocationColors]);
 
   const totalAssets = useMemo(() =>
     ASSET_CATEGORIES.reduce((s, cat) => s + (categoryTotals[cat]?.total || 0), 0),
@@ -308,7 +309,7 @@ export default function DashboardScreen() {
     try {
       const lastSnapNWStr = await AsyncStorage.getItem('lastCategorySnapshotNW');
       const lastSnapNW = lastSnapNWStr ? parseFloat(lastSnapNWStr) : 0;
-      
+
       // Only update if NW has changed by more than 0.1%
       const diff = Math.abs(currentNW - lastSnapNW);
       const threshold = lastSnapNW === 0 ? 0 : Math.abs(lastSnapNW) * 0.001;
@@ -316,7 +317,7 @@ export default function DashboardScreen() {
 
       const totals = groupSnapshotTotals(assetsToSnapshot);
       const rows = Object.entries(totals).map(([category, value]) => ({ user_id: uid, date, category, value }));
-      
+
       if (rows.length > 0) {
         const { error } = await supabase
           .from('category_snapshots')
@@ -360,21 +361,21 @@ export default function DashboardScreen() {
       if (updateError) throw updateError;
     }
     const map = Object.fromEntries(changed.map(c => [c.id, c]));
-    
+
     const next = assetsData.map(a => map[a.id] ? { ...a, ...map[a.id] } : a);
     const { netWorth: liveNW } = calculatePortfolioTotals(next);
-    
+
     setAssets(next);
     setNetWorth(liveNW);
 
     if (userId) {
-      const today = new Date().toISOString().split('T')[0];
+      const today = getTaipeiDateString();
       // Upsert today's snapshot with the accurate live net worth
       const { error: snapshotError } = await supabase.from('daily_snapshots')
         .upsert({ user_id: userId, snapshot_date: today, net_worth_base: liveNW },
                 { onConflict: 'user_id,snapshot_date' });
       if (snapshotError) console.warn('live snapshot upsert:', snapshotError.message);
-      
+
       // Immediately trigger category snapshot if prices changed
       saveCategorySnapshots(next, userId, today, liveNW).catch(e => console.warn('live category snapshot error:', e));
     }
@@ -412,18 +413,32 @@ export default function DashboardScreen() {
         await AsyncStorage.setItem(DASHBOARD_CACHE_KEY, JSON.stringify({ assets: finalAssets, netWorth: currentNetWorth, lastUpdated: Date.now() }));
       } catch (e) { console.log('dashboard cache write error:', e); }
 
-      // Monthly change
-      const startOfMonth = new Date(); startOfMonth.setDate(1);
-      const { data: monthSnap } = await supabase
+      // Keep the dashboard definition identical to the monthly chart:
+      // current value minus the last value recorded before this month began.
+      const monthStart = getTaipeiMonthStart();
+      const { data: previousMonthSnap } = await supabase
         .from('daily_snapshots').select('net_worth_base')
         .eq('user_id', user.id)
-        .gte('snapshot_date', startOfMonth.toISOString().split('T')[0])
-        .order('snapshot_date', { ascending: true }).limit(1).maybeSingle();
-      if (monthSnap) setMonthlyChange(currentNetWorth - parseFloat(monthSnap.net_worth_base));
+        .lt('snapshot_date', monthStart)
+        .order('snapshot_date', { ascending: false }).limit(1).maybeSingle();
+      if (previousMonthSnap) {
+        setMonthlyChange(currentNetWorth - parseFloat(previousMonthSnap.net_worth_base));
+      } else {
+        // A newly created portfolio has no prior month-end yet. Show a
+        // best-effort in-month change until its first full month is available.
+        const { data: firstMonthSnap } = await supabase
+          .from('daily_snapshots').select('net_worth_base')
+          .eq('user_id', user.id)
+          .gte('snapshot_date', monthStart)
+          .order('snapshot_date', { ascending: true }).limit(1).maybeSingle();
+        setMonthlyChange(firstMonthSnap
+          ? currentNetWorth - parseFloat(firstMonthSnap.net_worth_base)
+          : null);
+      }
 
       // Fallback snapshot upsert
       {
-        const today = new Date().toISOString().split('T')[0];
+        const today = getTaipeiDateString();
         try {
           const { error: snapshotError } = await supabase.from('daily_snapshots')
             .upsert({ user_id: user.id, snapshot_date: today, net_worth_base: currentNetWorth },
@@ -434,7 +449,7 @@ export default function DashboardScreen() {
 
       // Category snapshots write — gated by change detection
       try {
-        const today = new Date().toISOString().split('T')[0];
+        const today = getTaipeiDateString();
         await saveCategorySnapshots(finalAssets, user.id, today, currentNetWorth);
       } catch (e) {
         if (e?.message !== 'already_written') console.log('category snapshot write error:', e);
@@ -480,7 +495,7 @@ export default function DashboardScreen() {
   if (loading) {
     return (
       <View style={[styles.loading, { paddingTop: insets.top, backgroundColor: C.bg }]}>
-        <ActivityIndicator size="large" color={PRIMARY} />
+        <ActivityIndicator size="large" color={primary} />
       </View>
     );
   }
@@ -538,7 +553,7 @@ export default function DashboardScreen() {
               </TouchableOpacity>
             </View>
             <TouchableOpacity
-              style={styles.addBtn}
+              style={[styles.addBtn, { backgroundColor: primary }]}
               onPress={() => navigation.navigate('AddAsset')}
               activeOpacity={0.85}
             >
@@ -614,13 +629,13 @@ export default function DashboardScreen() {
                 return (
                   <View key={a.id} style={{
                     flexDirection: 'row', alignItems: 'center', gap: 8,
-                    backgroundColor: 'rgba(245,158,11,0.12)',
-                    borderLeftWidth: 3, borderLeftColor: '#f59e0b',
+                    backgroundColor: colors.accentSoft,
+                    borderLeftWidth: 3, borderLeftColor: primary,
                     borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8,
                     marginBottom: 6,
                   }}>
                     <Text style={{ fontSize: 14 }}>⚠️</Text>
-                    <Text style={{ fontSize: 13, color: '#d97706', flex: 1 }}>
+                    <Text style={{ fontSize: 13, color: primary, flex: 1 }}>
                       <Text style={{ fontWeight: '700' }}>{a.name}</Text>
                       {` 佔總資產 ${pct}%，集中度偏高`}
                     </Text>
@@ -639,12 +654,12 @@ export default function DashboardScreen() {
             style={[
               styles.sparkCard,
               { backgroundColor: C.card, width: cardWidth },
-              selectedCategory === 'liquid' && { borderWidth: 1.5, borderColor: GREEN },
+              selectedCategory === 'liquid' && { borderWidth: 1.5, borderColor: allocationColors.liquid },
             ]}
             onPress={() => setSelectedCategory(selectedCategory === 'liquid' ? null : 'liquid')}
             activeOpacity={0.7}
           >
-            <Text style={[styles.sparkCardLabel, { color: GREEN }]}>流動資產</Text>
+            <Text style={[styles.sparkCardLabel, { color: allocationColors.liquid }]}>流動資產</Text>
             <Text style={[styles.sparkCardAmount, { color: C.text }]} numberOfLines={1}>
               {mask(categoryTotals.liquid?.total || 0)}
             </Text>
@@ -657,7 +672,7 @@ export default function DashboardScreen() {
               <Text style={[styles.sparkCardChange, { color: C.textMuted }]}>— --</Text>
             )}
             <View style={{ marginTop: 10, overflow: 'hidden' }}>
-              <Sparkline data={liquidSparkline} width={cardWidth - 28} height={40} color={GREEN} />
+              <Sparkline data={liquidSparkline} width={cardWidth - 28} height={40} color={allocationColors.liquid} />
             </View>
           </TouchableOpacity>
 
@@ -666,12 +681,12 @@ export default function DashboardScreen() {
             style={[
               styles.sparkCard,
               { backgroundColor: C.card, width: cardWidth },
-              selectedCategory === 'investment' && { borderWidth: 1.5, borderColor: PRIMARY },
+              selectedCategory === 'investment' && { borderWidth: 1.5, borderColor: primary },
             ]}
             onPress={() => setSelectedCategory(selectedCategory === 'investment' ? null : 'investment')}
             activeOpacity={0.7}
           >
-            <Text style={[styles.sparkCardLabel, { color: PRIMARY }]}>投資資產</Text>
+            <Text style={[styles.sparkCardLabel, { color: primary }]}>投資資產</Text>
             <Text style={[styles.sparkCardAmount, { color: C.text }]} numberOfLines={1}>
               {mask(categoryTotals.investment?.total || 0)}
             </Text>
@@ -689,7 +704,7 @@ export default function DashboardScreen() {
               );
             })()}
             <View style={{ marginTop: 10, overflow: 'hidden' }}>
-              <Sparkline data={investmentSparkline} width={cardWidth - 28} height={40} color={PRIMARY} />
+              <Sparkline data={investmentSparkline} width={cardWidth - 28} height={40} color={primary} />
             </View>
           </TouchableOpacity>
         </View>
@@ -785,7 +800,7 @@ export default function DashboardScreen() {
                 篩選：{CATEGORY_CONFIG[selectedCategory]?.label}
               </Text>
               <TouchableOpacity onPress={() => setSelectedCategory(null)} style={styles.clearBtn}>
-                <Text style={[styles.clearText, { color: PRIMARY }]}>清除</Text>
+                <Text style={[styles.clearText, { color: primary }]}>清除</Text>
               </TouchableOpacity>
             </>
           ) : null}
@@ -793,7 +808,7 @@ export default function DashboardScreen() {
           <RefreshCw size={12} color={C.textMuted} />
           <Text style={[styles.filterCount, { color: C.textMuted }]}> {sortedFilteredAssets.length} 項</Text>
           <TouchableOpacity onPress={cycleSortOrder} style={styles.sortBtn} activeOpacity={0.7}>
-            <Text style={[styles.sortText, { color: sortOrder !== 'default' ? PRIMARY : C.textMuted }]}>
+            <Text style={[styles.sortText, { color: sortOrder !== 'default' ? primary : C.textMuted }]}>
               {sortOrder === 'default' ? '排序' : sortOrder === 'desc' ? '金額↓' : sortOrder === 'asc' ? '金額↑' : sortOrder === 'pnl_desc' ? '損益↓' : '損益↑'}
             </Text>
           </TouchableOpacity>
@@ -810,7 +825,7 @@ export default function DashboardScreen() {
           )}
           {isRefreshing && (
             <>
-              <ActivityIndicator size="small" color={PRIMARY} />
+              <ActivityIndicator size="small" color={primary} />
               <Text style={[styles.refreshingText, { color: C.textMuted }]}>更新中</Text>
             </>
           )}
@@ -838,8 +853,8 @@ export default function DashboardScreen() {
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                     {asset.leverage > 1 && (
                       <Text style={{
-                        fontSize: 11, color: '#f59e0b', fontWeight: '700',
-                        backgroundColor: isDark ? '#78350f33' : '#fef3c7',
+                        fontSize: 11, color: primary, fontWeight: '700',
+                        backgroundColor: theme === 'trading' ? 'rgba(247,166,0,0.12)' : (isDark ? colors.cardAlt : '#E8EEF6'),
                         paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4,
                       }}>
                         {asset.leverage}x
@@ -888,7 +903,8 @@ export default function DashboardScreen() {
               });
               return CAT_ORDER.filter(c => groups[c]).map(cat => {
                 const cfg = CATEGORY_CONFIG[cat];
-                return renderGroup(cat, cfg.label, cfg.color, groups[cat]);
+                const groupColor = cat === 'liability' ? colors.negative : allocationColors[cat];
+                return renderGroup(cat, cfg.label, groupColor, groups[cat]);
               });
             }
 
@@ -902,7 +918,7 @@ export default function DashboardScreen() {
               });
               return MT_ORDER.filter(mt => groups[mt]).map(mt => {
                 const cfg = MARKET_TYPE_CONFIG[mt];
-                return renderGroup(mt, cfg.label, cfg.color, groups[mt]);
+                return renderGroup(mt, cfg.label, marketColors[mt], groups[mt]);
               });
             }
 
@@ -935,7 +951,6 @@ const styles = StyleSheet.create({
   heroLabel:  { fontSize: 13, fontWeight: '500' },
   addBtn: {
     width: 36, height: 36, borderRadius: 18,
-    backgroundColor: '#F7A600',
     justifyContent: 'center', alignItems: 'center',
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 6, elevation: 4,
   },

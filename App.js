@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { Animated, View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { NavigationContainer, DarkTheme, DefaultTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -28,8 +28,6 @@ const DashboardStack = createNativeStackNavigator();
 const RootStack = createNativeStackNavigator();
 const MainStack = createNativeStackNavigator();
 
-const PRIMARY = '#F59E0B';
-
 const TAB_CONFIG = [
   { name: 'Dashboard', label: '總覽', Icon: LayoutGrid },
   { name: 'Search',    label: '搜尋', Icon: Search     },
@@ -48,6 +46,7 @@ const toTheme = (c) => ({
   inactiveLabel:    c.textMuted,
   activePillBg:     c.activePillBg,
   activePillBorder: c.activePillBorder,
+  accent:           c.accent,
   headerBg:         c.header,
   headerText:       c.headerText,
 });
@@ -56,6 +55,7 @@ function GlassTabBar({ state, descriptors, navigation }) {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const t = toTheme(colors);
+  const accent = t.accent;
 
   return (
     <View
@@ -67,15 +67,7 @@ function GlassTabBar({ state, descriptors, navigation }) {
         },
       ]}
     >
-      <TouchableOpacity
-        style={styles.aiDockButton}
-        onPress={() => navigation.getParent()?.navigate('AI')}
-        activeOpacity={0.88}
-        accessibilityRole="button"
-        accessibilityLabel="開啟 AI 財務分析"
-      >
-        <Bot size={22} color="#FFFFFF" strokeWidth={2.3} />
-      </TouchableOpacity>
+      <AIOrbButton accent={accent} contrast={colors.accentContrast} surface={colors.cardAlt} onPress={() => navigation.getParent()?.navigate('AI')} />
       <View
         style={[
           styles.tabBarContainer,
@@ -107,15 +99,15 @@ function GlassTabBar({ state, descriptors, navigation }) {
               >
                 {focused && (
                   <View style={[styles.activePill, {
-                    backgroundColor: PRIMARY,
+                    backgroundColor: accent,
                   }]} />
                 )}
                 <Icon
                   size={22}
-                  color={focused ? PRIMARY : t.inactiveIcon}
+                  color={focused ? accent : t.inactiveIcon}
                   strokeWidth={focused ? 2.2 : 1.8}
                 />
-                <Text style={[styles.tabLabel, { color: focused ? PRIMARY : t.inactiveLabel },
+                <Text style={[styles.tabLabel, { color: focused ? accent : t.inactiveLabel },
                   focused && styles.tabLabelActive]}>
                   {label}
                 </Text>
@@ -128,17 +120,58 @@ function GlassTabBar({ state, descriptors, navigation }) {
   );
 }
 
+// A restrained, continuously available AI affordance. The animation is kept
+// intentionally subtle so it adds polish without competing with financial data.
+function AIOrbButton({ accent, contrast, surface, onPress }) {
+  const pulse = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 1800, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0, duration: 1800, useNativeDriver: true }),
+      ])
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [pulse]);
+
+  const haloStyle = {
+    opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.18, 0.46] }),
+    transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1.12] }) }],
+  };
+
+  return (
+    <View style={styles.aiOrbDock} pointerEvents="box-none">
+      <Animated.View pointerEvents="none" style={[styles.aiOrbHalo, haloStyle, { backgroundColor: accent }]} />
+      <TouchableOpacity
+        style={[styles.aiDockButton, { backgroundColor: surface, borderColor: accent, shadowColor: accent }]}
+        onPress={onPress}
+        activeOpacity={0.82}
+        accessibilityRole="button"
+        accessibilityLabel="開啟 AI 財務分析"
+      >
+        <View style={[styles.aiOrbInner, { backgroundColor: accent }]}>
+          <View style={styles.aiOrbGlint} />
+          <Bot size={22} color={contrast} strokeWidth={2.35} />
+        </View>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 function AIHeaderButton({ onPress }) {
+  const { colors } = useTheme();
   return (
     <TouchableOpacity
       onPress={onPress}
-      style={styles.aiHeaderButton}
+      style={[styles.aiHeaderButton, { backgroundColor: colors.accent }]}
       activeOpacity={0.82}
       accessibilityRole="button"
       accessibilityLabel="開啟 AI 財務分析"
     >
-      <Bot size={17} color="#FFFFFF" strokeWidth={2.4} />
-      <Text style={styles.aiHeaderLabel}>問 AI</Text>
+      <Bot size={17} color={colors.accentContrast} strokeWidth={2.4} />
+      <Text style={[styles.aiHeaderLabel, { color: colors.accentContrast }]}>問 AI</Text>
     </TouchableOpacity>
   );
 }
@@ -242,8 +275,8 @@ function AppInner() {
   if (!session) return <AuthScreen />;
 
   const navTheme = isDark
-    ? { ...DarkTheme,  colors: { ...DarkTheme.colors,  background: '#0f172a', card: t.headerBg } }
-    : { ...DefaultTheme, colors: { ...DefaultTheme.colors, background: '#f1f5f9', card: t.headerBg } };
+    ? { ...DarkTheme,  colors: { ...DarkTheme.colors,  background: colors.bg, card: t.headerBg, primary: colors.accent, border: colors.border, text: colors.text } }
+    : { ...DefaultTheme, colors: { ...DefaultTheme.colors, background: colors.bg, card: t.headerBg, primary: colors.accent, border: colors.border, text: colors.text } };
 
   return (
     <>
@@ -274,23 +307,53 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     zIndex: 20,
   },
-  aiDockButton: {
+  aiOrbDock: {
     position: 'absolute',
-    top: -60,
+    top: -67,
     right: 16,
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 64,
+    height: 64,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#0B1F3A',
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
-    shadowColor: '#0B1F3A',
+  },
+  aiOrbHalo: {
+    position: 'absolute',
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+  },
+  aiDockButton: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#15233A',
+    borderWidth: 1,
     shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.2,
-    shadowRadius: 10,
+    shadowOpacity: 0.32,
+    shadowRadius: 12,
     elevation: 8,
+  },
+  aiOrbInner: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#D8D5FF',
+    overflow: 'hidden',
+  },
+  aiOrbGlint: {
+    position: 'absolute',
+    top: 6,
+    left: 9,
+    width: 13,
+    height: 7,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.5)',
+    transform: [{ rotate: '-20deg' }],
   },
   aiHeaderButton: {
     height: 34,

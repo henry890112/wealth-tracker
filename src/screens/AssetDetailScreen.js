@@ -46,7 +46,7 @@ const CATEGORIES = [
 const TRANSACTION_TYPE_COLORS = {
   BUY: '#0DBD8B',
   SELL: '#F03030',
-  ADJUST: '#f59e0b',
+  ADJUST: '#8B8CF6',
 };
 
 const TRANSACTION_TYPES = [
@@ -112,7 +112,7 @@ const InstitutionalSection = ({ chipData, marginData, loading, colors }) => {
     return (
       <View style={instStyles.section}>
         <Text style={[instStyles.sectionTitle, { color: textPrimary }]}>籌碼分析</Text>
-        <ActivityIndicator size="small" color="#2563eb" style={{ marginTop: 16 }} />
+        <ActivityIndicator size="small" color={colors?.accent || '#8B8CF6'} style={{ marginTop: 16 }} />
       </View>
     );
   }
@@ -399,6 +399,8 @@ export default function AssetDetailScreen() {
   const navigation = useNavigation();
   const { assetId, allIds } = route.params;
   const { colors } = useTheme();
+  const PRIMARY = colors.accent;
+  const transactionColor = (type) => type === 'ADJUST' ? PRIMARY : TRANSACTION_TYPE_COLORS[type];
 
   const [asset, setAsset] = useState(null);
   const [transactions, setTransactions] = useState([]);
@@ -798,7 +800,7 @@ export default function AssetDetailScreen() {
   if (loading) {
     return (
       <View style={[styles.loadingContainer, { backgroundColor: colors.bg }]}>
-        <ActivityIndicator size="large" color="#2563eb" />
+        <ActivityIndicator size="large" color={PRIMARY} />
       </View>
     );
   }
@@ -892,15 +894,15 @@ export default function AssetDetailScreen() {
         {/* Action Buttons */}
         <View style={styles.actionRow}>
           <TouchableOpacity
-            style={styles.addTxButton}
+            style={[styles.addTxButton, { backgroundColor: PRIMARY }]}
             onPress={() => { resetAddModal(); setModalVisible(true); }}
           >
-            <Plus size={18} color="white" />
-            <Text style={styles.addTxButtonText}>新增交易</Text>
+            <Plus size={18} color={colors.accentContrast} />
+            <Text style={[styles.addTxButtonText, { color: colors.accentContrast }]}>新增交易</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.editButton, { backgroundColor: colors.card }]} onPress={openEditModal}>
-            <Edit2 size={18} color="#2563eb" />
-            <Text style={styles.editButtonText}>編輯</Text>
+          <TouchableOpacity style={[styles.editButton, { backgroundColor: colors.card, borderColor: PRIMARY }]} onPress={openEditModal}>
+            <Edit2 size={18} color={PRIMARY} />
+            <Text style={[styles.editButtonText, { color: PRIMARY }]}>編輯</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.deleteButton, { backgroundColor: colors.card }]} onPress={handleDelete}>
             <Trash2 size={18} color="#F03030" />
@@ -912,7 +914,7 @@ export default function AssetDetailScreen() {
         {isInvestmentAsset && asset.symbol && (
           <View style={[aiCardStyles.card, { backgroundColor: colors.card }]}>
             <View style={aiCardStyles.header}>
-              <View style={[aiCardStyles.iconWrap, { backgroundColor: colors.isDark ? '#1e3a2f' : '#f0fdf4' }]}>
+              <View style={[aiCardStyles.iconWrap, { backgroundColor: colors.accentSoft }]}>
                 <Text style={aiCardStyles.iconText}>🤖</Text>
               </View>
               <Text style={[aiCardStyles.title, { color: colors.text }]}>AI 智能分析</Text>
@@ -955,7 +957,7 @@ export default function AssetDetailScreen() {
 
             {aiLoading && (
               <View style={aiCardStyles.loadingWrap}>
-                <ActivityIndicator size="small" color="#F7A600" />
+                <ActivityIndicator size="small" color={PRIMARY} />
                 <Text style={[aiCardStyles.loadingText, { color: colors.textSub }]}>
                   正在取得新聞和技術指標…
                 </Text>
@@ -985,7 +987,7 @@ export default function AssetDetailScreen() {
               originWhitelist={['*']}
               renderLoading={() => (
                 <View style={styles.chartLoading}>
-                  <ActivityIndicator size="small" color="#2563eb" />
+                  <ActivityIndicator size="small" color={PRIMARY} />
                   <Text style={styles.chartLoadingText}>載入圖表中...</Text>
                 </View>
               )}
@@ -1008,7 +1010,7 @@ export default function AssetDetailScreen() {
             data={holdingData?.map(d => ({ date: d.date, value: d.percent }))}
             label="大戶持股比例（400張以上）"
             unit="%"
-            color="#F7A600"
+            color={PRIMARY}
             colors={colors}
           />
         )}
@@ -1033,7 +1035,7 @@ export default function AssetDetailScreen() {
                   <Text
                     style={[
                       styles.transactionType,
-                      { color: TRANSACTION_TYPE_COLORS[transaction.type] },
+                      { color: transactionColor(transaction.type) },
                     ]}
                   >
                     {transaction.type === 'BUY' ? '買入' : transaction.type === 'SELL' ? '賣出' : '調整'}
@@ -1098,7 +1100,7 @@ export default function AssetDetailScreen() {
                   style={[
                     styles.typeChip,
                     txType === t.id && styles.typeChipActive,
-                    txType === t.id && { backgroundColor: TRANSACTION_TYPE_COLORS[t.id] },
+                    txType === t.id && { backgroundColor: transactionColor(t.id) },
                   ]}
                   onPress={() => setTxType(t.id)}
                 >
@@ -1149,13 +1151,13 @@ export default function AssetDetailScreen() {
             />
 
             {isInvestmentAsset && txShares && txPrice && (
-              <Text style={styles.totalText}>
+              <Text style={[styles.totalText, { color: PRIMARY }]}>
                 總金額: {asset.currency} {(parseFloat(txShares) * parseFloat(txPrice) / (parseFloat(asset.leverage) || 1)).toFixed(2)}
               </Text>
             )}
 
             {!isInvestmentAsset && txPrice && (
-              <Text style={styles.totalText}>
+              <Text style={[styles.totalText, { color: PRIMARY }]}>
                 {txType === 'BUY' ? '買入後' : txType === 'SELL' ? '賣出後' : '調整為'}：
                 {asset.currency} {
                   txType === 'BUY'
@@ -1175,11 +1177,11 @@ export default function AssetDetailScreen() {
                 <Text style={styles.cancelButtonText}>取消</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.confirmButton, adding && styles.confirmButtonDisabled]}
+                style={[styles.confirmButton, { backgroundColor: PRIMARY }, adding && styles.confirmButtonDisabled]}
                 onPress={handleAddTransaction}
                 disabled={adding}
               >
-                <Text style={styles.confirmButtonText}>
+                <Text style={[styles.confirmButtonText, { color: colors.accentContrast }]}>
                   {adding ? '新增中...' : '確認新增'}
                 </Text>
               </TouchableOpacity>
@@ -1219,12 +1221,14 @@ export default function AssetDetailScreen() {
                   key={c.id}
                   style={[
                     styles.categoryChip,
-                    editCategory === c.id && styles.categoryChipActive,
+                    { backgroundColor: colors.cardAlt },
+                    editCategory === c.id && { backgroundColor: PRIMARY },
                   ]}
                   onPress={() => setEditCategory(c.id)}
                 >
                   <Text style={[
                     styles.categoryChipText,
+                    { color: editCategory === c.id ? colors.accentContrast : colors.textSub },
                     editCategory === c.id && styles.categoryChipTextActive,
                   ]}>
                     {c.label}
@@ -1254,11 +1258,11 @@ export default function AssetDetailScreen() {
                 <Text style={styles.cancelButtonText}>取消</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.confirmButton, editSaving && styles.confirmButtonDisabled]}
+                style={[styles.confirmButton, { backgroundColor: PRIMARY }, editSaving && styles.confirmButtonDisabled]}
                 onPress={handleEditAsset}
                 disabled={editSaving}
               >
-                <Text style={styles.confirmButtonText}>
+                <Text style={[styles.confirmButtonText, { color: colors.accentContrast }]}>
                   {editSaving ? '儲存中...' : '確認儲存'}
                 </Text>
               </TouchableOpacity>
@@ -1306,7 +1310,7 @@ const styles = StyleSheet.create({
   assetName: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#1e293b',
+    color: '#18213C',
     marginBottom: 4,
   },
   assetSymbol: {
@@ -1330,7 +1334,7 @@ const styles = StyleSheet.create({
   assetValue: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#1e293b',
+    color: '#18213C',
   },
   assetDetailRow: {
     flexDirection: 'row',
@@ -1345,7 +1349,7 @@ const styles = StyleSheet.create({
   assetDetailValue: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#1e293b',
+    color: '#18213C',
   },
   actionRow: {
     flexDirection: 'row',
@@ -1358,7 +1362,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#2563eb',
     padding: 12,
     borderRadius: 8,
     gap: 6,
@@ -1374,14 +1377,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'white',
     borderWidth: 1,
-    borderColor: '#2563eb',
     paddingHorizontal: 14,
     paddingVertical: 12,
     borderRadius: 8,
     gap: 5,
   },
   editButtonText: {
-    color: '#2563eb',
     fontSize: 14,
     fontWeight: '600',
   },
@@ -1417,7 +1418,7 @@ const styles = StyleSheet.create({
   chartTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#1e293b',
+    color: '#18213C',
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
@@ -1451,7 +1452,7 @@ const styles = StyleSheet.create({
   transactionsTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#1e293b',
+    color: '#18213C',
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
@@ -1494,7 +1495,7 @@ const styles = StyleSheet.create({
   transactionAmount: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#1e293b',
+    color: '#18213C',
   },
   emptyStateTransfers: {
     padding: 24,
@@ -1515,13 +1516,13 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#1e293b',
+    color: '#18213C',
     marginBottom: 24,
   },
   label: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#1e293b',
+    color: '#18213C',
     marginBottom: 8,
   },
   typeRow: {
@@ -1558,7 +1559,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#f1f5f9',
   },
   categoryChipActive: {
-    backgroundColor: '#2563eb',
   },
   categoryChipText: {
     fontSize: 13,
@@ -1581,7 +1581,6 @@ const styles = StyleSheet.create({
   totalText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#2563eb',
     marginBottom: 16,
     textAlign: 'right',
   },
@@ -1606,7 +1605,6 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 14,
     borderRadius: 8,
-    backgroundColor: '#2563eb',
     alignItems: 'center',
   },
   confirmButtonDisabled: {
