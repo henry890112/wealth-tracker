@@ -46,8 +46,15 @@ React Native (Expo) + Supabase 的個人資產管理 App，支援多幣別、即
 - **CoinGecko API**: 虛擬貨幣價格、成交量排名（附 Supabase 快取 fallback）
 - **ExchangeRate API**: 匯率換算
 - **玉山證券 API（台股唯讀）**: 透過本機 bridge 同步持倉、平均成本、市值與未實現損益
+- **台股研究訊號**: 每日以本益比、外資／投信買賣超、均線與成交額篩選自選與持倉台股；結果是研究提示，非買進建議
 
 外部行情結果快取於 Supabase（5 分鐘 TTL）。
+
+### 台股研究訊號與通知
+
+從「更多 → 台股研究訊號」可查看每一檔已分析台股的分數與條件，不只顯示候選股；未符合者也會列出估值、法人、趨勢或流動性等未達原因。按「立即分析目前資料」可直接重新計算，不必等待每日排程。系統只分析已持有或自選的台股，最多 50 檔；策略預設要求：本益比低於自身近三年有效數據的 25 百分位、外資或投信近五日買超、價格與 MA20／MA60 趨勢確認，以及足夠成交額。
+
+訊號會標示資料日期與風險提醒，並非保證報酬、目標價或下單指令。雲端排程與推播設定請見 [DEPLOYMENT.md](DEPLOYMENT.md#台股研究訊號與每日推播)。
 
 ### 玉山證券唯讀同步
 
@@ -127,6 +134,9 @@ npm run android  # Android emulator
 | `daily_snapshots` | 每日淨資產快照（驅動趨勢圖） |
 | `price_cache` | 股票/虛幣價格快取 |
 | `exchange_rates` | 匯率快取 |
+| `investment_signal_preferences` | 研究訊號與推播偏好 |
+| `push_devices` | 使用者授權的 Expo 推播裝置 |
+| `investment_signal_events` | 每日研究訊號、判斷依據與讀取狀態 |
 
 **觸發器:**
 - `handle_new_user` — 新用戶自動建立 profile

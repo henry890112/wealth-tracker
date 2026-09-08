@@ -2,7 +2,7 @@ import React from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  Bot, ChevronRight, CircleHelp, CloudUpload, CreditCard, Landmark,
+  BarChart3, Bot, ChevronRight, CircleHelp, CloudUpload, CreditCard, Landmark,
   FileDown, Globe, Info, Palette, Settings2, UserRound,
 } from 'lucide-react-native';
 import { useTheme } from '../lib/ThemeContext';
@@ -15,6 +15,7 @@ const SECTIONS = [
     items: [
       { title: '固定支出', subtitle: '管理定期扣款與固定支出', Icon: CreditCard, color: '#3B82F6', route: 'FixedExpenses' },
       { title: 'AI 財務分析', subtitle: '資產組合分析與投資建議', Icon: Bot, color: PRIMARY, route: 'AI' },
+      { title: '台股研究訊號', subtitle: '低估值、法人與趨勢的每日篩選', Icon: BarChart3, color: '#F59E0B', route: 'InvestmentSignals' },
     ],
   },
   {

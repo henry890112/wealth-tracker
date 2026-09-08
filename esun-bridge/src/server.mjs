@@ -31,22 +31,31 @@ if (host !== '127.0.0.1' && !bridgeToken) {
 }
 
 let clients;
+let clientsPromise;
 async function getClients() {
   if (clients) return clients;
+  if (!clientsPromise) {
+    clientsPromise = (async () => {
+      const [{ EsunTrade }, { EsunMarketdata }] = await Promise.all([
+        import('@esun/trade'),
+        import('@esun/marketdata'),
+      ]);
+      const trade = new EsunTrade({ configPath });
+      const marketdata = new EsunMarketdata({ configPath });
 
-  const [{ EsunTrade }, { EsunMarketdata }] = await Promise.all([
-    import('@esun/trade'),
-    import('@esun/marketdata'),
-  ]);
-  const trade = new EsunTrade({ configPath });
-  const marketdata = new EsunMarketdata({ configPath });
-
-  // The official SDK prompts for the broker and certificate passwords locally.
-  // No password is accepted by this HTTP service or stored in the repository.
-  await trade.login();
-  await marketdata.login();
-  clients = { trade, stock: marketdata.restClient.stock };
-  return clients;
+      // The official SDK prompts for the broker and certificate passwords locally.
+      // No password is accepted by this HTTP service or stored in the repository.
+      await trade.login();
+      await marketdata.login();
+      clients = { trade, stock: marketdata.restClient.stock };
+      return clients;
+    })().catch((error) => {
+      // A failed first login must not poison later retry attempts.
+      clientsPromise = null;
+      throw error;
+    });
+  }
+  return clientsPromise;
 }
 
 // The broker SDK returns numeric fields as formatted strings (for example

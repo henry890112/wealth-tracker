@@ -21,6 +21,7 @@ import FixedExpensesScreen from './src/screens/FixedExpensesScreen';
 import AIAnalysisScreen from './src/screens/AIAnalysisScreen';
 import MoreScreen from './src/screens/MoreScreen';
 import EsunSyncScreen from './src/screens/EsunSyncScreen';
+import InvestmentSignalsScreen from './src/screens/InvestmentSignalsScreen';
 
 const Tab = createBottomTabNavigator();
 const DashboardStack = createNativeStackNavigator();
@@ -195,6 +196,7 @@ function MainStackScreen() {
       />
       <MainStack.Screen name="FixedExpenses" component={FixedExpensesScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '固定支出' })} />
       <MainStack.Screen name="EsunSync" component={EsunSyncScreen} options={{ presentation: 'card', animation: 'slide_from_right' }} />
+      <MainStack.Screen name="InvestmentSignals" component={InvestmentSignalsScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '研究訊號' })} />
       <MainStack.Screen
         name="Settings"
         component={SettingsScreen}

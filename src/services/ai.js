@@ -1,17 +1,16 @@
 // Google Gemini AI service for WealthTracker
 const GEMINI_API_KEY =
-  process.env.EXPO_PUBLIC_GEMINI_API_KEY ||
-  'AIzaSyDJu0UgwaLuLiRokHaFz1YvZ2tGU7K6GI0';
+  process.env.EXPO_PUBLIC_GEMINI_API_KEY || '';
+const OPENROUTER_API_KEY = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY || '';
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
 // Models tried in order — first one that responds wins
 const MODELS = [
   'gemini-2.5-flash',
-  'gemini-3.5-flash',
-  'gemini-flash-latest',
-  'gemini-3-flash-preview',
-  'gemini-2.0-flash',
+  'gemini-2.5-flash-lite',
 ];
+const OPENROUTER_MODELS = ['google/gemini-2.5-flash', 'openai/gpt-4o-mini'];
 
 // ── Clean AI response — strip thinking blocks ─────────────────────────────
 function cleanResponse(text) {
@@ -61,6 +60,34 @@ function extractSources(data) {
     .map(source => ({ title: source.title || new URL(source.uri).hostname, uri: source.uri }));
 }
 
+async function askOpenRouter(messages, systemPrompt, maxTokens = 4096, temperature = 0.65) {
+  if (!OPENROUTER_API_KEY) return null;
+  const response = await fetch(OPENROUTER_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      models: OPENROUTER_MODELS,
+      messages: [{ role: 'system', content: systemPrompt }, ...messages.map(message => ({ role: message.role, content: message.content }))],
+      max_tokens: maxTokens,
+      temperature,
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`OpenRouter HTTP ${response.status}`);
+  const content = cleanResponse(data.choices?.[0]?.message?.content);
+  if (!content) throw new Error('OpenRouter 空回應');
+  return { content, model: data.model || 'OpenRouter' };
+}
+
+function unavailableMessage(errors) {
+  if (errors.some(error => error.includes(': 429'))) return 'AI 服務目前繁忙，請稍後再試。';
+  if (errors.some(error => error.includes(': 401') || error.includes(': 403'))) return 'AI 服務金鑰設定有誤，請檢查設定後再試。';
+  return 'AI 服務暫時無法回應，請稍後再試。';
+}
+
 // ── Build system prompt from portfolio context ────────────────────────────
 function buildSystemPrompt(ctx) {
   const cur = ctx.currency || 'TWD';
@@ -69,9 +96,8 @@ function buildSystemPrompt(ctx) {
     '你是「WealthTracker AI」，一個專業的個人資產組合分析助理。',
     '請用繁體中文回答，語氣專業但親切。回答要簡潔有條理，適當使用分點說明。',
     '不要說「根據您提供的資料」等廢話，直接切入重點。',
-    '【重要格式規定】禁止使用任何 Markdown 語法，包括 ###、##、**、*、- 等符號。',
-    '禁止使用表格（table）格式，禁止用 | 或 — 畫表格或分隔線。',
-    '用「一、二、三」或「①②③」或「▸」來做列表，用純文字段落分隔內容。',
+    '【輸出格式】請使用手機友善 Markdown：以 ## 寫短標題、**粗體**標示關鍵結論，並使用 - 製作清單。',
+    '只有在用戶明確要求「表格」或資料比較非常適合時，才使用 Markdown 表格；最多 3 欄、欄位名稱要短，避免程式碼區塊。段落之間留一行空白，最多使用 3 個 ## 標題。',
     '【重要資料規定】只能引用下方「用戶資產快照」中明確列出的數字，絕對不可自行捏造或推算任何金額、百分比或數字。',
     '',
     '════ 用戶資產快照 ════',
@@ -227,8 +253,17 @@ export async function askAI(messages, portfolioContext = {}) {
     }
   }
 
-  const detail = lastErrors.slice(-3).join(' | ');
-  throw new Error(`所有模型均無回應\n${detail}`);
+  try {
+    const fallback = await askOpenRouter(messages, systemPrompt);
+    if (fallback) {
+      const actionResult = extractTaggedJson(fallback.content, 'action');
+      const chartResult = extractTaggedJson(actionResult.content, 'chart');
+      return { content: chartResult.content, model: fallback.model, action: actionResult.value, chart: normalizeChart(chartResult.value), sources: [] };
+    }
+  } catch (error) {
+    console.warn('[AI] OpenRouter fallback failed:', error.message);
+  }
+  throw new Error(unavailableMessage(lastErrors));
 }
 
 // ── Single-asset AI analysis (news + technicals) ──────────────────────────
@@ -248,8 +283,8 @@ export async function analyzeAsset({ name, symbol, marketType, currentPrice, pnl
 
   const systemPrompt = [
     '你是一位專業的投資分析師，請用繁體中文回答，語氣簡潔直接。',
-    '【格式規定】禁止使用 Markdown（###、**、- 等），禁止表格，禁止分隔線。',
-    '用「一、二、三」或「▸」列點，純文字段落分隔。',
+    '【格式規定】請使用手機友善 Markdown：用 ## 放短標題、**粗體**標示結論、以 - 製作清單。',
+    '只有在用戶明確要求表格時才使用 Markdown 表格，最多 3 欄；禁止程式碼區塊與過長標題，段落之間留一行空白。',
     '回答長度控制在 200 字以內，聚焦最重要的觀察。',
     '只能引用以下提供的數字，不可自行編造任何數據。',
     '',
@@ -300,7 +335,18 @@ export async function analyzeAsset({ name, symbol, marketType, currentPrice, pnl
       lastErrors.push(`${model}: ${e.message}`);
     }
   }
-  throw new Error(`分析失敗：${lastErrors.slice(-2).join(' | ')}`);
+  try {
+    const fallback = await askOpenRouter(
+      [{ role: 'user', content: `請分析 ${name}（${symbol}）的近況。` }],
+      systemPrompt,
+      2048,
+      0.5,
+    );
+    if (fallback) return fallback.content;
+  } catch (error) {
+    console.warn('[Asset analysis] OpenRouter fallback failed:', error.message);
+  }
+  throw new Error(unavailableMessage(lastErrors));
 }
 
 // ── Transcribe audio via Gemini multimodal ────────────────────────────────
@@ -308,7 +354,7 @@ export async function transcribeAudio(base64Audio, mimeType = 'audio/m4a') {
   if (!GEMINI_API_KEY) throw new Error('Gemini API key 未設定');
 
   // Multimodal audio works on 2.5-flash and 2.0-flash
-  const audioModels = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest'];
+  const audioModels = ['gemini-2.5-flash', 'gemini-2.5-flash-lite'];
 
   for (const model of audioModels) {
     try {

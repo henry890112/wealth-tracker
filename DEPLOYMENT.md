@@ -281,6 +281,71 @@ Mac 必須保持開機、連網，且 `esun-bridge` 持續運行。更新庫存�
 
 修改畫面、文字、JavaScript 或 React Native 邏輯後，App 會自動重新載入，不必重新執行 Xcode 編譯。
 
+## 台股研究訊號與每日推播
+
+研究訊號由 Supabase Edge Function 在台北時間平日 20:30 後產生，僅分析登入者的雲端自選與持倉台股；資料不足、負盈餘、台灣休市或收盤資料尚未更新時，不建立新訊號。App 內的「立即分析目前資料」則可隨時手動執行，只會分析目前登入帳戶、不發送推播，並清楚標示最新可取得的資料日期。訊號用途是提供研究線索，**不代表買進建議**。
+
+### 1. 套用資料庫與部署 Function
+
+在可登入該 Supabase Cloud 專案的終端機執行：
+
+```bash
+cd ~/WealthTracker
+supabase login
+supabase link --project-ref <your-project-ref>
+supabase db push
+supabase functions deploy daily-investment-signals --no-verify-jwt
+```
+
+### 2. （建議）設定 Function 私密值
+
+「立即分析目前資料」可使用 FinMind 公開資料端點，不必先設定 token。若會固定排程、追蹤較多標的，建議設定私密 `FINMIND_API_TOKEN` 以取得較穩定的查詢額度；它只能放在 Supabase Function secret，不能使用或複製 App 的 `EXPO_PUBLIC_FINMIND_API_KEY`。先從安全的憑證保存處取得 FinMind token，接著產生排程專用亂數：
+
+```bash
+openssl rand -hex 32
+supabase secrets set FINMIND_API_TOKEN=<private-finmind-token> SIGNAL_CRON_SECRET=<the-random-value>
+```
+
+請保存同一個 `SIGNAL_CRON_SECRET`，下一步寫入 Vault 時會使用；不要將它放進 Git、App `.env` 或任何 `EXPO_PUBLIC_*` 變數。
+
+### 3. 設定平日 20:30 排程
+
+在 Supabase SQL Editor 執行下列 SQL。Supabase cron 使用 UTC，因此 `30 12 * * 1-5` 是台北時間平日 20:30。將兩個尖括號替換為你的值，且只在 SQL Editor 輸入，不要提交此值：
+
+```sql
+select vault.create_secret('<same-random-value>', 'signal_cron_secret');
+
+select cron.schedule(
+  'daily-investment-signals-taipei',
+  '30 12 * * 1-5',
+  $$
+  select net.http_post(
+    url := 'https://<your-project-ref>.supabase.co/functions/v1/daily-investment-signals',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'x-signal-cron-secret',
+      (select decrypted_secret from vault.decrypted_secrets where name = 'signal_cron_secret')
+    ),
+    body := '{}'::jsonb
+  );
+  $$
+);
+```
+
+若專案尚未啟用 `pg_cron`、`pg_net` 或 Vault，先在 Supabase Dashboard 的 Database Extensions 啟用後再執行。部署完成後可在 Edge Function Logs 查看每日執行結果。
+
+### 4. 建立含推播權限的新 iOS Development Build
+
+本次新增了 `expo-notifications` 原生設定；只重啟 Metro 不足。以 USB 連接 iPhone 後執行：
+
+```bash
+cd ~/WealthTracker
+npx expo run:ios --device
+npx expo start --dev-client --tunnel --clear
+```
+
+登入 App 後前往「更多 → 台股研究訊號」，開啟「每日摘要推播」並同意 iOS 通知權限。Push token 只會存到你帳戶的受 RLS 保護資料列。
+
 ### 何時需要再用 Xcode
 
 | 情況 | 操作 |

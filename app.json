@@ -41,6 +41,7 @@
         }
       ],
       "expo-sharing",
+      "expo-notifications",
       "expo-status-bar",
       [
         "expo-splash-screen",

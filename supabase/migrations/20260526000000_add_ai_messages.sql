@@ -15,6 +15,8 @@ create index if not exists ai_messages_user_created
 -- RLS: each user can only access their own messages
 alter table ai_messages enable row level security;
 
+grant select, insert, delete on public.ai_messages to authenticated;
+
 create policy "ai_messages: own rows only"
   on ai_messages
   for all

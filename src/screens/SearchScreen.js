@@ -37,6 +37,7 @@ import {
 } from '../services/api';
 import { useTheme } from '../lib/ThemeContext';
 import { getAlerts, saveAlert, deleteAlert, resetAlert, checkAndFireAlerts, requestNotificationPermission, registerBackgroundPriceAlerts } from '../lib/priceAlerts';
+import { syncLocalWatchlistToCloud } from '../services/investmentSignals';
 
 const MARKET_TABS = [
   { id: 'watchlist', label: '★ 自選' },
@@ -793,7 +794,10 @@ export default function SearchScreen() {
   };
 
   const saveWatchlistToStorage = async (list) => {
-    try { await AsyncStorage.setItem('watchlist', JSON.stringify(list)); } catch {}
+    try {
+      await AsyncStorage.setItem('watchlist', JSON.stringify(list));
+      syncLocalWatchlistToCloud(list).catch(error => console.warn('watchlist cloud sync:', error.message));
+    } catch {}
   };
 
   const isInWatchlist = (symbol) => watchlist.some(w => w.symbol === symbol);

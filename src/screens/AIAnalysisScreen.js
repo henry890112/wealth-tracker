@@ -101,55 +101,66 @@ function renderInline(text, color) {
 }
 
 // ── Markdown → React Native renderer ─────────────────────────────────────
-function MarkdownText({ text, color }) {
-  const lines = text.split('\n');
+function parseTableCells(line) {
+  return line.trim().replace(/^\||\|$/g, '').split('|').map(cell => cell.trim());
+}
+
+function MarkdownTable({ headers, rows, color, isDark }) {
+  const columns = Math.max(headers.length, 1);
+  const cellStyle = { width: `${100 / columns}%` };
   return (
-    <View>
-      {lines.map((line, i) => {
-        // Header: # ## ###
-        const hMatch = line.match(/^#{1,3}\s+(.+)/);
-        if (hMatch) {
-          return (
-            <Text key={i} style={{ color, fontSize: 15, fontWeight: '700', marginTop: 10, marginBottom: 2, lineHeight: 22 }}>
-              {hMatch[1].replace(/\*\*/g, '')}
-            </Text>
-          );
-        }
-        // Bullet: * - or ▸
-        const bMatch = line.match(/^(?:[\*\-]|\▸)\s+(.+)/);
-        if (bMatch) {
-          return (
-            <View key={i} style={{ flexDirection: 'row', marginVertical: 2, paddingLeft: 2 }}>
-              <Text style={{ color, lineHeight: 22, marginRight: 7 }}>▸</Text>
-              <View style={{ flex: 1 }}>
-                {renderInline(bMatch[1], color)}
-              </View>
-            </View>
-          );
-        }
-        // Numbered list: 1. 2. etc or ①②
-        const nMatch = line.match(/^(\d+[\.\、]|[①②③④⑤⑥⑦⑧⑨⑩])\s*(.+)/);
-        if (nMatch) {
-          return (
-            <View key={i} style={{ flexDirection: 'row', marginVertical: 2 }}>
-              <Text style={{ color, lineHeight: 22, marginRight: 6, fontWeight: '600' }}>{nMatch[1]}</Text>
-              <View style={{ flex: 1 }}>
-                {renderInline(nMatch[2], color)}
-              </View>
-            </View>
-          );
-        }
-        // Empty line
-        if (!line.trim()) return <View key={i} style={{ height: 6 }} />;
-        // Normal text
-        return (
-          <View key={i} style={{ marginVertical: 1 }}>
-            {renderInline(line, color)}
-          </View>
-        );
-      })}
+    <View style={[styles.markdownTable, { borderColor: isDark ? '#3A465A' : '#D8E0EA' }]}>
+      <View style={[styles.markdownTableRow, styles.markdownTableHeader, { backgroundColor: isDark ? '#162238' : '#EAF0F7' }]}>
+        {headers.map((header, index) => <Text key={`${header}-${index}`} style={[styles.markdownTableHeaderText, cellStyle, { color }]}>{header}</Text>)}
+      </View>
+      {rows.map((row, rowIndex) => <View key={`${row.join('-')}-${rowIndex}`} style={[styles.markdownTableRow, { borderTopColor: isDark ? '#334155' : '#E2E8F0' }]}>
+        {headers.map((_, columnIndex) => <View key={columnIndex} style={[styles.markdownTableCell, cellStyle]}>{renderInline(row[columnIndex] || '—', color)}</View>)}
+      </View>)}
     </View>
   );
+}
+
+function MarkdownText({ text, color, isDark }) {
+  const lines = text.split('\n');
+  const nodes = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const divider = lines[i + 1];
+    const isTableHeader = line.includes('|') && divider && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(divider);
+    if (isTableHeader) {
+      const headers = parseTableCells(line);
+      const rows = [];
+      i += 2;
+      while (i < lines.length && lines[i].includes('|')) {
+        rows.push(parseTableCells(lines[i]));
+        i += 1;
+      }
+      i -= 1;
+      nodes.push(<MarkdownTable key={`table-${i}`} headers={headers} rows={rows} color={color} isDark={isDark} />);
+      continue;
+    }
+    const hMatch = line.match(/^#{1,3}\s+(.+)/);
+    if (hMatch) {
+      nodes.push(<Text key={i} style={{ color, fontSize: 15, fontWeight: '700', marginTop: 10, marginBottom: 2, lineHeight: 22 }}>{hMatch[1].replace(/\*\*/g, '')}</Text>);
+      continue;
+    }
+    const bMatch = line.match(/^(?:[\*\-]|\▸)\s+(.+)/);
+    if (bMatch) {
+      nodes.push(<View key={i} style={{ flexDirection: 'row', marginVertical: 2, paddingLeft: 2 }}><Text style={{ color, lineHeight: 22, marginRight: 7 }}>▸</Text><View style={{ flex: 1 }}>{renderInline(bMatch[1], color)}</View></View>);
+      continue;
+    }
+    const nMatch = line.match(/^(\d+[\.\、]|[①②③④⑤⑥⑦⑧⑨⑩])\s*(.+)/);
+    if (nMatch) {
+      nodes.push(<View key={i} style={{ flexDirection: 'row', marginVertical: 2 }}><Text style={{ color, lineHeight: 22, marginRight: 6, fontWeight: '600' }}>{nMatch[1]}</Text><View style={{ flex: 1 }}>{renderInline(nMatch[2], color)}</View></View>);
+      continue;
+    }
+    if (!line.trim()) {
+      nodes.push(<View key={i} style={{ height: 6 }} />);
+      continue;
+    }
+    nodes.push(<View key={i} style={{ marginVertical: 1 }}>{renderInline(line, color)}</View>);
+  }
+  return <View>{nodes}</View>;
 }
 
 // ── Action confirmation card ──────────────────────────────────────────────
@@ -262,6 +273,15 @@ const acStyles = StyleSheet.create({
 // ── Single message bubble ─────────────────────────────────────────────────
 const CHART_COLORS = ['#F7A600', '#0DBD8B', '#3B82F6', '#A855F7', '#F03030', '#64748B'];
 
+function formatChartValue(value, unit) {
+  const amount = Number(value) || 0;
+  let formatted;
+  if (Math.abs(amount) >= 100_000_000) formatted = `${(amount / 100_000_000).toFixed(1)} 億`;
+  else if (Math.abs(amount) >= 10_000) formatted = `${(amount / 10_000).toFixed(1)} 萬`;
+  else formatted = Math.round(amount).toLocaleString('zh-TW');
+  return unit ? `${formatted} ${unit}` : formatted;
+}
+
 function AIChartCard({ chart, colors, isDark }) {
   const maxValue = Math.max(...chart.values, 1);
   const total = chart.values.reduce((sum, value) => sum + value, 0);
@@ -312,7 +332,7 @@ function AIChartCard({ chart, colors, isDark }) {
         {chart.values.map((value, index) => (
           <View key={`${chart.labels[index]}-${index}`} style={styles.aiChartBarItem}>
             <Text style={[styles.aiChartValue, { color: colors.text }]} numberOfLines={1}>
-              {Math.round(value).toLocaleString('zh-TW')}{chart.unit ? ` ${chart.unit}` : ''}
+              {formatChartValue(value, chart.unit)}
             </Text>
             <View style={[styles.aiChartTrack, { backgroundColor: isDark ? '#26334A' : '#EEF2F7' }]}>
               <View style={[styles.aiChartFill, { height: `${Math.max((value / maxValue) * 100, 6)}%` }]} />
@@ -379,13 +399,14 @@ function MessageBubble({ msg, msgIdx, colors, isDark, onConfirmAction, onCancelA
       )}
       <View style={[
         styles.bubble,
-        { backgroundColor: bubbleBg, maxWidth: '82%' },
+        { backgroundColor: bubbleBg, maxWidth: isUser ? '82%' : undefined },
+        !isUser ? styles.bubbleAIContent : null,
         isUser ? styles.bubbleUser : styles.bubbleAI,
       ]}>
         {isUser ? (
           <Text style={{ color: textColor, fontSize: 14, lineHeight: 22 }}>{msg.content}</Text>
         ) : (
-          <MarkdownText text={msg.content} color={textColor} />
+          <MarkdownText text={msg.content} color={textColor} isDark={isDark} />
         )}
         {msg.action && (
           <ActionConfirmCard
@@ -602,6 +623,8 @@ export default function AIAnalysisScreen({ navigation }) {
     const userMsg = { role: 'user', content: trimmed };
     const history = [...messages, userMsg];
     setMessages(history);
+    // Keep the user's question even if they leave the screen while the model is replying.
+    saveMessages(history);
     setIsThinking(true);
 
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
@@ -1107,6 +1130,12 @@ const styles = StyleSheet.create({
   bubble:        { borderRadius: 18, paddingHorizontal: 14, paddingVertical: 10 },
   bubbleUser:    { borderBottomRightRadius: 4 },
   bubbleAI:      { borderBottomLeftRadius: 4 },
+  bubbleAIContent: { flex: 1 },
+  markdownTable: { marginTop: 8, marginBottom: 4, borderWidth: 1, borderRadius: 10, overflow: 'hidden' },
+  markdownTableRow: { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth },
+  markdownTableHeader: { borderTopWidth: 0 },
+  markdownTableHeaderText: { paddingHorizontal: 7, paddingVertical: 8, fontSize: 11, lineHeight: 16, fontWeight: '800' },
+  markdownTableCell: { paddingHorizontal: 7, paddingVertical: 8 },
   aiChartCard: { marginTop: 10, borderWidth: 1, borderRadius: 12, padding: 10 },
   aiChartTitle: { fontSize: 13, fontWeight: '800', marginBottom: 10 },
   aiChartBars: { flexDirection: 'row', alignItems: 'flex-end', gap: 6, minHeight: 126 },
