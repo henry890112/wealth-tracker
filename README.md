@@ -39,7 +39,7 @@ React Native (Expo) + Supabase 的個人資產管理 App，支援多幣別、即
 
 ### API 整合
 
-- **Google Gemini API**: AI 聊天與語音轉文字
+- **Google Gemini API（Supabase Edge Function）**: AI 聊天、單一資產分析與語音轉文字；OpenRouter 作為後端備援
 - **FinMind API**: 台股即時報價、搜尋、新聞與歷史數據
 - **Yahoo Finance**: 美股即時報價、趨勢標的、新聞與歷史數據
 - **Binance API**: 虛擬貨幣歷史數據
@@ -49,6 +49,84 @@ React Native (Expo) + Supabase 的個人資產管理 App，支援多幣別、即
 - **台股研究訊號**: 每日以本益比、外資／投信買賣超、均線與成交額篩選自選與持倉台股；結果是研究提示，非買進建議
 
 外部行情結果快取於 Supabase（5 分鐘 TTL）。
+
+### AI 串接架構與 API Key 管理
+
+AI 供應商金鑰不放在 Expo App 或 Web。使用者必須先登入，前端才會透過
+Supabase SDK 呼叫後端 Function：
+
+```text
+AIAnalysisScreen / AssetDetailScreen
+              ↓
+src/services/ai.js
+              ↓ supabase.functions.invoke('ai-chat') + 使用者 JWT
+Supabase Edge Function：supabase/functions/ai-chat/index.ts
+              ↓ Deno.env.get('GEMINI_API_KEY')
+Gemini API → Gemini 備援模型 → OpenRouter 備援
+```
+
+目前有三種呼叫情境：
+
+- 資產組合對話：`mode: generate`，可使用 Gemini Google Search，回傳文字、來源、圖表與自然語言操作。
+- 單一資產分析：`mode: generate`，由 App 傳入技術指標與新聞摘要。
+- 語音轉文字：`mode: transcribe`，只使用 Gemini，Base64 音訊上限約 12 MB。
+
+`ai-chat` 會再次驗證 Supabase 使用者 JWT；未登入請求回傳 `401`。主要模型依序為
+`gemini-2.5-flash`、`gemini-2.5-flash-lite`，兩者失敗時才使用 OpenRouter 的
+`google/gemini-2.5-flash` 或 `openai/gpt-4o-mini`。
+
+#### 更換正式環境 API Key
+
+先登入並連結正確的 Supabase 專案：
+
+```bash
+supabase login
+supabase link --project-ref your-project-ref
+```
+
+為避免真正的金鑰出現在 shell history，可以用隱藏輸入更新 Secrets：
+
+```bash
+read -s -p "New Gemini key: " NEW_GEMINI_API_KEY; echo
+supabase secrets set GEMINI_API_KEY="$NEW_GEMINI_API_KEY"
+unset NEW_GEMINI_API_KEY
+
+read -s -p "New OpenRouter key: " NEW_OPENROUTER_API_KEY; echo
+supabase secrets set OPENROUTER_API_KEY="$NEW_OPENROUTER_API_KEY"
+unset NEW_OPENROUTER_API_KEY
+
+supabase secrets list
+```
+
+更新 Secret 會直接套用到已部署的 Function，**只換金鑰不需要重新建置 App、重新部署
+Netlify 或重新部署 Function**。確認 AI 回答正常後，再到供應商後台撤銷舊金鑰。
+
+若修改了 `supabase/functions/ai-chat/index.ts`、模型名稱或備援邏輯，才需要重新部署：
+
+```bash
+supabase functions deploy ai-chat
+supabase functions list
+```
+
+本機測試可建立不會提交到 Git 的 `supabase/functions/.env`：
+
+```env
+GEMINI_API_KEY=your-local-gemini-key
+OPENROUTER_API_KEY=your-local-openrouter-key
+```
+
+然後啟動：
+
+```bash
+supabase functions serve ai-chat --env-file supabase/functions/.env
+```
+
+安全規則：
+
+- 不要把真正金鑰寫進 README、`.env.example`、Git、App 程式碼或任何 `EXPO_PUBLIC_*` 變數。
+- `EXPO_PUBLIC_SUPABASE_URL` 與前端 publishable／anon key 可以放在 App；資料安全必須由登入驗證與 RLS 保護。
+- `GEMINI_API_KEY`、`OPENROUTER_API_KEY` 只存在 Supabase Secrets。
+- 若金鑰曾經放在 `EXPO_PUBLIC_*` 並發布過，應視為已曝光並立即輪替。
 
 ### 台股研究訊號與通知
 
@@ -102,13 +180,22 @@ cp .env.example .env
 
 然後編輯 `.env` 檔案，填入以下變數：
 - `EXPO_PUBLIC_SUPABASE_ANON_KEY`: 執行 `supabase start` 後輸出的 `anon key`。
-- `EXPO_PUBLIC_GEMINI_API_KEY`: 您的 Google Gemini API Key（可從 [Google AI Studio](https://aistudio.google.com/app/apikey) 獲取）。
 
 ```env
 EXPO_PUBLIC_SUPABASE_URL=http://localhost:54321
 EXPO_PUBLIC_SUPABASE_ANON_KEY=<from supabase start output>
-EXPO_PUBLIC_GEMINI_API_KEY=<your_gemini_api_key>
 ```
+
+Gemini 與 OpenRouter 金鑰只能存放在 Supabase Edge Function secrets，不可使用
+`EXPO_PUBLIC_*`，否則會被打包進 App 與網頁：
+
+```bash
+supabase secrets set GEMINI_API_KEY="your-gemini-key" OPENROUTER_API_KEY="your-openrouter-key"
+supabase functions deploy ai-chat
+```
+
+AI 對話、個別資產分析與語音轉錄會透過受登入保護的 `ai-chat`
+Edge Function 執行。
 
 ### 4. 啟動
 
@@ -166,6 +253,9 @@ WealthTracker/
 │       ├── AssetDetailScreen.js
 │       └── AddAssetScreen.js
 └── supabase/
+    ├── functions/
+    │   ├── ai-chat/               # AI 對話、資產分析、語音轉錄後端
+    │   └── daily-investment-signals/
     └── migrations/               # 資料庫 Schema
 ```
 
@@ -189,6 +279,11 @@ A: 需要至少兩天的每日快照。新增資產後系統會自動建立快�
 
 **Q: Supabase 無法啟動？**
 A: 確認 Docker Desktop 正在運行，且 54321-54324 埠未被占用。
+
+**Q: AI 顯示「AI 後端暫時無法回應」？**
+A: 先確認使用者仍處於登入狀態，再執行 `supabase functions list` 與
+`supabase secrets list`，確認 `ai-chat` 為 ACTIVE，且存在 `GEMINI_API_KEY`。
+若剛修改 Function 程式碼，重新執行 `supabase functions deploy ai-chat`。
 
 **Q: App 啟動後出現 `TypeError: Cannot read property '...' of undefined` 紅畫面？**
 A: 這通常是依賴版本錯位導致。請嘗試以下步驟徹底重置環境：

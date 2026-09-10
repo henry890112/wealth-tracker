@@ -18,6 +18,7 @@ web-build/
 # Supabase
 supabase/.branches
 supabase/.temp
+supabase/functions/.env
 
 # API Keys
 ESUN_API/

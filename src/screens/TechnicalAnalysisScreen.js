@@ -98,7 +98,7 @@ export default function TechnicalAnalysisScreen({ navigation, route }) {
   const [period, setPeriod] = useState('1Y');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [layers, setLayers] = useState({ ma: true, levels: true, volume: true, macd: true, rsi: true });
+  const [layers, setLayers] = useState({ ma: true, levels: true, volume: true, macd: true, rsi: true, kd: true });
 
   const load = async (forceRefresh = false) => {
     setLoading(true);
@@ -158,7 +158,7 @@ export default function TechnicalAnalysisScreen({ navigation, route }) {
 
       <View style={styles.layerHeader}><Layers3 size={16} color={colors.textSub} /><Text style={[styles.layerTitle, { color: colors.textSub }]}>圖層</Text></View>
       <View style={styles.layerRow}>{[
-        ['ma', 'MA20/60'], ['levels', '支撐壓力'], ['volume', '爆量'], ['macd', 'MACD'], ['rsi', 'RSI14'],
+        ['ma', 'MA20/60'], ['levels', '支撐壓力'], ['volume', '爆量'], ['macd', 'MACD'], ['rsi', 'RSI14'], ['kd', 'KD'],
       ].map(([key, label]) => <TouchableOpacity key={key} style={[styles.layerChip, { backgroundColor: layers[key] ? colors.accentSoft : colors.card, borderColor: layers[key] ? colors.accent : colors.border }]} onPress={() => toggleLayer(key)}><View style={[styles.layerDot, { backgroundColor: layers[key] ? colors.accent : colors.textMuted }]} /><Text style={[styles.layerText, { color: layers[key] ? colors.accent : colors.textSub }]}>{label}</Text></TouchableOpacity>)}</View>
 
       <View style={styles.summaryGrid}>
@@ -177,6 +177,7 @@ export default function TechnicalAnalysisScreen({ navigation, route }) {
         <View style={[styles.ruleBlock, { backgroundColor: colors.cardAlt }]}><Text style={[styles.ruleHeading, { color: colors.accent }]}>趨勢回檔</Text><Text style={[styles.ruleBody, { color: colors.textSub }]}>MA20 與 MA60 同向，價格回測 MA20 約 1.5% 範圍後重新收回，且收盤較前一日轉強／轉弱。</Text></View>
         <View style={[styles.ruleBlock, { backgroundColor: colors.cardAlt }]}><Text style={[styles.ruleHeading, { color: colors.accent }]}>放量突破</Text><Text style={[styles.ruleBody, { color: colors.textSub }]}>收盤突破／跌破前 20 日高低點 0.1%，同時成交量達前 20 日均量 1.5 倍。</Text></View>
         <View style={[styles.ruleBlock, { backgroundColor: colors.cardAlt }]}><Text style={[styles.ruleHeading, { color: colors.accent }]}>RSI 支撐反轉</Text><Text style={[styles.ruleBody, { color: colors.textSub }]}>RSI14 從 30 以下站回且價格接近支撐，形成偏多確認；從 70 以上跌回且接近壓力，形成偏空確認。</Text></View>
+        <View style={[styles.ruleBlock, { backgroundColor: colors.cardAlt }]}><Text style={[styles.ruleHeading, { color: colors.accent }]}>KD（9,3,3）怎麼看？</Text><Text style={[styles.ruleBody, { color: colors.textSub }]}>K 向上穿越 D 稱黃金交叉，向下穿越稱死亡交叉；80 以上為相對高檔、20 以下為相對低檔。KD 目前只作圖層輔助判讀，不會單獨產生進出場確認。</Text></View>
         <Text style={[styles.rulesIntro, { color: colors.textSub }]}>轉折點需等待右側 3 根 K 棒完成才建立背離候選；下列三項必要條件同時成立才會標為確認。</Text>
         <View style={[styles.ruleBlock, { backgroundColor: colors.positiveSoft }]}><Text style={[styles.ruleHeading, { color: colors.positive }]}>偏多確認</Text><Text style={[styles.ruleBody, { color: colors.textSub }]}>突破兩個低點之間的最高價（確認線）＋ MACD 高於 Signal 且柱狀體為正＋收盤站上 MA20。</Text></View>
         <View style={[styles.ruleBlock, { backgroundColor: colors.negativeSoft }]}><Text style={[styles.ruleHeading, { color: colors.negative }]}>偏空確認</Text><Text style={[styles.ruleBody, { color: colors.textSub }]}>跌破兩個高點之間的最低價（確認線）＋ MACD 低於 Signal 且柱狀體為負＋收盤跌破 MA20。</Text></View>
@@ -185,7 +186,7 @@ export default function TechnicalAnalysisScreen({ navigation, route }) {
 
       <View style={[styles.disclaimer, { backgroundColor: colors.accentSoft, borderColor: colors.border }]}><CircleAlert size={16} color={colors.accent} /><Text style={[styles.disclaimerText, { color: colors.textSub }]}>支撐、壓力、背離與策略結果為程式化研究訊號，可能失效或延後確認，不等於買賣建議。</Text></View>
 
-      <TouchableOpacity style={[styles.aiButton, { backgroundColor: colors.accent }]} onPress={askAI}><Bot size={18} color={colors.accentContrast} /><View style={styles.flex}><Text style={[styles.aiTitle, { color: colors.accentContrast }]}>問 AI 解讀這張圖</Text><Text style={[styles.aiSub, { color: colors.accentContrast }]}>帶入價位、量價與 MACD 結果繼續對話</Text></View></TouchableOpacity>
+      <TouchableOpacity style={[styles.aiButton, { backgroundColor: colors.accent }]} onPress={askAI}><Bot size={18} color={colors.accentContrast} /><View style={styles.flex}><Text style={[styles.aiTitle, { color: colors.accentContrast }]}>問 AI 解讀這張圖</Text><Text style={[styles.aiSub, { color: colors.accentContrast }]}>帶入價位、量價、MACD、RSI 與 KD 結果繼續對話</Text></View></TouchableOpacity>
       <View style={{ height: 36 }} />
     </ScrollView>
   );

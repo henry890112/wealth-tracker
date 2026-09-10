@@ -21,6 +21,7 @@ import {
 import { askAI, transcribeAudio } from '../services/ai';
 import { useTheme } from '../lib/ThemeContext';
 import Svg, { Circle } from 'react-native-svg';
+import SharedMarkdownText from '../components/MarkdownText';
 
 const PRIMARY  = '#8B8CF6';
 const GREEN    = '#0DBD8B';
@@ -81,42 +82,6 @@ function TypingDots({ color }) {
           transform: [{ scale: dot.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1] }) }],
         }} />
       ))}
-    </View>
-  );
-}
-
-// ── Inline bold parser ────────────────────────────────────────────────────
-function renderInline(text, color) {
-  const parts = text.split(/(\*\*.*?\*\*)/);
-  if (parts.length === 1) return <Text style={{ color }}>{text}</Text>;
-  return (
-    <Text>
-      {parts.map((p, i) => {
-        if (p.startsWith('**') && p.endsWith('**')) {
-          return <Text key={i} style={{ color, fontWeight: '700' }}>{p.slice(2, -2)}</Text>;
-        }
-        return <Text key={i} style={{ color }}>{p}</Text>;
-      })}
-    </Text>
-  );
-}
-
-// ── Markdown → React Native renderer ─────────────────────────────────────
-function parseTableCells(line) {
-  return line.trim().replace(/^\||\|$/g, '').split('|').map(cell => cell.trim());
-}
-
-function MarkdownTable({ headers, rows, color, colors }) {
-  const columns = Math.max(headers.length, 1);
-  const cellStyle = { width: `${100 / columns}%` };
-  return (
-    <View style={[styles.markdownTable, { borderColor: colors.border }]}>
-      <View style={[styles.markdownTableRow, styles.markdownTableHeader, { backgroundColor: colors.cardAlt }]}>
-        {headers.map((header, index) => <Text key={`${header}-${index}`} style={[styles.markdownTableHeaderText, cellStyle, { color }]}>{header}</Text>)}
-      </View>
-      {rows.map((row, rowIndex) => <View key={`${row.join('-')}-${rowIndex}`} style={[styles.markdownTableRow, { borderTopColor: colors.border }]}>
-        {headers.map((_, columnIndex) => <View key={columnIndex} style={[styles.markdownTableCell, cellStyle]}>{renderInline(row[columnIndex] || '—', color)}</View>)}
-      </View>)}
     </View>
   );
 }
@@ -405,7 +370,7 @@ function MessageBubble({ msg, msgIdx, colors, isDark, onConfirmAction, onCancelA
         {isUser ? (
           <Text style={{ color: textColor, fontSize: 14, lineHeight: 22 }}>{msg.content}</Text>
         ) : (
-          <MarkdownText text={msg.content} color={textColor} colors={colors} />
+          <SharedMarkdownText text={msg.content} color={textColor} colors={colors} />
         )}
         {msg.action && (
           <ActionConfirmCard

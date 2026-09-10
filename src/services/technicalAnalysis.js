@@ -47,6 +47,30 @@ function relativeStrengthIndex(values, period = 14) {
   return result;
 }
 
+function stochasticOscillator(rows, period = 9, smoothing = 3) {
+  const kValues = new Array(rows.length).fill(null);
+  const dValues = new Array(rows.length).fill(null);
+  let previousK = 50;
+  let previousD = 50;
+  const weight = 1 / smoothing;
+
+  for (let index = period - 1; index < rows.length; index += 1) {
+    const window = rows.slice(index - period + 1, index + 1);
+    const lowestLow = Math.min(...window.map(row => row.low));
+    const highestHigh = Math.max(...window.map(row => row.high));
+    const range = highestHigh - lowestLow;
+    const rsv = range > 0 ? ((rows[index].close - lowestLow) / range) * 100 : 50;
+    const k = (previousK * (1 - weight)) + (rsv * weight);
+    const d = (previousD * (1 - weight)) + (k * weight);
+    kValues[index] = k;
+    dValues[index] = d;
+    previousK = k;
+    previousD = d;
+  }
+
+  return { kValues, dValues };
+}
+
 function pivotIndexes(values, type, radius = 3) {
   const indexes = [];
   for (let index = radius; index < values.length - radius; index += 1) {
@@ -372,6 +396,7 @@ export function analyzeTechnicalData(rawRows, displayCount = rawRows.length) {
   const signalValues = ema(macdValues, 9);
   const histogramValues = macdValues.map((value, index) => value - signalValues[index]);
   const rsiValues = relativeStrengthIndex(closes, 14);
+  const { kValues, dValues } = stochasticOscillator(rawRows, 9, 3);
   const enrichedAll = rawRows.map((row, index) => ({
     ...row,
     ma20: ma20Values[index],
@@ -380,6 +405,8 @@ export function analyzeTechnicalData(rawRows, displayCount = rawRows.length) {
     macdSignal: signalValues[index],
     macdHistogram: histogramValues[index],
     rsi: rsiValues[index],
+    k: kValues[index],
+    d: dValues[index],
   }));
   const enriched = enrichedAll.slice(-Math.min(displayCount, enrichedAll.length));
   const latest = enriched.at(-1);
@@ -413,5 +440,5 @@ export function technicalAnalysisPrompt(name, symbol, analysis) {
   const statusLabel = status => ({ confirmed: '已確認', pending: '等待確認', invalidated: '已失效', expired: '候選已逾期', stale: '確認已過期' }[status] || status);
   const divergences = analysis.divergences.length ? analysis.divergences.map(item => `${item.time} ${item.type === 'bullish' ? '看多' : '看空'}背離（${statusLabel(item.status)}，確認線 ${fmt(item.neckline)}${item.confirmationTime ? `，確認日 ${item.confirmationTime}` : ''}）`).join('、') : '近期未偵測到背離候選';
   const strategies = (analysis.strategies || []).map(item => `${item.label}：${item.status === 'confirmed' ? '已確認' : item.status === 'watch' ? '接近成立' : '未成立'}（${item.reason}）`).join('；');
-  return `請解讀 ${name}（${symbol}）的技術圖。資料截至 ${analysis.latest.time}，收盤 ${fmt(analysis.latest.close)}，MA20 ${fmt(analysis.latest.ma20)}，MA60 ${fmt(analysis.latest.ma60)}，RSI14 ${fmt(analysis.latest.rsi)}。支撐區：${supports}。壓力區：${resistances}。爆量：${spikes}。MACD：${divergences}。策略判斷：${strategies}。請分成趨勢、關鍵價位、量價、動能、策略共識、風險與後續觀察；這些訊號只供研究，不要直接給買賣指令。`;
+  return `請解讀 ${name}（${symbol}）的技術圖。資料截至 ${analysis.latest.time}，收盤 ${fmt(analysis.latest.close)}，MA20 ${fmt(analysis.latest.ma20)}，MA60 ${fmt(analysis.latest.ma60)}，RSI14 ${fmt(analysis.latest.rsi)}，KD(9,3,3) K ${fmt(analysis.latest.k)}、D ${fmt(analysis.latest.d)}。支撐區：${supports}。壓力區：${resistances}。爆量：${spikes}。MACD：${divergences}。策略判斷：${strategies}。請分成趨勢、關鍵價位、量價、動能、策略共識、風險與後續觀察；這些訊號只供研究，不要直接給買賣指令。`;
 }

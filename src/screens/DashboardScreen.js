@@ -154,6 +154,7 @@ export default function DashboardScreen() {
   const [categorySnapshots,  setCategorySnapshots]  = useState({});
   const [loadError,          setLoadError]          = useState(null);
   const [hasWatchlist,       setHasWatchlist]       = useState(false);
+  const [selectedPnlMarket,  setSelectedPnlMarket]  = useState('ALL');
   const CONCENTRATION_THRESHOLD = 0.30; // warn when single asset > 30% of portfolio
 
   const lastLoadedRef = useRef(0);
@@ -218,6 +219,14 @@ export default function DashboardScreen() {
         } else if (asset.pnl !== null) {
           ex.pnl = asset.pnl; ex.converted_cost = asset.converted_cost; ex.pnl_pct = asset.pnl_pct;
         }
+        if (Number.isFinite(ex.day_pnl) && Number.isFinite(asset.day_pnl)) {
+          ex.day_pnl += asset.day_pnl;
+          const previousValue = ex.converted_amount - ex.day_pnl;
+          ex.day_pnl_pct = previousValue !== 0 ? (ex.day_pnl / Math.abs(previousValue)) * 100 : null;
+        } else if (Number.isFinite(asset.day_pnl)) {
+          ex.day_pnl = asset.day_pnl;
+          ex.day_pnl_pct = asset.day_pnl_pct;
+        }
       }
     }
     return Array.from(map.values());
@@ -273,12 +282,38 @@ export default function DashboardScreen() {
     return prev === 0 ? null : (monthlyChange / Math.abs(prev)) * 100;
   }, [monthlyChange, netWorth]);
 
-  const unrealizedPnl = useMemo(() => {
-    const invAssets = mergedAssets.filter(a => a.pnl !== null);
-    const gain = invAssets.filter(a => a.pnl > 0).reduce((s, a) => s + a.pnl, 0);
-    const loss = invAssets.filter(a => a.pnl < 0).reduce((s, a) => s + Math.abs(a.pnl), 0);
-    return { gain, loss, net: gain - loss };
+  const pnlMarketOptions = useMemo(() => {
+    const available = [...new Set(mergedAssets
+      .filter(asset => asset.category === 'investment' && asset.market_type)
+      .map(asset => asset.market_type))];
+    return ['ALL', ...['TW', 'US', 'Crypto', 'other'].filter(market => available.includes(market))];
   }, [mergedAssets]);
+
+  useEffect(() => {
+    if (!pnlMarketOptions.includes(selectedPnlMarket)) setSelectedPnlMarket('ALL');
+  }, [pnlMarketOptions, selectedPnlMarket]);
+
+  const investmentPnl = useMemo(() => {
+    const investments = mergedAssets.filter(asset =>
+      asset.category === 'investment' &&
+      (selectedPnlMarket === 'ALL' || (asset.market_type || 'other') === selectedPnlMarket)
+    );
+    const dayAssets = investments.filter(asset => Number.isFinite(asset.day_pnl));
+    const cumulativeAssets = investments.filter(asset => Number.isFinite(asset.pnl));
+    const day = dayAssets.reduce((sum, asset) => sum + asset.day_pnl, 0);
+    const previousValue = dayAssets.reduce((sum, asset) => sum + asset.converted_amount - asset.day_pnl, 0);
+    const cumulative = cumulativeAssets.reduce((sum, asset) => sum + asset.pnl, 0);
+    const cost = cumulativeAssets.reduce((sum, asset) => sum + (asset.converted_cost || 0), 0);
+    return {
+      day,
+      dayPct: previousValue !== 0 ? (day / Math.abs(previousValue)) * 100 : null,
+      hasDay: dayAssets.length > 0,
+      cumulative,
+      cumulativePct: cost > 0 ? (cumulative / cost) * 100 : null,
+      hasCumulative: cumulativeAssets.length > 0,
+      count: investments.length,
+    };
+  }, [mergedAssets, selectedPnlMarket]);
 
   const liquidSparkline     = categorySnapshots['liquid'] || [];
   const investmentSparkline = useMemo(() => {
@@ -356,14 +391,18 @@ export default function DashboardScreen() {
         if (!pd?.price) return null;
         const [valued] = await valueAssets([asset], baseCurrency, { ratesMap, livePrices: priceMap });
         const newAmount = valued.current_amount;
-        if (Math.abs(newAmount - (asset.current_amount || 0)) < 0.001) return null;
-        return { id: asset.id, ...valued };
+        return {
+          id: asset.id,
+          ...valued,
+          _amountChanged: Math.abs(newAmount - (asset.current_amount || 0)) >= 0.001,
+        };
       })
     );
-    const changed = updates.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
-    if (changed.length === 0) return assetsData;
+    const priced = updates.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
+    if (priced.length === 0) return assetsData;
+    const changed = priced.filter(item => item._amountChanged);
     const now = new Date().toISOString();
-    if (userId) {
+    if (userId && changed.length > 0) {
       const persisted = await Promise.all(changed.map(({ id, current_amount }) =>
         supabase
           .from('assets')
@@ -374,7 +413,7 @@ export default function DashboardScreen() {
       const updateError = persisted.find(result => result.error)?.error;
       if (updateError) throw updateError;
     }
-    const map = Object.fromEntries(changed.map(c => [c.id, c]));
+    const map = Object.fromEntries(priced.map(({ _amountChanged, ...item }) => [item.id, item]));
 
     const next = assetsData.map(a => map[a.id] ? { ...a, ...map[a.id] } : a);
     const { netWorth: liveNW } = calculatePortfolioTotals(next);
@@ -593,6 +632,57 @@ export default function DashboardScreen() {
           )}
         </View>
 
+        {/* ── INVESTMENT PNL ───────────────────────────────────────────── */}
+        <View style={[styles.sectionCard, { backgroundColor: C.card, marginHorizontal: 16, marginBottom: 12 }]}>
+          <View style={styles.pnlHeader}>
+            <View>
+              <Text style={[styles.sectionTitle, { color: C.text, marginBottom: 3 }]}>投資損益</Text>
+              <Text style={[styles.pnlSubtitle, { color: C.textMuted }]}>目前報價 · 換算 {currency}</Text>
+            </View>
+            <Text style={[styles.pnlCount, { color: C.textSub }]}>{investmentPnl.count} 檔</Text>
+          </View>
+
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pnlMarketRow}>
+            {pnlMarketOptions.map(market => {
+              const selected = selectedPnlMarket === market;
+              const label = market === 'ALL' ? '全部' : MARKET_TYPE_CONFIG[market]?.label || market;
+              return (
+                <TouchableOpacity
+                  key={market}
+                  style={[styles.pnlMarketChip, { backgroundColor: selected ? primary : C.card, borderColor: selected ? primary : C.border }]}
+                  onPress={() => setSelectedPnlMarket(market)}
+                  activeOpacity={0.75}
+                >
+                  <Text style={[styles.pnlMarketText, { color: selected ? colors.accentContrast : C.textSub }]}>{label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+
+          <View style={[styles.pnlMetrics, { borderTopColor: C.border }]}>
+            <View style={styles.pnlMetric}>
+              <Text style={[styles.pnlMetricLabel, { color: C.textSub }]}>今日損益</Text>
+              <Text style={[styles.pnlMetricValue, { color: investmentPnl.day >= 0 ? colors.positive : colors.negative }]} numberOfLines={1} adjustsFontSizeToFit>
+                {hidden ? '****' : investmentPnl.hasDay ? `${investmentPnl.day >= 0 ? '+' : ''}${fmt(investmentPnl.day)}` : '—'}
+              </Text>
+              <Text style={[styles.pnlMetricPct, { color: investmentPnl.day >= 0 ? colors.positive : colors.negative }]}>
+                {investmentPnl.hasDay && investmentPnl.dayPct !== null ? `${investmentPnl.dayPct >= 0 ? '+' : ''}${investmentPnl.dayPct.toFixed(2)}%` : '尚無今日報價'}
+              </Text>
+            </View>
+            <View style={[styles.pnlMetricDivider, { backgroundColor: C.border }]} />
+            <View style={styles.pnlMetric}>
+              <Text style={[styles.pnlMetricLabel, { color: C.textSub }]}>累積未實現損益</Text>
+              <Text style={[styles.pnlMetricValue, { color: investmentPnl.cumulative >= 0 ? colors.positive : colors.negative }]} numberOfLines={1} adjustsFontSizeToFit>
+                {hidden ? '****' : investmentPnl.hasCumulative ? `${investmentPnl.cumulative >= 0 ? '+' : ''}${fmt(investmentPnl.cumulative)}` : '—'}
+              </Text>
+              <Text style={[styles.pnlMetricPct, { color: investmentPnl.cumulative >= 0 ? colors.positive : colors.negative }]}>
+                {investmentPnl.hasCumulative && investmentPnl.cumulativePct !== null ? `${investmentPnl.cumulativePct >= 0 ? '+' : ''}${investmentPnl.cumulativePct.toFixed(2)}%` : '尚無平均成本'}
+              </Text>
+            </View>
+          </View>
+          <Text style={[styles.pnlFootnote, { color: C.textMuted }]}>今日損益：股票依昨收、加密貨幣依近 24 小時報價估算；累積損益依平均成本計算，不含已實現損益。</Text>
+        </View>
+
         {/* ── ALLOCATION CARD ───────────────────────────────────────────── */}
         <View style={[styles.sectionCard, { backgroundColor: C.card, marginHorizontal: 16, marginBottom: 12 }]}>
           <Text style={[styles.sectionTitle, { color: C.text }]}>資產配置</Text>
@@ -643,14 +733,14 @@ export default function DashboardScreen() {
                 return (
                   <View key={a.id} style={{
                     flexDirection: 'row', alignItems: 'center', gap: 8,
-                    backgroundColor: colors.accentSoft,
+                    backgroundColor: C.card,
                     borderLeftWidth: 3, borderLeftColor: primary,
                     borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8,
                     marginBottom: 6,
                   }}>
                     <Text style={{ fontSize: 14 }}>⚠️</Text>
-                    <Text style={{ fontSize: 13, color: primary, flex: 1 }}>
-                      <Text style={{ fontWeight: '700' }}>{a.name}</Text>
+                    <Text style={{ fontSize: 13, color: C.text, flex: 1 }}>
+                      <Text style={{ fontWeight: '700', color: primary }}>{a.name}</Text>
                       {` 佔總資產 ${pct}%，集中度偏高`}
                     </Text>
                   </View>
@@ -777,34 +867,6 @@ export default function DashboardScreen() {
             <Text style={[styles.liabChange, { color: RED }]}>▼ 0%</Text>
           </View>
         </TouchableOpacity>
-
-        {/* ── UNREALIZED PNL ────────────────────────────────────────────── */}
-        <View style={[styles.sectionCard, { backgroundColor: C.card, marginHorizontal: 16, marginBottom: 14 }]}>
-          <Text style={[styles.sectionTitle, { color: C.text }]}>未實現損益</Text>
-
-          <View style={styles.perfRow}>
-            <Text style={[styles.perfLabel, { color: C.textSub }]}>投資獲利</Text>
-            <Text style={[styles.perfValue, { color: GREEN }]}>
-              {hidden ? '****' : `+${fmt(unrealizedPnl.gain)}`}
-            </Text>
-          </View>
-          <View style={[styles.perfDivider, { backgroundColor: C.border }]} />
-
-          <View style={styles.perfRow}>
-            <Text style={[styles.perfLabel, { color: C.textSub }]}>投資虧損</Text>
-            <Text style={[styles.perfValue, { color: unrealizedPnl.loss > 0 ? RED : C.textSub }]}>
-              {hidden ? '****' : `-${fmt(unrealizedPnl.loss)}`}
-            </Text>
-          </View>
-          <View style={[styles.perfDivider, { backgroundColor: C.border }]} />
-
-          <View style={styles.perfRow}>
-            <Text style={[styles.perfLabel, { color: C.textSub }]}>淨損益</Text>
-            <Text style={[styles.perfValue, { color: unrealizedPnl.net >= 0 ? GREEN : RED }]}>
-              {hidden ? '****' : `${unrealizedPnl.net >= 0 ? '+' : ''}${fmt(unrealizedPnl.net)}`}
-            </Text>
-          </View>
-        </View>
 
         {/* ── FILTER BAR ────────────────────────────────────────────────── */}
         <View style={[styles.filterBar, { backgroundColor: C.card }]}>
@@ -986,6 +1048,15 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8, elevation: 3,
   },
   sectionTitle: { fontSize: 15, fontWeight: '700', marginBottom: 14 },
+  pnlHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 11 },
+  pnlSubtitle: { fontSize: 9 }, pnlCount: { fontSize: 10, fontWeight: '700', marginTop: 2 },
+  pnlMarketRow: { gap: 7, paddingRight: 4, marginBottom: 12 },
+  pnlMarketChip: { minHeight: 31, paddingHorizontal: 12, borderWidth: 1, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  pnlMarketText: { fontSize: 10, fontWeight: '800' },
+  pnlMetrics: { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 13 },
+  pnlMetric: { flex: 1, minWidth: 0 }, pnlMetricDivider: { width: StyleSheet.hairlineWidth, marginHorizontal: 13 },
+  pnlMetricLabel: { fontSize: 10, marginBottom: 6 }, pnlMetricValue: { fontSize: 20, fontWeight: '800', letterSpacing: -0.4 },
+  pnlMetricPct: { fontSize: 10, fontWeight: '700', marginTop: 4 }, pnlFootnote: { fontSize: 8, lineHeight: 13, marginTop: 12 },
 
   // Donut legend
   legendLabel: { fontSize: 13 },

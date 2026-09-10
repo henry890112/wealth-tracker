@@ -130,3 +130,9 @@ entrypoint = "./functions/daily-investment-signals/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/daily-investment-signals/*.html" ]
+
+[functions.ai-chat]
+enabled = true
+verify_jwt = true
+import_map = "./functions/ai-chat/deno.json"
+entrypoint = "./functions/ai-chat/index.ts"

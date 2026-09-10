@@ -26,6 +26,7 @@ import { buildTechnicalsText } from '../services/indicators';
 import { analyzeAsset } from '../services/ai';
 import { useTheme } from '../lib/ThemeContext';
 import TechnicalAnalysisChart from '../components/TechnicalAnalysisChart';
+import MarkdownText from '../components/MarkdownText';
 import { analyzeTechnicalData, fetchMarketTechnicalData } from '../services/technicalAnalysis';
 
 const CATEGORY_LABELS = {
@@ -258,7 +259,7 @@ export default function AssetDetailScreen() {
   const [technicalLoading, setTechnicalLoading] = useState(false);
   const [technicalError, setTechnicalError] = useState(null);
   const [technicalPeriod, setTechnicalPeriod] = useState('6M');
-  const [technicalLayers, setTechnicalLayers] = useState({ ma: true, levels: true, volume: true, macd: false, rsi: false });
+  const [technicalLayers, setTechnicalLayers] = useState({ ma: true, levels: true, volume: true, macd: false, rsi: false, kd: false });
   const [priceTime, setPriceTime] = useState(null);
   const [chipData, setChipData] = useState(null);
   const [marginData, setMarginData] = useState(null);
@@ -838,7 +839,7 @@ export default function AssetDetailScreen() {
             )}
 
             {!aiLoading && aiAnalysis && (
-              <Text style={[aiCardStyles.body, { color: colors.text }]}>{aiAnalysis}</Text>
+              <MarkdownText text={aiAnalysis} color={colors.text} colors={colors} />
             )}
           </View>
         )}
@@ -866,7 +867,7 @@ export default function AssetDetailScreen() {
               return <TouchableOpacity style={[styles.compactSignal, { backgroundColor: colors.cardAlt, borderColor: colors.border }]} onPress={() => navigation.navigate('TechnicalAnalysis', { symbol: asset.symbol, name: asset.name, averageCost: asset.average_cost || 0, marketType: asset.market_type })}><View style={[styles.compactSignalDot, { backgroundColor: signalColor }]} /><View style={{ flex: 1 }}><Text style={[styles.compactSignalTitle, { color: colors.text }]}>{bullish ? '偏多' : '偏空'}背離 · {status}</Text><Text style={[styles.compactSignalMeta, { color: colors.textMuted }]}>確認線 {Number(signal.neckline).toFixed(2)} · 條件 {signal.confirmationScore}/4</Text></View><Text style={[styles.compactSignalLink, { color: PRIMARY }]}>查看規則</Text></TouchableOpacity>;
             })()}
 
-            <View style={[styles.layerControls, { borderTopColor: colors.borderLight }]}>{[['ma', 'MA20/60'], ['levels', '支撐壓力'], ['volume', '成交量'], ['macd', 'MACD'], ['rsi', 'RSI14']].map(([key, label]) => <TouchableOpacity key={key} style={[styles.layerButton, { borderColor: technicalLayers[key] ? PRIMARY : colors.border, backgroundColor: technicalLayers[key] ? colors.accentSoft : colors.cardAlt }]} onPress={() => setTechnicalLayers(current => ({ ...current, [key]: !current[key] }))}><View style={[styles.layerDot, { backgroundColor: technicalLayers[key] ? PRIMARY : colors.textMuted }]} /><Text style={[styles.layerButtonText, { color: technicalLayers[key] ? PRIMARY : colors.textSub }]}>{label}</Text></TouchableOpacity>)}</View>
+            <View style={[styles.layerControls, { borderTopColor: colors.borderLight }]}>{[['ma', 'MA20/60'], ['levels', '支撐壓力'], ['volume', '成交量'], ['macd', 'MACD'], ['rsi', 'RSI14'], ['kd', 'KD']].map(([key, label]) => <TouchableOpacity key={key} style={[styles.layerButton, { borderColor: technicalLayers[key] ? PRIMARY : colors.border, backgroundColor: technicalLayers[key] ? colors.accentSoft : colors.cardAlt }]} onPress={() => setTechnicalLayers(current => ({ ...current, [key]: !current[key] }))}><View style={[styles.layerDot, { backgroundColor: technicalLayers[key] ? PRIMARY : colors.textMuted }]} /><Text style={[styles.layerButtonText, { color: technicalLayers[key] ? PRIMARY : colors.textSub }]}>{label}</Text></TouchableOpacity>)}</View>
           </View>
         )}
 

@@ -1,16 +1,6 @@
-// Google Gemini AI service for WealthTracker
-const GEMINI_API_KEY =
-  process.env.EXPO_PUBLIC_GEMINI_API_KEY || '';
-const OPENROUTER_API_KEY = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY || '';
-const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-
-// Models tried in order — first one that responds wins
-const MODELS = [
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
-];
-const OPENROUTER_MODELS = ['google/gemini-2.5-flash', 'openai/gpt-4o-mini'];
+// AI requests are executed by an authenticated Supabase Edge Function so
+// provider credentials never ship in the Expo or web bundle.
+import { supabase } from '../lib/supabase';
 
 // ── Clean AI response — strip thinking blocks ─────────────────────────────
 function cleanResponse(text) {
@@ -48,44 +38,15 @@ function normalizeChart(chart) {
   };
 }
 
-function extractSources(data) {
-  const chunks = data.candidates?.[0]?.groundingMetadata?.groundingChunks
-    || data.candidates?.[0]?.grounding_metadata?.grounding_chunks
-    || [];
-  const seen = new Set();
-  return chunks
-    .map(chunk => chunk.web || chunk.webSearchResult || null)
-    .filter(source => source?.uri && !seen.has(source.uri) && seen.add(source.uri))
-    .slice(0, 4)
-    .map(source => ({ title: source.title || new URL(source.uri).hostname, uri: source.uri }));
-}
-
-async function askOpenRouter(messages, systemPrompt, maxTokens = 4096, temperature = 0.65) {
-  if (!OPENROUTER_API_KEY) return null;
-  const response = await fetch(OPENROUTER_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      models: OPENROUTER_MODELS,
-      messages: [{ role: 'system', content: systemPrompt }, ...messages.map(message => ({ role: message.role, content: message.content }))],
-      max_tokens: maxTokens,
-      temperature,
-    }),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(`OpenRouter HTTP ${response.status}`);
-  const content = cleanResponse(data.choices?.[0]?.message?.content);
-  if (!content) throw new Error('OpenRouter 空回應');
-  return { content, model: data.model || 'OpenRouter' };
-}
-
-function unavailableMessage(errors) {
-  if (errors.some(error => error.includes(': 429'))) return 'AI 服務目前繁忙，請稍後再試。';
-  if (errors.some(error => error.includes(': 401') || error.includes(': 403'))) return 'AI 服務金鑰設定有誤，請檢查設定後再試。';
-  return 'AI 服務暫時無法回應，請稍後再試。';
+async function invokeAIBackend(body) {
+  const { data, error } = await supabase.functions.invoke('ai-chat', { body });
+  if (error) {
+    const message = String(error.message || 'AI 後端暫時無法回應');
+    if (/401|unauthorized|jwt/i.test(message)) throw new Error('登入已失效，請重新登入後再試。');
+    throw new Error('AI 後端暫時無法回應，請稍後再試。');
+  }
+  if (data?.error) throw new Error(data.error);
+  return data || {};
 }
 
 // ── Build system prompt from portfolio context ────────────────────────────
@@ -202,99 +163,33 @@ function buildSystemPrompt(ctx) {
   return lines.join('\n');
 }
 
-// ── Convert OpenAI-style messages to Gemini contents format ──────────────
-function toGeminiContents(messages) {
-  return messages
-    .filter(m => m.role !== 'system')
-    .map(m => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }],
-    }));
-}
-
 // ── Main AI call ──────────────────────────────────────────────────────────
 export async function askAI(messages, portfolioContext = {}) {
-  if (!GEMINI_API_KEY) throw new Error('Gemini API key 未設定');
-
   const systemPrompt = buildSystemPrompt(portfolioContext);
-  const contents     = toGeminiContents(messages);
-  const lastErrors   = [];
-
-  for (const model of MODELS) {
-    try {
-      const res = await fetch(
-        `${BASE_URL}/${model}:generateContent?key=${GEMINI_API_KEY}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            system_instruction: { parts: [{ text: systemPrompt }] },
-            contents,
-            tools: [{ google_search: {} }],
-            generationConfig: {
-              maxOutputTokens: 4096,
-              temperature: 0.65,
-            },
-          }),
-        }
-      );
-
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        const msg = data.error?.message || `HTTP ${res.status}`;
-        console.warn(`[AI] ${model} failed (${res.status}): ${msg}`);
-        lastErrors.push(`${model}: ${res.status}`);
-        if (res.status === 429) {
-          await new Promise(r => setTimeout(r, 3000)); // wait 3s before next model
-        }
-        continue;
-      }
-
-      const raw     = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      let content   = cleanResponse(raw);
-      if (!content) {
-        console.warn('[AI] empty content from', model, JSON.stringify(data).slice(0, 200));
-        lastErrors.push(`${model}: 回應內容為空`);
-        continue;
-      }
-
-      const actionResult = extractTaggedJson(content, 'action');
-      content = actionResult.content;
-      const action = actionResult.value;
-      const chartResult = extractTaggedJson(content, 'chart');
-      content = chartResult.content;
-      const chart = normalizeChart(chartResult.value);
-      const sources = extractSources(data);
-
-      console.log(`[AI] responded via ${model}${action ? ' [action:' + action.type + ']' : ''}`);
-      return { content, model, action, chart, sources };
-    } catch (e) {
-      if (e.message?.includes('fetch') || e.message?.includes('network')) {
-        throw new Error('無法連線，請檢查網路');
-      }
-      console.warn(`[AI] ${model} error:`, e.message);
-      lastErrors.push(`${model}: ${e.message}`);
-    }
-  }
-
-  try {
-    const fallback = await askOpenRouter(messages, systemPrompt);
-    if (fallback) {
-      const actionResult = extractTaggedJson(fallback.content, 'action');
-      const chartResult = extractTaggedJson(actionResult.content, 'chart');
-      return { content: chartResult.content, model: fallback.model, action: actionResult.value, chart: normalizeChart(chartResult.value), sources: [] };
-    }
-  } catch (error) {
-    console.warn('[AI] OpenRouter fallback failed:', error.message);
-  }
-  throw new Error(unavailableMessage(lastErrors));
+  const result = await invokeAIBackend({
+    mode: 'generate',
+    systemPrompt,
+    messages: messages.map(message => ({ role: message.role, content: message.content })),
+    enableSearch: true,
+    maxTokens: 4096,
+    temperature: 0.65,
+  });
+  let content = cleanResponse(result.content);
+  if (!content) throw new Error('AI 回應內容為空，請稍後再試。');
+  const actionResult = extractTaggedJson(content, 'action');
+  content = actionResult.content;
+  const chartResult = extractTaggedJson(content, 'chart');
+  return {
+    content: chartResult.content,
+    model: result.model || 'AI',
+    action: actionResult.value,
+    chart: normalizeChart(chartResult.value),
+    sources: Array.isArray(result.sources) ? result.sources : [],
+  };
 }
 
 // ── Single-asset AI analysis (news + technicals) ──────────────────────────
 export async function analyzeAsset({ name, symbol, marketType, currentPrice, pnlPct, currency, technicals, news }) {
-  if (!GEMINI_API_KEY) throw new Error('Gemini API key 未設定');
-
   const newsBlock = news?.length > 0
     ? news.map((n, i) =>
         `${i + 1}. [${n.publishedAt}] ${n.title}${n.summary ? ' — ' + n.summary.slice(0, 120) : ''}`
@@ -327,89 +222,23 @@ export async function analyzeAsset({ name, symbol, marketType, currentPrice, pnl
     '請給出：① 技術面（多/空/中性）+ 關鍵依據，② 新聞情緒（正面/負面/中性）+ 一句摘要，③ 一句話結論。',
   ].filter(Boolean).join('\n');
 
-  const contents = [
-    { role: 'user', parts: [{ text: `請分析 ${name}（${symbol}）的近況。` }] },
-  ];
-
-  const lastErrors = [];
-  for (const model of MODELS) {
-    try {
-      const res = await fetch(
-        `${BASE_URL}/${model}:generateContent?key=${GEMINI_API_KEY}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            system_instruction: { parts: [{ text: systemPrompt }] },
-            contents,
-            generationConfig: { maxOutputTokens: 2048, temperature: 0.5 },
-          }),
-        }
-      );
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        lastErrors.push(`${model}: ${res.status}`);
-        if (res.status === 429) await new Promise(r => setTimeout(r, 2000));
-        continue;
-      }
-      const raw     = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      const content = cleanResponse(raw);
-      if (!content) { lastErrors.push(`${model}: 空回應`); continue; }
-      return content;
-    } catch (e) {
-      lastErrors.push(`${model}: ${e.message}`);
-    }
-  }
-  try {
-    const fallback = await askOpenRouter(
-      [{ role: 'user', content: `請分析 ${name}（${symbol}）的近況。` }],
-      systemPrompt,
-      2048,
-      0.5,
-    );
-    if (fallback) return fallback.content;
-  } catch (error) {
-    console.warn('[Asset analysis] OpenRouter fallback failed:', error.message);
-  }
-  throw new Error(unavailableMessage(lastErrors));
+  const result = await invokeAIBackend({
+    mode: 'generate',
+    systemPrompt,
+    messages: [{ role: 'user', content: `請分析 ${name}（${symbol}）的近況。` }],
+    enableSearch: false,
+    maxTokens: 2048,
+    temperature: 0.5,
+  });
+  const content = cleanResponse(result.content);
+  if (!content) throw new Error('AI 回應內容為空，請稍後再試。');
+  return content;
 }
 
 // ── Transcribe audio via Gemini multimodal ────────────────────────────────
 export async function transcribeAudio(base64Audio, mimeType = 'audio/m4a') {
-  if (!GEMINI_API_KEY) throw new Error('Gemini API key 未設定');
-
-  // Multimodal audio works on 2.5-flash and 2.0-flash
-  const audioModels = ['gemini-2.5-flash', 'gemini-2.5-flash-lite'];
-
-  for (const model of audioModels) {
-    try {
-      const res = await fetch(
-        `${BASE_URL}/${model}:generateContent?key=${GEMINI_API_KEY}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{
-              role: 'user',
-              parts: [
-                { text: '請將以下音訊轉錄成繁體中文文字。只輸出轉錄的文字內容，不要任何說明、前綴或解釋。' },
-                { inline_data: { mime_type: mimeType, data: base64Audio } },
-              ],
-            }],
-            generationConfig: { maxOutputTokens: 500, temperature: 0 },
-          }),
-        }
-      );
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        console.warn(`[Transcribe] ${model} failed (${res.status})`);
-        continue;
-      }
-      const text = cleanResponse(data.candidates?.[0]?.content?.parts?.[0]?.text);
-      if (text) return text;
-    } catch (e) {
-      console.warn(`[Transcribe] ${model} error:`, e.message);
-    }
-  }
-  throw new Error('語音辨識失敗，請重試');
+  const result = await invokeAIBackend({ mode: 'transcribe', base64Audio, mimeType });
+  const text = cleanResponse(result.content);
+  if (!text) throw new Error('語音辨識失敗，請重試');
+  return text;
 }

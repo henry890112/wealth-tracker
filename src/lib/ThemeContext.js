@@ -5,6 +5,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const STORAGE_KEY = '@theme_preference';
 
 const THEME_CHART_PALETTES = {
+  systemLight: ['#0066CC', '#0F9D8A', '#38BDF8', '#F59E0B', '#64748B', '#EF4444'],
+  systemDark:  ['#58A6FF', '#2DD4BF', '#38BDF8', '#FBBF24', '#8B949E', '#F87171'],
   light:   ['#8B8CF6', '#38BDF8', '#2DD4BF', '#B8A7FF', '#8092AE', '#CBD5E1'],
   dark:    ['#8B8CF6', '#38BDF8', '#2DD4BF', '#B8A7FF', '#8092AE', '#536177'],
   ocean:   ['#2DD4BF', '#67E8F9', '#5EEAD4', '#A7F3D0', '#64868D', '#94A3B8'],
@@ -21,13 +23,26 @@ const THEME_CHART_PALETTES = {
 };
 
 const ACCENT_CONTRAST = {
+  systemLight: '#FFFFFF', systemDark: '#0D1117',
   light: '#0B1020', dark: '#0B1020', ocean: '#071B24', plum: '#171022',
   amber: '#0F1117', trading: '#0B0E11', sage: '#FFFFFF',
-  matisse2: '#FFFFFF', matisse: '#171719', pissarro: '#172009',
+  matisse2: '#101820', matisse: '#171719', pissarro: '#172009',
   miro: '#101820', mondrian: '#161616', macke: '#171719',
 };
 
 export const COLORS = {
+  systemLight: {
+    bg: '#F5F7FA', card: '#FFFFFF', cardAlt: '#EEF2F6', text: '#101828', textSub: '#475467', textMuted: '#98A2B3',
+    border: '#D0D5DD', borderLight: '#EAECF0', input: '#FFFFFF', inputBorder: '#D0D5DD', header: '#F5F7FA', headerText: '#101828',
+    hotBg: '#EFF6FF', hotBorder: '#93C5FD', tabBg: '#FFFFFF', tabBorder: '#E4E7EC', blurTint: 'light',
+    activePillBg: '#E6F0FB', activePillBorder: '#9CC4EA', accent: '#0066CC',
+  },
+  systemDark: {
+    bg: '#0D1117', card: '#161B22', cardAlt: '#21262D', text: '#F0F6FC', textSub: '#B1BAC4', textMuted: '#6E7681',
+    border: '#30363D', borderLight: '#21262D', input: '#0D1117', inputBorder: '#30363D', header: '#0D1117', headerText: '#F0F6FC',
+    hotBg: '#13233A', hotBorder: '#315F8C', tabBg: '#0D1117', tabBorder: 'rgba(240,246,252,0.12)', blurTint: 'dark',
+    activePillBg: 'rgba(88,166,255,0.16)', activePillBorder: 'rgba(88,166,255,0.44)', accent: '#58A6FF',
+  },
   light: {
     bg:           '#F6F7FF',
     card:         '#ffffff',
@@ -46,8 +61,8 @@ export const COLORS = {
     tabBg:        '#FFFFFF',
     tabBorder:    '#E4E7EC',
     blurTint:     'light',
-    activePillBg: '#8B8CF6',
-    activePillBorder: '#8B8CF6',
+    activePillBg: '#ECECFF',
+    activePillBorder: '#B8B9FF',
     accent:       '#8B8CF6',
   },
   dark: {
@@ -163,7 +178,7 @@ export const COLORS = {
   sage: {
     bg:           '#F2EFE9',
     card:         '#FFFFFF',
-    cardAlt:      '#6B7C5C',
+    cardAlt:      '#E7ECE2',
     text:         '#2C2C2C',
     textSub:      '#7A7A6E',
     textMuted:    '#A89F94',
@@ -186,7 +201,7 @@ export const COLORS = {
     bg: '#121315', card: '#1D1E21', cardAlt: '#292B2F', text: '#F7F7F8', textSub: '#B9BBC2', textMuted: '#777A84',
     border: '#36383E', borderLight: '#292B2F', input: '#18191C', inputBorder: '#36383E', header: '#121315', headerText: '#F7F7F8',
     hotBg: '#1B2442', hotBorder: '#3456D1', tabBg: '#121315', tabBorder: 'rgba(91,87,217,0.24)', blurTint: 'dark',
-    activePillBg: 'rgba(52,86,209,0.20)', activePillBorder: 'rgba(101,162,255,0.55)', accent: '#3456D1',
+    activePillBg: 'rgba(101,162,255,0.16)', activePillBorder: 'rgba(101,162,255,0.55)', accent: '#65A2FF',
   },
   matisse: {
     bg: '#151416', card: '#222124', cardAlt: '#302D32', text: '#FFF9FD', textSub: '#C9BEC8', textMuted: '#857A84',
@@ -221,6 +236,8 @@ export const COLORS = {
 };
 
 const THEME_SEMANTICS = {
+  systemLight: { positive: '#0F9D8A', negative: '#DC3545', warning: '#B7791F' },
+  systemDark:  { positive: '#2DD4BF', negative: '#F87171', warning: '#FBBF24' },
   matisse2: { positive: '#32C85A', negative: '#8A82EE', warning: '#65A2FF' },
   matisse:  { positive: '#14C9C7', negative: '#FF7C5C', warning: '#D6A0EE' },
   pissarro: { positive: '#75C400', negative: '#A9C96D', warning: '#B5E23A' },
@@ -286,7 +303,7 @@ export function ThemeProvider({ children }) {
   const isDark = ['dark', 'ocean', 'plum', 'amber', 'trading', 'matisse2', 'matisse', 'pissarro', 'miro', 'mondrian', 'macke'].includes(preference)
     || (preference === 'system' && systemScheme === 'dark');
   const theme = preference === 'system'
-    ? (systemScheme === 'dark' ? 'dark' : 'light')
+    ? (systemScheme === 'dark' ? 'systemDark' : 'systemLight')
     : preference;
   const colors = buildThemeColors(theme);
 

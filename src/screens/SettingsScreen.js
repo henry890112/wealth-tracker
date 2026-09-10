@@ -28,7 +28,7 @@ const CURRENCIES = [
 ];
 
 const THEME_OPTIONS = [
-  { id: 'system', label: '跟隨系統', Icon: Smartphone, swatches: ['#CBD5E1', '#475569', '#94A3B8'] },
+  { id: 'system', label: '跟隨系統', Icon: Smartphone, swatches: ['#F5F7FA', '#0066CC', '#64748B'] },
   { id: 'light',  label: '晨霧淺色', Icon: Sun,        swatches: ['#F6F7FF', '#8B8CF6', '#38BDF8'] },
   { id: 'dark',   label: '深海極光', Icon: Sparkles,   swatches: ['#0B1020', '#8B8CF6', '#38BDF8'] },
   { id: 'ocean',  label: '深海青綠', Icon: Waves,      swatches: ['#071B24', '#2DD4BF', '#38BDF8'] },

@@ -96,6 +96,21 @@ export const valueAssets = async (
   let convertedCost = null;
   let pnl = null;
   let pnlPct = null;
+  let dayPnl = null;
+  let dayPnlPct = null;
+  const quoteChangePct = Number(quote?.change_percent);
+  if (usesLivePrice && Number.isFinite(quoteChangePct) && quoteChangePct > -100) {
+    const previousClose = quote.price / (1 + quoteChangePct / 100);
+    const nativeDayPnl = toFiniteNumber(asset.current_shares) * (quote.price - previousClose);
+    dayPnl = await convertToBaseCurrency(
+      nativeDayPnl,
+      asset.currency || baseCurrency,
+      baseCurrency,
+      ratesMap,
+    );
+    const previousEquity = convertedAmount - dayPnl;
+    dayPnlPct = previousEquity !== 0 ? (dayPnl / Math.abs(previousEquity)) * 100 : null;
+  }
   if (
     asset.category === INVESTMENT_CATEGORY &&
     toFiniteNumber(asset.current_shares) > 0 &&
@@ -118,6 +133,10 @@ export const valueAssets = async (
     converted_cost: convertedCost,
     pnl,
     pnl_pct: pnlPct,
+    day_pnl: dayPnl,
+    day_pnl_pct: dayPnlPct,
+    live_price: usesLivePrice ? quote.price : null,
+    price_change_pct: Number.isFinite(quoteChangePct) ? quoteChangePct : null,
     price_time: quote?.price_time || asset.price_time || null,
   };
 }));
