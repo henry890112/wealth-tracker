@@ -22,6 +22,8 @@ import AIAnalysisScreen from './src/screens/AIAnalysisScreen';
 import MoreScreen from './src/screens/MoreScreen';
 import EsunSyncScreen from './src/screens/EsunSyncScreen';
 import InvestmentSignalsScreen from './src/screens/InvestmentSignalsScreen';
+import TechnicalAnalysisScreen from './src/screens/TechnicalAnalysisScreen';
+import PortfolioSignalsScreen from './src/screens/PortfolioSignalsScreen';
 
 const Tab = createBottomTabNavigator();
 const DashboardStack = createNativeStackNavigator();
@@ -230,6 +232,8 @@ function MainStackScreen() {
       <MainStack.Screen name="FixedExpenses" component={FixedExpensesScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '固定支出' })} />
       <MainStack.Screen name="EsunSync" component={EsunSyncScreen} options={{ presentation: 'card', animation: 'slide_from_right' }} />
       <MainStack.Screen name="InvestmentSignals" component={InvestmentSignalsScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '研究訊號' })} />
+      <MainStack.Screen name="TechnicalAnalysis" component={TechnicalAnalysisScreen} options={({ navigation, route }) => ({ ...withAI({ navigation }), title: `${route.params?.symbol || ''} 技術分析` })} />
+      <MainStack.Screen name="PortfolioSignals" component={PortfolioSignalsScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '持倉與自選訊號' })} />
       <MainStack.Screen
         name="Settings"
         component={SettingsScreen}

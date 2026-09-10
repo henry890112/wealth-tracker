@@ -430,7 +430,7 @@ function MessageBubble({ msg, msgIdx, colors, isDark, onConfirmAction, onCancelA
   );
 }
 
-export default function AIAnalysisScreen({ navigation }) {
+export default function AIAnalysisScreen({ navigation, route }) {
   const { colors, isDark }  = useTheme();
   const PRIMARY             = colors.accent || '#8B8CF6';
   const insets              = useSafeAreaInsets();
@@ -441,6 +441,7 @@ export default function AIAnalysisScreen({ navigation }) {
   const [isThinking,   setIsThinking]   = useState(false);
   const [portfolio,    setPortfolio]    = useState(null);
   const [loadingCtx,   setLoadingCtx]   = useState(true);
+  const [loadingHistory, setLoadingHistory] = useState(true);
   const [ctxError,     setCtxError]     = useState(null);
   const [showScroll,   setShowScroll]   = useState(false);
   const [recording,    setRecording]    = useState(null);
@@ -474,6 +475,8 @@ export default function AIAnalysisScreen({ navigation }) {
       }
     } catch (e) {
       console.warn('loadSavedMessages:', e.message);
+    } finally {
+      setLoadingHistory(false);
     }
   };
 
@@ -507,19 +510,22 @@ export default function AIAnalysisScreen({ navigation }) {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const [profileRes, assetsRes, expensesRes] = await Promise.all([
+      const [profileRes, assetsRes, expensesRes, signalsRes] = await Promise.all([
         supabase.from('profiles').select('base_currency').eq('id', user.id).single(),
         supabase.from('assets').select('id, name, symbol, category, market_type, current_amount, currency, average_cost, current_shares, leverage').eq('user_id', user.id),
         supabase.from('fixed_expenses').select('amount, currency, frequency').eq('user_id', user.id),
+        supabase.from('investment_signal_events').select('symbol, name, signal_date, score, is_candidate, reasons, risk_flags, metrics, source_as_of').eq('user_id', user.id).order('signal_date', { ascending: false }).limit(60),
       ]);
 
       if (profileRes.error) throw profileRes.error;
       if (assetsRes.error) throw assetsRes.error;
       if (expensesRes.error) throw expensesRes.error;
+      if (signalsRes.error) console.warn('load research signals:', signalsRes.error.message);
 
       const baseCurrency = profileRes.data?.base_currency || 'TWD';
       const assetsData   = assetsRes.data || [];
       const expenses     = expensesRes.data || [];
+      const signalRows   = signalsRes.data || [];
 
       // Fetch exchange rates
       const uniqueCurrencies = [...new Set(assetsData.map(a => a.currency).filter(Boolean))];
@@ -552,6 +558,20 @@ export default function AIAnalysisScreen({ navigation }) {
         }
       }
       const merged = Object.values(consolidatedMap);
+
+      const heldTaiwanSymbols = new Set(
+        merged
+          .filter(asset => asset.category === 'investment' && asset.market_type === 'TW' && asset.current_shares > 0 && asset.symbol)
+          .map(asset => String(asset.symbol).toUpperCase())
+      );
+      const researchSignalDate = signalRows[0]?.signal_date || null;
+      const researchSignals = researchSignalDate
+        ? signalRows.filter(signal => signal.signal_date === researchSignalDate && heldTaiwanSymbols.has(String(signal.symbol).toUpperCase()))
+        : [];
+      const coveredSymbols = new Set(researchSignals.map(signal => String(signal.symbol).toUpperCase()));
+      const researchMissingHoldings = merged
+        .filter(asset => asset.category === 'investment' && asset.market_type === 'TW' && asset.current_shares > 0 && asset.symbol && !coveredSymbols.has(String(asset.symbol).toUpperCase()))
+        .map(asset => ({ name: asset.name, symbol: String(asset.symbol).toUpperCase() }));
 
       const nonLiab = merged.filter(a => a.category !== 'liability');
       const { netWorth } = calculatePortfolioTotals(merged);
@@ -604,6 +624,7 @@ export default function AIAnalysisScreen({ navigation }) {
         netWorth, monthlyChange, monthlyBreakdown,
         assets: merged, currency: baseCurrency,
         fixedExpensesMonthly: fixedExpensesMonthly > 0 ? fixedExpensesMonthly : null,
+        researchSignals, researchSignalDate, researchMissingHoldings,
       });
     } catch (e) {
       console.warn('loadPortfolioContext error:', e);
@@ -646,6 +667,16 @@ export default function AIAnalysisScreen({ navigation }) {
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
     }
   };
+
+  const handledLaunchRef = useRef(null);
+  useEffect(() => {
+    const requestId = route?.params?.aiRequestId;
+    const initialPrompt = route?.params?.initialPrompt;
+    if (!requestId || !initialPrompt || loadingCtx || loadingHistory || isThinking || handledLaunchRef.current === requestId) return;
+    handledLaunchRef.current = requestId;
+    navigation.setParams({ aiRequestId: undefined, initialPrompt: undefined });
+    sendMessage(initialPrompt);
+  }, [route?.params?.aiRequestId, route?.params?.initialPrompt, loadingCtx, loadingHistory, isThinking, portfolio, messages]);
 
   // ── Execute a confirmed action ────────────────────────────────────────────
   const executeAction = async (action) => {

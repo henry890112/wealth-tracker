@@ -124,6 +124,10 @@ function buildSystemPrompt(ctx) {
     nonLiab.forEach(a => {
       let line = `• ${a.name}（${CATEGORY_LABELS[a.category] || a.category}）`;
       line += `  ${fmt(a.converted_amount || 0)} ${cur}`;
+      if (a.category === 'investment' && a.current_shares > 0) {
+        line += `  持有 ${Number(a.current_shares).toLocaleString('zh-TW', { maximumFractionDigits: 4 })} 股`;
+        if (Number(a.average_cost) > 0) line += `  平均成本 ${Number(a.average_cost).toFixed(2)} ${a.currency || cur}`;
+      }
       if (a.pnl_pct != null) {
         const sign = a.pnl_pct >= 0 ? '+' : '';
         line += `  損益 ${sign}${Number(a.pnl_pct).toFixed(1)}%`;
@@ -155,9 +159,30 @@ function buildSystemPrompt(ctx) {
     lines.push(`每月固定支出：${fmt(ctx.fixedExpensesMonthly)} ${cur}`);
   }
 
+  if (ctx.researchSignals?.length > 0) {
+    lines.push('');
+    lines.push('【最新台股研究訊號（僅目前持倉）】');
+    lines.push(`資料日期：${ctx.researchSignalDate || '—'}；70 分以上僅代表值得進一步研究，不是買進建議。`);
+    ctx.researchSignals.forEach(signal => {
+      const metrics = signal.metrics || {};
+      lines.push(`• ${signal.name}（${signal.symbol}）：${Number(signal.score || 0).toFixed(0)} 分，${signal.is_candidate ? '值得研究' : '尚未符合'}`);
+      if (signal.reasons?.length) lines.push(`  已符合：${signal.reasons.join('；')}`);
+      if (signal.risk_flags?.length) lines.push(`  未符合或風險：${signal.risk_flags.join('；')}`);
+      const metricParts = [];
+      if (metrics.per != null && Number.isFinite(Number(metrics.per))) metricParts.push(`本益比 ${Number(metrics.per).toFixed(2)}`);
+      if (metrics.per_p25 != null && Number.isFinite(Number(metrics.per_p25))) metricParts.push(`近三年 PER 25% ${Number(metrics.per_p25).toFixed(2)}`);
+      if (metrics.close != null && Number.isFinite(Number(metrics.close))) metricParts.push(`收盤 ${Number(metrics.close).toFixed(2)}`);
+      if (metricParts.length) lines.push(`  指標：${metricParts.join('；')}`);
+    });
+  }
+  if (ctx.researchMissingHoldings?.length > 0) {
+    lines.push(`同日研究訊號尚未涵蓋：${ctx.researchMissingHoldings.map(item => `${item.name}（${item.symbol}）`).join('、')}。這代表資料缺口，不代表不符合條件。`);
+  }
+
   lines.push('');
   lines.push('════════════════════');
   lines.push('請基於以上資料回答用戶問題。');
+  lines.push('對持倉提出建議時，請區分「已知事實」、「值得觀察」與「下一步」，不要直接下買進或賣出指令，也不要以研究分數單獨決定進出場。');
   lines.push('若問題與財務或投資無直接關聯，仍可提供理財建議與知識。');
   lines.push('若問題涉及最新新聞、即時行情、近期事件或明確要求搜尋，請使用網路搜尋工具，並只根據搜尋結果回答。');
   lines.push('當用戶要求圖表、視覺化、配置比較或趨勢摘要，而且快照中有足夠數據時，在文字回答後加上一個 <chart> JSON 標籤。');

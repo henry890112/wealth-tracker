@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   View,
@@ -19,13 +19,14 @@ import {
 } from 'react-native';
 import { Svg, Polyline, Text as SvgText } from 'react-native-svg';
 import { useRoute, useNavigation } from '@react-navigation/native';
-import { WebView } from 'react-native-webview';
-import { Trash2, Plus, Edit2 } from 'lucide-react-native';
+import { Trash2, Plus, Edit2, BarChart3, Maximize2, RefreshCw } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { convertToBaseCurrency, fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice, fetchTWStockInstitutional, fetchTWStockMargin, fetchTWStockHoldingSharesPer, fetchTWStockMarginUsage, fetchHistoricalPrices, fetchAssetNews } from '../services/api';
 import { buildTechnicalsText } from '../services/indicators';
 import { analyzeAsset } from '../services/ai';
 import { useTheme } from '../lib/ThemeContext';
+import TechnicalAnalysisChart from '../components/TechnicalAnalysisChart';
+import { analyzeTechnicalData, fetchMarketTechnicalData } from '../services/technicalAnalysis';
 
 const CATEGORY_LABELS = {
   liquid: '流動資產',
@@ -59,45 +60,6 @@ const isTWStock = (asset) =>
   asset.market_type === 'TW' ||
   /taiwan/i.test(asset.market_type || '') ||
   /^\d+$/.test(asset.symbol || '');
-
-const getTVSymbol = (asset) => {
-  if (asset.market_type === 'Crypto') {
-    const map = { BTC: 'BINANCE:BTCUSDT', ETH: 'BINANCE:ETHUSDT', SOL: 'BINANCE:SOLUSDT', BNB: 'BINANCE:BNBUSDT' };
-    return map[asset.symbol] || `BINANCE:${asset.symbol}USDT`;
-  }
-  if (isTWStock(asset)) {
-    return `TWSE:${asset.symbol}`;
-  }
-  return asset.symbol;
-};
-
-const getTradingViewHtml = (symbol) => `<!DOCTYPE html>
-<html>
-<head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-<body style="margin:0;padding:0;background:#1a1a2e;">
-<div class="tradingview-widget-container" style="height:400px;width:100%">
-  <div id="tradingview_chart"></div>
-  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-  <script type="text/javascript">
-  new TradingView.widget({
-    "width": "100%",
-    "height": 400,
-    "symbol": "${symbol}",
-    "interval": "D",
-    "timezone": "Asia/Taipei",
-    "theme": "dark",
-    "style": "1",
-    "locale": "zh_TW",
-    "toolbar_bg": "#1a1a2e",
-    "enable_publishing": false,
-    "hide_top_toolbar": false,
-    "save_image": false,
-    "container_id": "tradingview_chart"
-  });
-  </script>
-</div>
-</body>
-</html>`;
 
 // ── 籌碼分析元件 ──────────────────────────────────────────────────────────────
 const BAR_GREEN = '#00C851';
@@ -265,121 +227,6 @@ const chipLineStyles = StyleSheet.create({
   latest: { fontSize: 15, fontWeight: '700' },
 });
 
-const _twStockChartCache = {};
-const TW_CHART_CACHE_TTL = 5 * 60 * 1000;
-
-const fetchTWStockData = async (symbol) => {
-  const now = Date.now();
-  if (_twStockChartCache[symbol] && now - _twStockChartCache[symbol].ts < TW_CHART_CACHE_TTL) {
-    return _twStockChartCache[symbol].data;
-  }
-  try {
-    const startDate = new Date(now - 1095 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const url = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${symbol}&start_date=${startDate}`;
-    const res = await fetch(url);
-    const json = await res.json();
-    if (!json.data || json.data.length === 0) {
-      _twStockChartCache[symbol] = { data: null, ts: now };
-      return null;
-    }
-    const data = json.data
-      .map(d => ({
-        time: d.date,
-        open: d.open,
-        high: d.max,
-        low: d.min,
-        close: d.close,
-      }))
-      .filter(d => d.open && d.close);
-    _twStockChartCache[symbol] = { data, ts: now };
-    return data;
-  } catch (e) {
-    return null;
-  }
-};
-
-const getTWStockHtml = (symbol, data) => {
-  const dataJson = JSON.stringify(data || []);
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: #1a1a2e; font-family: sans-serif; }
-  #tooltip {
-    position: absolute; top: 8px; left: 10px; z-index: 10;
-    background: rgba(30,30,50,0.92); border: 1px solid #3a3a5e;
-    border-radius: 6px; padding: 6px 10px; font-size: 11px; color: #d1d4dc;
-    display: none; pointer-events: none; line-height: 1.6;
-  }
-  #tooltip .date { color: #aaa; font-size: 10px; margin-bottom: 2px; }
-  #tooltip .up { color: #26a69a; }
-  #tooltip .down { color: #ef5350; }
-  #chartWrap { position: relative; }
-  #chart { width: 100%; height: 320px; }
-  #msg { color: #888; text-align: center; padding: 40px 20px; font-size: 14px; }
-</style>
-</head>
-<body>
-<div id="chartWrap">
-  <div id="tooltip"></div>
-  <div id="chart"></div>
-</div>
-<div id="msg" style="display:none">無資料</div>
-<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script>
-const allData = ${dataJson};
-
-if (allData.length > 0) {
-  const chart = LightweightCharts.createChart(document.getElementById('chart'), {
-    width: window.innerWidth,
-    height: 320,
-    layout: { background: { color: '#1a1a2e' }, textColor: '#d1d4dc' },
-    grid: { vertLines: { color: '#2a2a3e' }, horzLines: { color: '#2a2a3e' } },
-    timeScale: { borderColor: '#485c7b' },
-    rightPriceScale: { borderColor: '#485c7b' },
-    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-  });
-
-  const series = chart.addCandlestickSeries({
-    upColor: '#26a69a', downColor: '#ef5350',
-    borderVisible: false,
-    wickUpColor: '#26a69a', wickDownColor: '#ef5350',
-  });
-
-  series.setData(allData);
-  chart.timeScale().fitContent();
-
-  const tooltip = document.getElementById('tooltip');
-  chart.subscribeCrosshairMove(param => {
-    if (!param.time || !param.seriesData || !param.seriesData.get(series)) {
-      tooltip.style.display = 'none';
-      return;
-    }
-    const d = param.seriesData.get(series);
-    const isUp = d.close >= d.open;
-    const color = isUp ? 'up' : 'down';
-    tooltip.innerHTML =
-      '<div class="date">' + param.time + '</div>' +
-      '<span class="' + color + '">' +
-      '開 ' + d.open.toFixed(2) + '　' +
-      '高 ' + d.high.toFixed(2) + '　' +
-      '低 ' + d.low.toFixed(2) + '　' +
-      '收 ' + d.close.toFixed(2) +
-      '</span>';
-    tooltip.style.display = 'block';
-  });
-
-  window.addEventListener('resize', () => chart.applyOptions({ width: window.innerWidth }));
-} else {
-  document.getElementById('msg').style.display = 'block';
-}
-</script>
-</body>
-</html>`;
-};
-
 const todayString = () => new Date().toISOString().split('T')[0];
 
 const formatPriceTime = (isoStr) => {
@@ -407,7 +254,11 @@ export default function AssetDetailScreen() {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [twChartData, setTwChartData] = useState(null);
+  const [technicalRows, setTechnicalRows] = useState([]);
+  const [technicalLoading, setTechnicalLoading] = useState(false);
+  const [technicalError, setTechnicalError] = useState(null);
+  const [technicalPeriod, setTechnicalPeriod] = useState('6M');
+  const [technicalLayers, setTechnicalLayers] = useState({ ma: true, levels: true, volume: true, macd: false, rsi: false });
   const [priceTime, setPriceTime] = useState(null);
   const [chipData, setChipData] = useState(null);
   const [marginData, setMarginData] = useState(null);
@@ -441,11 +292,29 @@ export default function AssetDetailScreen() {
     loadAssetDetails();
   }, [assetId, allIds]);
 
-  useEffect(() => {
-    if (asset && isTWStock(asset) && asset.symbol) {
-      fetchTWStockData(asset.symbol).then(data => setTwChartData(data));
+  const loadTechnicalChart = useCallback(async (forceRefresh = false) => {
+    if (!asset || asset.category !== 'investment' || !asset.symbol || !asset.market_type) return;
+    setTechnicalLoading(true);
+    setTechnicalError(null);
+    try {
+      setTechnicalRows(await fetchMarketTechnicalData(asset.symbol, asset.market_type, 1095, forceRefresh));
+    } catch (error) {
+      setTechnicalRows([]);
+      setTechnicalError(error.message || '暫時無法取得歷史行情');
+    } finally {
+      setTechnicalLoading(false);
     }
-  }, [asset?.id]);
+  }, [asset?.id, asset?.symbol, asset?.market_type]);
+
+  useEffect(() => {
+    loadTechnicalChart();
+  }, [loadTechnicalChart]);
+
+  const technicalAnalysis = useMemo(() => {
+    const count = technicalPeriod === '3M' ? 65 : technicalPeriod === '1Y' ? 260 : 130;
+    const rows = technicalRows.slice(-count);
+    return rows.length >= 60 ? analyzeTechnicalData(technicalRows, rows.length) : null;
+  }, [technicalRows, technicalPeriod]);
 
   // Trigger AI analysis for investment assets with a symbol
   useEffect(() => {
@@ -974,24 +843,30 @@ export default function AssetDetailScreen() {
           </View>
         )}
 
-        {/* Technical Chart (investment assets only) */}
+        {/* Unified technical chart (investment assets only) */}
         {isInvestmentAsset && asset.symbol && asset.market_type && (
-          <View style={[styles.chartSection, { backgroundColor: colors.card }]}>
-            <Text style={[styles.chartTitle, { color: colors.text, borderBottomColor: colors.borderLight }]}>技術圖表</Text>
-            <WebView
-              style={[styles.chartWebView, isTWStock(asset) && { height: 300 }]}
-              source={{ html: isTWStock(asset) ? getTWStockHtml(asset.symbol, twChartData) : getTradingViewHtml(getTVSymbol(asset)) }}
-              javaScriptEnabled={true}
-              domStorageEnabled
-              startInLoadingState
-              originWhitelist={['*']}
-              renderLoading={() => (
-                <View style={styles.chartLoading}>
-                  <ActivityIndicator size="small" color={PRIMARY} />
-                  <Text style={styles.chartLoadingText}>載入圖表中...</Text>
-                </View>
-              )}
-            />
+          <View style={[styles.chartSection, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={[styles.chartTitleRow, { borderBottomColor: colors.borderLight }]}>
+              <View style={styles.chartTitleGroup}><BarChart3 size={18} color={PRIMARY} /><View><Text style={[styles.chartTitle, { color: colors.text }]}>K 線技術圖</Text><Text style={[styles.chartSubtitle, { color: colors.textMuted }]}>日線 · {technicalAnalysis ? `資料截至 ${technicalAnalysis.latest.time}` : '平均成本 · 技術指標'}</Text></View></View>
+              <TouchableOpacity style={[styles.fullChartButton, { borderColor: colors.border }]} onPress={() => navigation.navigate('TechnicalAnalysis', { symbol: asset.symbol, name: asset.name, averageCost: asset.average_cost || 0, marketType: asset.market_type })}><Maximize2 size={15} color={PRIMARY} /><Text style={[styles.fullChartText, { color: PRIMARY }]}>完整分析</Text></TouchableOpacity>
+            </View>
+
+            <View style={styles.chartControls}>
+              <View style={styles.periodControls}>{[['3M', '3月'], ['6M', '6月'], ['1Y', '1年']].map(([key, label]) => <TouchableOpacity key={key} style={[styles.periodButton, { backgroundColor: technicalPeriod === key ? colors.accentSoft : colors.cardAlt, borderColor: technicalPeriod === key ? PRIMARY : colors.border }]} onPress={() => setTechnicalPeriod(key)}><Text style={[styles.periodButtonText, { color: technicalPeriod === key ? PRIMARY : colors.textSub }]}>{label}</Text></TouchableOpacity>)}</View>
+              <TouchableOpacity accessibilityLabel="重新載入技術圖" style={[styles.chartRefresh, { borderColor: colors.border }]} onPress={() => loadTechnicalChart(true)}><RefreshCw size={15} color={colors.textSub} /></TouchableOpacity>
+            </View>
+
+            {technicalLoading ? <View style={styles.chartLoading}><ActivityIndicator size="small" color={PRIMARY} /><Text style={[styles.chartLoadingText, { color: colors.textSub }]}>正在計算 K 線與指標…</Text></View> : technicalError || !technicalAnalysis ? <View style={styles.chartLoading}><Text style={[styles.chartErrorTitle, { color: colors.text }]}>暫時無法顯示 K 線</Text><Text style={[styles.chartLoadingText, { color: colors.textSub }]}>{technicalError || '歷史資料不足'}</Text></View> : <TechnicalAnalysisChart analysis={technicalAnalysis} colors={colors} averageCost={Number(asset.average_cost || 0)} layers={technicalLayers} />}
+
+            {technicalAnalysis?.divergences?.length > 0 && (() => {
+              const signal = technicalAnalysis.divergences.filter(item => item.status === 'confirmed' || item.status === 'pending').at(-1) || technicalAnalysis.divergences.at(-1);
+              const bullish = signal.type === 'bullish';
+              const status = { confirmed: '已確認', pending: '等待確認', invalidated: '已失效', expired: '已逾期', stale: '確認已過期' }[signal.status];
+              const signalColor = signal.status === 'confirmed' ? (bullish ? colors.positive : colors.negative) : signal.status === 'pending' ? colors.warning : colors.textMuted;
+              return <TouchableOpacity style={[styles.compactSignal, { backgroundColor: colors.cardAlt, borderColor: colors.border }]} onPress={() => navigation.navigate('TechnicalAnalysis', { symbol: asset.symbol, name: asset.name, averageCost: asset.average_cost || 0, marketType: asset.market_type })}><View style={[styles.compactSignalDot, { backgroundColor: signalColor }]} /><View style={{ flex: 1 }}><Text style={[styles.compactSignalTitle, { color: colors.text }]}>{bullish ? '偏多' : '偏空'}背離 · {status}</Text><Text style={[styles.compactSignalMeta, { color: colors.textMuted }]}>確認線 {Number(signal.neckline).toFixed(2)} · 條件 {signal.confirmationScore}/4</Text></View><Text style={[styles.compactSignalLink, { color: PRIMARY }]}>查看規則</Text></TouchableOpacity>;
+            })()}
+
+            <View style={[styles.layerControls, { borderTopColor: colors.borderLight }]}>{[['ma', 'MA20/60'], ['levels', '支撐壓力'], ['volume', '成交量'], ['macd', 'MACD'], ['rsi', 'RSI14']].map(([key, label]) => <TouchableOpacity key={key} style={[styles.layerButton, { borderColor: technicalLayers[key] ? PRIMARY : colors.border, backgroundColor: technicalLayers[key] ? colors.accentSoft : colors.cardAlt }]} onPress={() => setTechnicalLayers(current => ({ ...current, [key]: !current[key] }))}><View style={[styles.layerDot, { backgroundColor: technicalLayers[key] ? PRIMARY : colors.textMuted }]} /><Text style={[styles.layerButtonText, { color: technicalLayers[key] ? PRIMARY : colors.textSub }]}>{label}</Text></TouchableOpacity>)}</View>
           </View>
         )}
 
@@ -1406,37 +1281,43 @@ const styles = StyleSheet.create({
   chartSection: {
     marginHorizontal: 16,
     marginBottom: 16,
-    backgroundColor: 'white',
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    borderWidth: 1,
+    borderRadius: 18,
     overflow: 'hidden',
   },
+  chartTitleRow: { minHeight: 66, paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  chartTitleGroup: { flexDirection: 'row', alignItems: 'center', gap: 9, flex: 1 },
   chartTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#18213C',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
+    fontSize: 16,
+    fontWeight: '800',
   },
-  chartWebView: {
-    height: 400,
-  },
+  chartSubtitle: { fontSize: 10, marginTop: 3 },
+  fullChartButton: { minHeight: 34, borderWidth: 1, borderRadius: 11, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 5 },
+  fullChartText: { fontSize: 10, fontWeight: '800' },
+  chartControls: { paddingHorizontal: 12, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  periodControls: { flexDirection: 'row', gap: 6 },
+  periodButton: { minWidth: 47, minHeight: 31, borderWidth: 1, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  periodButtonText: { fontSize: 10, fontWeight: '700' },
+  chartRefresh: { width: 31, height: 31, borderWidth: 1, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   chartLoading: {
-    height: 400,
+    height: 220,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 24,
   },
   chartLoadingText: {
     marginTop: 8,
-    fontSize: 14,
-    color: '#64748b',
+    fontSize: 12,
+    textAlign: 'center',
   },
+  chartErrorTitle: { fontSize: 14, fontWeight: '800' },
+  compactSignal: { marginHorizontal: 11, marginTop: 10, padding: 10, borderWidth: 1, borderRadius: 12, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  compactSignalDot: { width: 8, height: 8, borderRadius: 4 },
+  compactSignalTitle: { fontSize: 11, fontWeight: '800' }, compactSignalMeta: { fontSize: 9, marginTop: 2 }, compactSignalLink: { fontSize: 9, fontWeight: '800' },
+  layerControls: { borderTopWidth: StyleSheet.hairlineWidth, padding: 11, flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  layerButton: { minHeight: 31, borderWidth: 1, borderRadius: 15, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 5 },
+  layerDot: { width: 6, height: 6, borderRadius: 3 },
+  layerButtonText: { fontSize: 10, fontWeight: '700' },
   transactionsSection: {
     marginHorizontal: 16,
     marginBottom: 32,

@@ -153,6 +153,7 @@ export default function DashboardScreen() {
   const [isRefreshing,       setIsRefreshing]       = useState(false);
   const [categorySnapshots,  setCategorySnapshots]  = useState({});
   const [loadError,          setLoadError]          = useState(null);
+  const [hasWatchlist,       setHasWatchlist]       = useState(false);
   const CONCENTRATION_THRESHOLD = 0.30; // warn when single asset > 30% of portfolio
 
   const lastLoadedRef = useRef(0);
@@ -294,6 +295,19 @@ export default function DashboardScreen() {
   // that data-changing work was done (transaction added, currency switched).
   useFocusEffect(useCallback(() => {
     (async () => {
+      const watchlistRaw = await AsyncStorage.getItem('watchlist').catch(() => null);
+      try {
+        const savedWatchlist = JSON.parse(watchlistRaw || '[]');
+        if (watchlistRaw !== null) {
+          setHasWatchlist(Array.isArray(savedWatchlist) && savedWatchlist.length > 0);
+        } else {
+          const { data: { user } } = await supabase.auth.getUser();
+          const { data: cloudWatchlist } = user
+            ? await supabase.from('watchlist').select('id').eq('user_id', user.id).limit(1)
+            : { data: [] };
+          setHasWatchlist((cloudWatchlist || []).length > 0);
+        }
+      } catch { setHasWatchlist(false); }
       const needsRefresh = await AsyncStorage.getItem('@wt_needs_refresh');
       if (needsRefresh === '1') {
         await AsyncStorage.removeItem('@wt_needs_refresh');
@@ -831,6 +845,14 @@ export default function DashboardScreen() {
           )}
         </View>
 
+        {(hasWatchlist || mergedAssets.some(asset => asset.category === 'investment' && asset.symbol && asset.current_shares > 0)) && (
+          <TouchableOpacity style={[styles.holdingSignalsButton, { backgroundColor: C.card, borderColor: colors.accent }]} onPress={() => navigation.navigate('PortfolioSignals')} activeOpacity={0.78}>
+            <View style={[styles.holdingSignalsIcon, { backgroundColor: colors.accentSoft }]}><TrendingUp size={17} color={primary} /></View>
+            <View style={{ flex: 1 }}><Text style={[styles.holdingSignalsTitle, { color: C.text }]}>查看持倉與自選進出場訊號</Text><Text style={[styles.holdingSignalsSub, { color: C.textMuted }]}>多策略、多週期與市場分類分析</Text></View>
+            <Text style={[styles.holdingSignalsArrow, { color: primary }]}>›</Text>
+          </TouchableOpacity>
+        )}
+
         {/* ── ASSET LIST ────────────────────────────────────────────────── */}
         {sortedFilteredAssets.length > 0 ? (
           (() => {
@@ -1025,6 +1047,9 @@ const styles = StyleSheet.create({
   updateRow:       { flexDirection: 'row', alignItems: 'center', marginHorizontal: 20, marginTop: 6, marginBottom: 4, gap: 6 },
   updateTime:      { fontSize: 11 },
   refreshingText:  { fontSize: 11 },
+  holdingSignalsButton: { marginHorizontal: 16, marginTop: 7, marginBottom: 7, minHeight: 58, borderWidth: 1, borderRadius: 14, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  holdingSignalsIcon: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  holdingSignalsTitle: { fontSize: 13, fontWeight: '800' }, holdingSignalsSub: { fontSize: 9, marginTop: 3 }, holdingSignalsArrow: { fontSize: 25, fontWeight: '500' },
 
   // Asset list
   groupHeader: {

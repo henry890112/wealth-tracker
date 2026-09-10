@@ -7,7 +7,9 @@ import { supabase } from '../lib/supabase';
 const WATCHLIST_KEY = 'watchlist';
 const DEFAULT_PREFERENCES = {
   enabled: true,
-  push_enabled: true,
+  // Remote push is opt-in. Personal Team iOS builds do not include the APNs
+  // entitlement, so it must not appear enabled before device registration.
+  push_enabled: false,
   strategy: 'value_trend_v1',
   max_symbols: 50,
 };
@@ -65,7 +67,19 @@ export async function getSignalPreferences() {
 
 export async function saveSignalPreferences(changes) {
   const user = await currentUser();
-  const payload = { user_id: user.id, ...DEFAULT_PREFERENCES, ...changes, updated_at: new Date().toISOString() };
+  const { data: existing, error: readError } = await supabase
+    .from('investment_signal_preferences')
+    .select('*')
+    .eq('user_id', user.id)
+    .maybeSingle();
+  if (readError) throw readError;
+  const payload = {
+    ...DEFAULT_PREFERENCES,
+    ...existing,
+    ...changes,
+    user_id: user.id,
+    updated_at: new Date().toISOString(),
+  };
   const { data, error } = await supabase
     .from('investment_signal_preferences')
     .upsert(payload, { onConflict: 'user_id' })
@@ -85,6 +99,21 @@ export async function listInvestmentSignals(limit = 60) {
     .order('is_candidate', { ascending: false })
     .order('score', { ascending: false })
     .limit(limit);
+  if (error) throw error;
+  return data || [];
+}
+
+/** Return only signed-in user's Taiwan equity positions with a positive share balance. */
+export async function listTaiwanSignalHoldings() {
+  const user = await currentUser();
+  const { data, error } = await supabase
+    .from('assets')
+    .select('id, name, symbol, current_shares, average_cost, current_amount, currency')
+    .eq('user_id', user.id)
+    .eq('category', 'investment')
+    .eq('market_type', 'TW')
+    .not('symbol', 'is', null)
+    .gt('current_shares', 0);
   if (error) throw error;
   return data || [];
 }
@@ -132,8 +161,22 @@ export async function registerSignalPushDevice() {
   if (status !== 'granted') return { registered: false, reason: 'permission' };
 
   const projectId = Constants.expoConfig?.extra?.eas?.projectId;
-  if (!projectId) throw new Error('找不到 Expo 專案設定，無法註冊推播裝置。');
-  const tokenResult = await Notifications.getExpoPushTokenAsync({ projectId });
+  if (!projectId) return { registered: false, reason: 'configuration' };
+
+  let tokenResult;
+  try {
+    tokenResult = await Notifications.getExpoPushTokenAsync({ projectId });
+  } catch (error) {
+    const message = `${error?.message || error || ''}`;
+    if (/aps-environment/i.test(message)) {
+      return { registered: false, reason: 'apns-entitlement' };
+    }
+    return {
+      registered: false,
+      reason: 'token',
+      message: '目前無法取得推播裝置識別碼，請確認網路或稍後再試。',
+    };
+  }
   const user = await currentUser();
   const { error } = await supabase
     .from('push_devices')
