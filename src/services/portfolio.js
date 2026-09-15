@@ -8,6 +8,14 @@ import {
 const INVESTMENT_CATEGORY = 'investment';
 const LIABILITY_CATEGORY = 'liability';
 
+export const getAssetCurrency = (asset, fallbackCurrency) => {
+  if (asset?.category === INVESTMENT_CATEGORY) {
+    if (asset.market_type === 'US' || asset.market_type === 'Crypto') return 'USD';
+    if (asset.market_type === 'TW') return 'TWD';
+  }
+  return asset?.currency || fallbackCurrency;
+};
+
 export const toFiniteNumber = (value, fallback = 0) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -86,9 +94,10 @@ export const valueAssets = async (
   const currentAmount = usesLivePrice
     ? calculateInvestmentEquity(asset, quote.price)
     : toFiniteNumber(asset.current_amount);
+  const assetCurrency = getAssetCurrency(asset, baseCurrency);
   const convertedAmount = await convertToBaseCurrency(
     currentAmount,
-    asset.currency || baseCurrency,
+    assetCurrency,
     baseCurrency,
     ratesMap,
   );
@@ -104,7 +113,7 @@ export const valueAssets = async (
     const nativeDayPnl = toFiniteNumber(asset.current_shares) * (quote.price - previousClose);
     dayPnl = await convertToBaseCurrency(
       nativeDayPnl,
-      asset.currency || baseCurrency,
+      assetCurrency,
       baseCurrency,
       ratesMap,
     );
@@ -118,7 +127,7 @@ export const valueAssets = async (
   ) {
     convertedCost = await convertToBaseCurrency(
       calculateInvestmentCostBasis(asset),
-      asset.currency || baseCurrency,
+      assetCurrency,
       baseCurrency,
       ratesMap,
     );

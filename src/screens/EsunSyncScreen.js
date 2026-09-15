@@ -96,15 +96,41 @@ export default function EsunSyncScreen({ navigation }) {
     setSyncing(true);
     setLoadError('');
     try {
-      const [holdings, balance] = await Promise.all([fetchEsunHoldings(), fetchEsunBalance()]);
-      setHoldings(holdings);
-      setBalance(balance);
-      Alert.alert('玉山資料已更新', `已讀取 ${holdings.length} 筆玉山持倉與帳務餘額；可在下方查看目前損益。`);
+      const [holdingsResult, balanceResult] = await Promise.allSettled([
+        fetchEsunHoldings(),
+        fetchEsunBalance(),
+      ]);
+      const holdingsUpdated = holdingsResult.status === 'fulfilled';
+      const balanceUpdated = balanceResult.status === 'fulfilled';
+
+      if (!holdingsUpdated && !balanceUpdated) {
+        const holdingsMessage = holdingsResult.reason?.message || '無法讀取持倉';
+        const balanceMessage = balanceResult.reason?.message || '無法讀取帳務餘額';
+        throw new Error(`持倉：${holdingsMessage}\n餘額：${balanceMessage}`);
+      }
+
+      if (holdingsUpdated) setHoldings(holdingsResult.value);
+      if (balanceUpdated) setBalance(balanceResult.value);
+
+      const warnings = [];
+      if (!holdingsUpdated) warnings.push(`持倉未更新：${holdingsResult.reason?.message || '請稍後再試'}`);
+      if (!balanceUpdated) warnings.push(`帳務餘額未更新：${balanceResult.reason?.message || '請稍後再試'}`);
+
+      if (warnings.length) {
+        const successMessage = holdingsUpdated
+          ? `已讀取 ${holdingsResult.value.length} 筆玉山持倉。`
+          : '帳務餘額已更新。';
+        const warningMessage = `${successMessage}\n\n${warnings.join('\n')}`;
+        setLoadError(warningMessage);
+        Alert.alert('部分資料已更新', warningMessage);
+      } else {
+        Alert.alert('玉山資料已更新', `已讀取 ${holdingsResult.value.length} 筆玉山持倉與帳務餘額；可在下方查看目前損益。`);
+      }
     } catch (error) {
       console.error('E.Sun preview error:', error);
       const message = error.message || '請確認本機橋接服務已啟動';
       setLoadError(message);
-      Alert.alert('無法讀取玉山持倉', message);
+      Alert.alert('無法讀取玉山資料', message);
     } finally {
       setSyncing(false);
     }
@@ -180,9 +206,9 @@ export default function EsunSyncScreen({ navigation }) {
       </TouchableOpacity>
 
       {!!loadError && <View style={styles.errorBox}>
-        <Text style={styles.errorTitle}>無法讀取玉山庫存</Text>
+        <Text style={styles.errorTitle}>部分玉山資料未更新</Text>
         <Text style={styles.errorText}>{loadError}</Text>
-        <Text style={styles.errorHint}>請在 Mac 終端機執行：cd ~/WealthTracker/esun-bridge && npm start</Text>
+        <Text style={styles.errorHint}>若持倉與餘額都失敗，請確認 Mac 上的唯讀橋接服務已啟動；若只有餘額失敗，仍可先同步持倉。</Text>
       </View>}
 
       {!!balance && <View style={[styles.balanceCard, { backgroundColor: colors.card, borderColor: colors.border }]}>

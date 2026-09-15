@@ -12,6 +12,8 @@ const CACHE_DURATION = 60 * 1000;
 // Avoids a Supabase round-trip when the same price is requested again within
 // the same session.  Key: `${symbol}::${marketType}`, value: { data, timestamp }
 const _priceMemCache = new Map();
+// Last known Supabase quote used only when the live provider is unavailable.
+const _priceStaleCache = new Map();
 // In-flight promise cache: if two callers request the same symbol concurrently,
 // the second one waits on the same Promise instead of firing a duplicate query.
 const _priceInflight = new Map();
@@ -178,6 +180,8 @@ export const fetchTWStockPrice = async (symbol) => {
 
     throw new Error('No data available');
   } catch (error) {
+    const stale = getStaleCachedPrice(symbol, 'TW');
+    if (stale) return stale;
     console.error('Error fetching TW stock price:', error);
     throw error;
   }
@@ -202,10 +206,15 @@ export const fetchUSStockPrice = async (symbol) => {
         const data = await res.json();
         const quote = data?.quoteResponse?.result?.[0];
         if (quote?.regularMarketPrice) {
+          const stale = getStaleCachedPrice(symbol, 'US');
           const priceData = {
             symbol,
             price: quote.regularMarketPrice,
-            change_percent: quote.regularMarketChangePercent ?? 0,
+            change_percent: quote.regularMarketChangePercent
+              ?? (stale?.change_percent ?? calculateChangePercent(
+                quote.regularMarketPreviousClose ?? quote.previousClose,
+                quote.regularMarketPrice,
+              )),
             volume: quote.regularMarketVolume ?? 0,
             market_type: 'US',
             price_time: quote.regularMarketTime
@@ -248,6 +257,8 @@ export const fetchUSStockPrice = async (symbol) => {
 
     throw new Error('No data available');
   } catch (error) {
+    const stale = getStaleCachedPrice(symbol, 'US');
+    if (stale) return stale;
     console.error('Error fetching US stock price:', error);
     throw error;
   }
@@ -346,6 +357,8 @@ export const fetchCryptoPrice = async (symbol) => {
     console.warn(`fetchCryptoPrice: no data found for ${symbol}`);
     return null;
   } catch (error) {
+    const stale = getStaleCachedPrice(symbol.toUpperCase(), 'Crypto');
+    if (stale) return stale;
     console.warn('fetchCryptoPrice error (non-fatal):', error?.message || error);
     return null;
   }
@@ -390,10 +403,15 @@ export const fetchUSStockPriceBatch = async (symbols) => {
       const quotes = data?.quoteResponse?.result ?? [];
       for (const quote of quotes) {
         if (!quote?.regularMarketPrice) continue;
+        const stale = getStaleCachedPrice(quote.symbol, 'US');
         const priceData = {
           symbol: quote.symbol,
           price: quote.regularMarketPrice,
-          change_percent: quote.regularMarketChangePercent ?? 0,
+          change_percent: quote.regularMarketChangePercent
+            ?? (stale?.change_percent ?? calculateChangePercent(
+              quote.regularMarketPreviousClose ?? quote.previousClose,
+              quote.regularMarketPrice,
+            )),
           volume: quote.regularMarketVolume ?? 0,
           market_type: 'US',
           price_time: quote.regularMarketTime
@@ -611,10 +629,19 @@ export const fetchBOTRatesForFX = async () => {
  * Fallback: fetch exchange rate from exchangerate-api.com.
  */
 const fetchExchangeRateFallback = async (fromCurrency, toCurrency) => {
-  const response = await fetch(`https://api.exchangerate-api.com/v4/latest/${fromCurrency}`);
-  const data = await response.json();
-  if (data.rates && data.rates[toCurrency]) return data.rates[toCurrency];
-  throw new Error(`exchangerate-api rate not found for ${fromCurrency}→${toCurrency}`);
+  const providers = [
+    `https://api.exchangerate-api.com/v4/latest/${fromCurrency}`,
+    `https://open.er-api.com/v6/latest/${fromCurrency}`,
+  ];
+  for (const url of providers) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) continue;
+      const data = await response.json();
+      if (data.rates && data.rates[toCurrency]) return data.rates[toCurrency];
+    } catch { /* try the next provider */ }
+  }
+  throw new Error(`exchange rate not found for ${fromCurrency}→${toCurrency}`);
 };
 
 /**
@@ -622,6 +649,7 @@ const fetchExchangeRateFallback = async (fromCurrency, toCurrency) => {
  * Falls back to exchangerate-api.com for currencies not in BOT (e.g. KRW).
  */
 export const fetchExchangeRate = async (fromCurrency, toCurrency) => {
+  let cachedRate = null;
   try {
     const { data: cached } = await supabase
       .from('exchange_rates')
@@ -630,9 +658,8 @@ export const fetchExchangeRate = async (fromCurrency, toCurrency) => {
       .eq('to_currency', toCurrency)
       .single();
 
-    if (cached && isRecentCache(cached.updated_at)) {
-      return parseFloat(cached.rate);
-    }
+    const parsedCachedRate = parseFloat(cached?.rate);
+    if (Number.isFinite(parsedCachedRate) && parsedCachedRate > 0) cachedRate = parsedCachedRate;
 
     let rate;
     if (fromCurrency === toCurrency) {
@@ -682,6 +709,10 @@ export const fetchExchangeRate = async (fromCurrency, toCurrency) => {
 
     return rate;
   } catch (error) {
+    if (cachedRate != null) {
+      console.warn(`Using cached exchange rate for ${fromCurrency}→${toCurrency}`);
+      return cachedRate;
+    }
     console.error('Error fetching exchange rate:', error);
     throw error;
   }
@@ -1100,9 +1131,9 @@ export const fetchHistoricalPrices = async (symbol, marketType, days = 90) => {
 };
 
 /**
- * 三大法人買賣超（最近 5 個交易日）
+ * 三大法人買賣超（最近 20 個交易日）
  * Dataset: TaiwanStockInstitutionalInvestors
- * Returns { dates, foreign, trust, dealer } 各陣列長度 ≤ 5，按日期升序
+ * Returns { dates, foreign, trust, dealer, dealerSelf, dealerHedging } 各陣列長度 ≤ 20，按日期升序
  */
 export const fetchTWStockInstitutional = async (symbol, startDate) => {
   try {
@@ -1114,20 +1145,23 @@ export const fetchTWStockInstitutional = async (symbol, startDate) => {
     const byDate = {};
     for (const row of json.data) {
       const d = row.date;
-      if (!byDate[d]) byDate[d] = { foreign: 0, trust: 0, dealer: 0 };
+      if (!byDate[d]) byDate[d] = { foreign: 0, trust: 0, dealer: 0, dealerSelf: 0, dealerHedging: 0 };
       const name = row.name || '';
       const diff = (row.buy - row.sell) / 1000; // 張 = 千股
       if (name === 'Foreign_Investor' || name === 'Foreign_Dealer_Self') byDate[d].foreign += diff;
       else if (name === 'Investment_Trust') byDate[d].trust += diff;
-      else if (name === 'Dealer_self' || name === 'Dealer_Hedging') byDate[d].dealer += diff;
+      else if (name === 'Dealer_self') { byDate[d].dealerSelf += diff; byDate[d].dealer += diff; }
+      else if (name === 'Dealer_Hedging') { byDate[d].dealerHedging += diff; byDate[d].dealer += diff; }
     }
 
-    const sortedDates = Object.keys(byDate).sort().slice(-5);
+    const sortedDates = Object.keys(byDate).sort().slice(-20);
     return {
       dates: sortedDates,
       foreign: sortedDates.map(d => byDate[d].foreign),
       trust: sortedDates.map(d => byDate[d].trust),
       dealer: sortedDates.map(d => byDate[d].dealer),
+      dealerSelf: sortedDates.map(d => byDate[d].dealerSelf),
+      dealerHedging: sortedDates.map(d => byDate[d].dealerHedging),
     };
   } catch (e) {
     return null;
@@ -1250,11 +1284,9 @@ export const fetchExchangeRatesBatch = async (currencies, baseCurrency) => {
       .in('from_currency', unique)
       .eq('to_currency', baseCurrency);
 
-    const nowMs = Date.now();
     for (const row of cached || []) {
-      if ((nowMs - new Date(row.updated_at).getTime()) < CACHE_DURATION) {
-        ratesMap[row.from_currency] = parseFloat(row.rate);
-      }
+      const rate = parseFloat(row.rate);
+      if (Number.isFinite(rate) && rate > 0) ratesMap[row.from_currency] = rate;
     }
   } catch { /* proceed to fetch */ }
 
@@ -1369,6 +1401,14 @@ const getCachedPrice = async (symbol, marketType) => {
         _priceMemCache.set(memKey, { data: priceData, timestamp: Date.now() });
         return priceData;
       }
+      _priceStaleCache.set(memKey, {
+        symbol: data.symbol,
+        price: parseFloat(data.price),
+        change_percent: parseFloat(data.change_percent),
+        volume: parseFloat(data.volume),
+        market_type: data.market_type,
+        price_time: data.updated_at,
+      });
       return null;
     } catch {
       return null;
@@ -1381,11 +1421,15 @@ const getCachedPrice = async (symbol, marketType) => {
   return promise;
 };
 
+const getStaleCachedPrice = (symbol, marketType) =>
+  _priceStaleCache.get(`${symbol}::${marketType}`) || null;
+
 const cachePrice = async (priceData) => {
   try {
     // Fix 5: write to L1 in-memory cache immediately (no round-trip needed)
     const memKey = `${priceData.symbol}::${priceData.market_type}`;
     _priceMemCache.set(memKey, { data: priceData, timestamp: Date.now() });
+    _priceStaleCache.delete(memKey);
 
     await supabase
       .from('price_cache')

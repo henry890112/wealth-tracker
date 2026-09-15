@@ -21,13 +21,14 @@ import { Svg, Polyline, Text as SvgText } from 'react-native-svg';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { Trash2, Plus, Edit2, BarChart3, Maximize2, RefreshCw } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
-import { convertToBaseCurrency, fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice, fetchTWStockInstitutional, fetchTWStockMargin, fetchTWStockHoldingSharesPer, fetchTWStockMarginUsage, fetchHistoricalPrices, fetchAssetNews } from '../services/api';
+import { convertToBaseCurrency, fetchExchangeRatesBatch, fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice, fetchTWStockInstitutional, fetchTWStockMargin, fetchTWStockHoldingSharesPer, fetchTWStockMarginUsage, fetchHistoricalPrices, fetchAssetNews } from '../services/api';
 import { buildTechnicalsText } from '../services/indicators';
 import { analyzeAsset } from '../services/ai';
+import { getAssetCurrency } from '../services/portfolio';
 import { useTheme } from '../lib/ThemeContext';
 import TechnicalAnalysisChart from '../components/TechnicalAnalysisChart';
 import MarkdownText from '../components/MarkdownText';
-import { analyzeTechnicalData, fetchMarketTechnicalData } from '../services/technicalAnalysis';
+import { analyzeTechnicalData, fetchMarketTechnicalContext } from '../services/technicalAnalysis';
 
 const CATEGORY_LABELS = {
   liquid: '流動資產',
@@ -63,9 +64,6 @@ const isTWStock = (asset) =>
   /^\d+$/.test(asset.symbol || '');
 
 // ── 籌碼分析元件 ──────────────────────────────────────────────────────────────
-const BAR_GREEN = '#00C851';
-const BAR_RED = '#F03030';
-
 const InstitutionalSection = ({ chipData, marginData, loading, colors }) => {
   const cardBg = colors?.card || '#1e2235';
   const textPrimary = colors?.text || '#f1f5f9';
@@ -92,11 +90,11 @@ const InstitutionalSection = ({ chipData, marginData, loading, colors }) => {
   const rows = chipData ? [
     { label: '外資', values: chipData.foreign },
     { label: '投信', values: chipData.trust },
-    { label: '自營', values: chipData.dealer },
+    { label: '自營', values: chipData.dealerSelf || chipData.dealer },
   ] : [];
 
   const sum = (arr) => arr.reduce((a, b) => a + b, 0);
-  const sums = rows.map(r => sum(r.values));
+  const sums = rows.map(r => sum(r.values.slice(-5)));
   const maxAbs = Math.max(...sums.map(Math.abs), 1);
 
   const latestDate = chipData?.dates?.[chipData.dates.length - 1] || marginData?.date || '';
@@ -110,11 +108,20 @@ const InstitutionalSection = ({ chipData, marginData, loading, colors }) => {
 
       {chipData && (
         <>
-          <Text style={[instStyles.subTitle, { color: textSecondary }]}>三大法人買賣超（最近5日加總）</Text>
+          <Text style={[instStyles.subTitle, { color: textSecondary }]}>法人方向（外資＋投信，單位：張）</Text>
+          <View style={instStyles.periodRow}>
+            {[1, 3, 5, 20].map(days => {
+              const combined = [...(chipData.foreign || [])].map((value, index) => Number(value || 0) + Number(chipData.trust?.[index] || 0));
+              const total = combined.slice(-days).reduce((sumValue, value) => sumValue + value, 0);
+              const directionColor = total > 0 ? colors.positive : total < 0 ? colors.negative : textSecondary;
+              return <View key={days} style={[instStyles.periodCell, { backgroundColor: colors.cardAlt, borderColor: colors.borderLight }]}><Text style={[instStyles.periodLabel, { color: textSecondary }]}>{days} 日</Text><Text style={[instStyles.periodValue, { color: directionColor }]}>{total > 0 ? '+' : ''}{Math.round(total).toLocaleString()}</Text></View>;
+            })}
+          </View>
+          <Text style={[instStyles.subTitle, { color: textSecondary }]}>最近 5 日分項加總</Text>
           {rows.map((row, i) => {
             const total = sums[i];
             const isPos = total >= 0;
-            const barColor = isPos ? BAR_GREEN : BAR_RED;
+            const barColor = isPos ? colors.positive : colors.negative;
             const barFrac = Math.abs(total) / maxAbs;
             const sign = isPos ? '+' : '';
             return (
@@ -129,6 +136,7 @@ const InstitutionalSection = ({ chipData, marginData, loading, colors }) => {
               </View>
             );
           })}
+          {chipData.dealerHedging && <Text style={[instStyles.hedgingNote, { color: textSecondary }]}>自營商數字僅含自行買賣；避險部位另計，不作多空方向確認。</Text>}
         </>
       )}
 
@@ -158,11 +166,16 @@ const instStyles = StyleSheet.create({
   sectionTitle: { fontSize: 16, fontWeight: '600' },
   dateText: { fontSize: 12 },
   subTitle: { fontSize: 12, marginBottom: 10 },
+  periodRow: { flexDirection: 'row', gap: 7, marginBottom: 14 },
+  periodCell: { flex: 1, borderWidth: 1, borderRadius: 10, paddingVertical: 8, paddingHorizontal: 9 },
+  periodLabel: { fontSize: 10 },
+  periodValue: { fontSize: 13, fontWeight: '800', marginTop: 3 },
   barRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   barLabel: { width: 32, fontSize: 13 },
   barTrack: { flex: 1, height: 10, backgroundColor: 'rgba(255,255,255,0.07)', borderRadius: 5, marginHorizontal: 8, overflow: 'hidden' },
   barFill: { height: 10, borderRadius: 5 },
   barValue: { width: 90, textAlign: 'right', fontSize: 12, fontWeight: '500' },
+  hedgingNote: { fontSize: 10, lineHeight: 15, marginTop: 4 },
   marginRow: { flexDirection: 'row', marginTop: 14, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(255,255,255,0.1)' },
   marginCell: { flex: 1, alignItems: 'center' },
   marginLabel: { fontSize: 11, marginBottom: 4 },
@@ -256,10 +269,12 @@ export default function AssetDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [technicalRows, setTechnicalRows] = useState([]);
+  const [technicalContext, setTechnicalContext] = useState({ institutional: [], marketType: 'TW' });
   const [technicalLoading, setTechnicalLoading] = useState(false);
   const [technicalError, setTechnicalError] = useState(null);
   const [technicalPeriod, setTechnicalPeriod] = useState('6M');
-  const [technicalLayers, setTechnicalLayers] = useState({ ma: true, levels: true, volume: true, macd: false, rsi: false, kd: false });
+  const [technicalStrategy, setTechnicalStrategy] = useState('divergence');
+  const [technicalLayers, setTechnicalLayers] = useState({ ma: true, levels: true, volume: true, volumeProfile: true, macd: false, rsi: false, kd: false });
   const [priceTime, setPriceTime] = useState(null);
   const [chipData, setChipData] = useState(null);
   const [marginData, setMarginData] = useState(null);
@@ -298,7 +313,9 @@ export default function AssetDetailScreen() {
     setTechnicalLoading(true);
     setTechnicalError(null);
     try {
-      setTechnicalRows(await fetchMarketTechnicalData(asset.symbol, asset.market_type, 1095, forceRefresh));
+      const context = await fetchMarketTechnicalContext(asset.symbol, asset.market_type, 1095, forceRefresh);
+      setTechnicalRows(context.rows);
+      setTechnicalContext(context);
     } catch (error) {
       setTechnicalRows([]);
       setTechnicalError(error.message || '暫時無法取得歷史行情');
@@ -314,8 +331,8 @@ export default function AssetDetailScreen() {
   const technicalAnalysis = useMemo(() => {
     const count = technicalPeriod === '3M' ? 65 : technicalPeriod === '1Y' ? 260 : 130;
     const rows = technicalRows.slice(-count);
-    return rows.length >= 60 ? analyzeTechnicalData(technicalRows, rows.length) : null;
-  }, [technicalRows, technicalPeriod]);
+    return rows.length >= 60 ? analyzeTechnicalData(technicalRows, rows.length, technicalContext) : null;
+  }, [technicalRows, technicalPeriod, technicalContext]);
 
   // Trigger AI analysis for investment assets with a symbol
   useEffect(() => {
@@ -357,10 +374,11 @@ export default function AssetDetailScreen() {
     if (!asset || !isTWStock(asset) || !asset.symbol) return;
     setChipLoading(true);
     const startDate20 = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const startDate45 = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const startDate90 = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const startDate180 = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     Promise.all([
-      fetchTWStockInstitutional(asset.symbol, startDate20),
+      fetchTWStockInstitutional(asset.symbol, startDate45),
       fetchTWStockMargin(asset.symbol, startDate20),
       fetchTWStockHoldingSharesPer(asset.symbol, startDate180),
       fetchTWStockMarginUsage(asset.symbol, startDate90),
@@ -398,12 +416,14 @@ export default function AssetDetailScreen() {
 
       const primaryAsset = allAssetsData.find(a => a.id === assetId) || allAssetsData[0];
       const baseCurrency = profileData?.base_currency || 'TWD';
+      const assetCurrencies = [...new Set(allAssetsData.map(a => getAssetCurrency(a, baseCurrency)).filter(Boolean))];
+      const ratesMap = await fetchExchangeRatesBatch(assetCurrencies, baseCurrency);
 
       // Aggregate converted amount across all merged assets
       let totalConverted = 0;
       for (const a of allAssetsData) {
         try {
-          const c = await convertToBaseCurrency(parseFloat(a.current_amount), a.currency, baseCurrency);
+          const c = await convertToBaseCurrency(parseFloat(a.current_amount), getAssetCurrency(a, baseCurrency), baseCurrency, ratesMap);
           totalConverted += c;
         } catch {
           totalConverted += parseFloat(a.current_amount) || 0;
@@ -438,7 +458,7 @@ export default function AssetDetailScreen() {
       let costBasisInBase = costBasisRaw;
       if (costBasisRaw > 0) {
         try {
-          costBasisInBase = await convertToBaseCurrency(costBasisRaw, primaryAsset.currency, baseCurrency);
+          costBasisInBase = await convertToBaseCurrency(costBasisRaw, getAssetCurrency(primaryAsset, baseCurrency), baseCurrency, ratesMap);
         } catch {
           costBasisInBase = costBasisRaw;
         }
@@ -470,7 +490,7 @@ export default function AssetDetailScreen() {
               const lev2 = primaryAsset.leverage || 1;
               const borrowed = totalShares * (avgCost || 0) * (lev2 - 1) / lev2;
               const liveAmount = priceData.price * totalShares - borrowed;
-              const liveConverted = await convertToBaseCurrency(liveAmount, primaryAsset.currency, baseCurrency);
+              const liveConverted = await convertToBaseCurrency(liveAmount, getAssetCurrency(primaryAsset, baseCurrency), baseCurrency, ratesMap);
               if (fetchId !== livePriceFetchIdRef.current) return;
               setAsset(prev => prev ? { ...prev, converted_amount: liveConverted } : prev);
             }
@@ -849,7 +869,7 @@ export default function AssetDetailScreen() {
           <View style={[styles.chartSection, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={[styles.chartTitleRow, { borderBottomColor: colors.borderLight }]}>
               <View style={styles.chartTitleGroup}><BarChart3 size={18} color={PRIMARY} /><View><Text style={[styles.chartTitle, { color: colors.text }]}>K 線技術圖</Text><Text style={[styles.chartSubtitle, { color: colors.textMuted }]}>日線 · {technicalAnalysis ? `資料截至 ${technicalAnalysis.latest.time}` : '平均成本 · 技術指標'}</Text></View></View>
-              <TouchableOpacity style={[styles.fullChartButton, { borderColor: colors.border }]} onPress={() => navigation.navigate('TechnicalAnalysis', { symbol: asset.symbol, name: asset.name, averageCost: asset.average_cost || 0, marketType: asset.market_type })}><Maximize2 size={15} color={PRIMARY} /><Text style={[styles.fullChartText, { color: PRIMARY }]}>完整分析</Text></TouchableOpacity>
+              <TouchableOpacity style={[styles.fullChartButton, { borderColor: colors.border }]} onPress={() => navigation.navigate('TechnicalAnalysis', { symbol: asset.symbol, name: asset.name, averageCost: asset.average_cost || 0, marketType: asset.market_type, strategyKey: technicalStrategy })}><Maximize2 size={15} color={PRIMARY} /><Text style={[styles.fullChartText, { color: PRIMARY }]}>完整分析</Text></TouchableOpacity>
             </View>
 
             <View style={styles.chartControls}>
@@ -857,17 +877,33 @@ export default function AssetDetailScreen() {
               <TouchableOpacity accessibilityLabel="重新載入技術圖" style={[styles.chartRefresh, { borderColor: colors.border }]} onPress={() => loadTechnicalChart(true)}><RefreshCw size={15} color={colors.textSub} /></TouchableOpacity>
             </View>
 
-            {technicalLoading ? <View style={styles.chartLoading}><ActivityIndicator size="small" color={PRIMARY} /><Text style={[styles.chartLoadingText, { color: colors.textSub }]}>正在計算 K 線與指標…</Text></View> : technicalError || !technicalAnalysis ? <View style={styles.chartLoading}><Text style={[styles.chartErrorTitle, { color: colors.text }]}>暫時無法顯示 K 線</Text><Text style={[styles.chartLoadingText, { color: colors.textSub }]}>{technicalError || '歷史資料不足'}</Text></View> : <TechnicalAnalysisChart analysis={technicalAnalysis} colors={colors} averageCost={Number(asset.average_cost || 0)} layers={technicalLayers} />}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.strategyControls}>{[
+              ['divergence', 'MACD 背離'], ['pullback', '趨勢回檔'], ['breakout', '放量突破'], ['rsi', 'RSI 反轉'], ['boundary', '雙軌邊界'], ['smc', 'SMC'],
+            ].map(([key, label]) => <TouchableOpacity key={key} style={[styles.layerButton, { borderColor: technicalStrategy === key ? PRIMARY : colors.border, backgroundColor: technicalStrategy === key ? colors.accentSoft : colors.cardAlt }]} onPress={() => {
+              setTechnicalStrategy(key);
+              setTechnicalLayers(current => ({
+                ...current,
+                ma: key === 'divergence' || key === 'pullback' || key === 'boundary',
+                volume: key === 'breakout' || key === 'boundary' || key === 'smc',
+                macd: key === 'divergence' || key === 'boundary',
+                rsi: key === 'rsi',
+                kd: key === 'boundary',
+                levels: key === 'divergence' || key === 'rsi',
+                volumeProfile: current.volumeProfile,
+              }));
+            }}><Text style={[styles.layerButtonText, { color: technicalStrategy === key ? PRIMARY : colors.textSub }]}>{label}</Text></TouchableOpacity>)}</ScrollView>
 
-            {technicalAnalysis?.divergences?.length > 0 && (() => {
-              const signal = technicalAnalysis.divergences.filter(item => item.status === 'confirmed' || item.status === 'pending').at(-1) || technicalAnalysis.divergences.at(-1);
-              const bullish = signal.type === 'bullish';
-              const status = { confirmed: '已確認', pending: '等待確認', invalidated: '已失效', expired: '已逾期', stale: '確認已過期' }[signal.status];
-              const signalColor = signal.status === 'confirmed' ? (bullish ? colors.positive : colors.negative) : signal.status === 'pending' ? colors.warning : colors.textMuted;
-              return <TouchableOpacity style={[styles.compactSignal, { backgroundColor: colors.cardAlt, borderColor: colors.border }]} onPress={() => navigation.navigate('TechnicalAnalysis', { symbol: asset.symbol, name: asset.name, averageCost: asset.average_cost || 0, marketType: asset.market_type })}><View style={[styles.compactSignalDot, { backgroundColor: signalColor }]} /><View style={{ flex: 1 }}><Text style={[styles.compactSignalTitle, { color: colors.text }]}>{bullish ? '偏多' : '偏空'}背離 · {status}</Text><Text style={[styles.compactSignalMeta, { color: colors.textMuted }]}>確認線 {Number(signal.neckline).toFixed(2)} · 條件 {signal.confirmationScore}/4</Text></View><Text style={[styles.compactSignalLink, { color: PRIMARY }]}>查看規則</Text></TouchableOpacity>;
+            {technicalLoading ? <View style={styles.chartLoading}><ActivityIndicator size="small" color={PRIMARY} /><Text style={[styles.chartLoadingText, { color: colors.textSub }]}>正在計算 K 線與指標…</Text></View> : technicalError || !technicalAnalysis ? <View style={styles.chartLoading}><Text style={[styles.chartErrorTitle, { color: colors.text }]}>暫時無法顯示 K 線</Text><Text style={[styles.chartLoadingText, { color: colors.textSub }]}>{technicalError || '歷史資料不足'}</Text></View> : <TechnicalAnalysisChart analysis={technicalAnalysis} colors={colors} averageCost={Number(asset.average_cost || 0)} layers={technicalLayers} selectedStrategy={technicalStrategy} liveQuote={technicalContext.quote} />}
+
+            {technicalAnalysis && (() => {
+              const strategy = technicalAnalysis.strategies?.find(item => item.key === technicalStrategy);
+              if (!strategy) return null;
+              const status = strategy.status === 'confirmed' ? '已確認' : strategy.status === 'watch' ? '等待確認' : '未成立';
+              const signalColor = strategy.status === 'confirmed' ? (strategy.direction === 'bearish' ? colors.negative : colors.positive) : strategy.status === 'watch' ? colors.warning : colors.textMuted;
+              return <TouchableOpacity style={[styles.compactSignal, { backgroundColor: colors.cardAlt, borderColor: colors.border }]} onPress={() => navigation.navigate('TechnicalAnalysis', { symbol: asset.symbol, name: asset.name, averageCost: asset.average_cost || 0, marketType: asset.market_type, strategyKey: technicalStrategy })}><View style={[styles.compactSignalDot, { backgroundColor: signalColor }]} /><View style={{ flex: 1 }}><Text style={[styles.compactSignalTitle, { color: colors.text }]}>{strategy.label} · {status}</Text><Text style={[styles.compactSignalMeta, { color: colors.textMuted }]}>{strategy.reason}</Text></View><Text style={[styles.compactSignalLink, { color: PRIMARY }]}>查看規則</Text></TouchableOpacity>;
             })()}
 
-            <View style={[styles.layerControls, { borderTopColor: colors.borderLight }]}>{[['ma', 'MA20/60'], ['levels', '支撐壓力'], ['volume', '成交量'], ['macd', 'MACD'], ['rsi', 'RSI14'], ['kd', 'KD']].map(([key, label]) => <TouchableOpacity key={key} style={[styles.layerButton, { borderColor: technicalLayers[key] ? PRIMARY : colors.border, backgroundColor: technicalLayers[key] ? colors.accentSoft : colors.cardAlt }]} onPress={() => setTechnicalLayers(current => ({ ...current, [key]: !current[key] }))}><View style={[styles.layerDot, { backgroundColor: technicalLayers[key] ? PRIMARY : colors.textMuted }]} /><Text style={[styles.layerButtonText, { color: technicalLayers[key] ? PRIMARY : colors.textSub }]}>{label}</Text></TouchableOpacity>)}</View>
+            <View style={[styles.layerControls, { borderTopColor: colors.borderLight }]}>{[['ma', 'MA20/60'], ['levels', '支撐壓力'], ['volume', '成交量'], ['volumeProfile', '量價分佈'], ['macd', 'MACD'], ['rsi', 'RSI14'], ['kd', 'KD']].map(([key, label]) => <TouchableOpacity key={key} style={[styles.layerButton, { borderColor: technicalLayers[key] ? PRIMARY : colors.border, backgroundColor: technicalLayers[key] ? colors.accentSoft : colors.cardAlt }]} onPress={() => setTechnicalLayers(current => ({ ...current, [key]: !current[key] }))}><View style={[styles.layerDot, { backgroundColor: technicalLayers[key] ? PRIMARY : colors.textMuted }]} /><Text style={[styles.layerButtonText, { color: technicalLayers[key] ? PRIMARY : colors.textSub }]}>{label}</Text></TouchableOpacity>)}</View>
           </View>
         )}
 
@@ -1296,6 +1332,7 @@ const styles = StyleSheet.create({
   fullChartButton: { minHeight: 34, borderWidth: 1, borderRadius: 11, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 5 },
   fullChartText: { fontSize: 10, fontWeight: '800' },
   chartControls: { paddingHorizontal: 12, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  strategyControls: { paddingHorizontal: 12, paddingBottom: 9, gap: 7 },
   periodControls: { flexDirection: 'row', gap: 6 },
   periodButton: { minWidth: 47, minHeight: 31, borderWidth: 1, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   periodButtonText: { fontSize: 10, fontWeight: '700' },

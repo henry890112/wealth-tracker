@@ -14,6 +14,7 @@ import {
   calculatePortfolioTotals,
   fetchLiveAssetPrices,
   getLiveQuote,
+  getAssetCurrency,
   groupSnapshotTotals,
   valueAssets,
 } from '../services/portfolio';
@@ -298,11 +299,15 @@ export default function DashboardScreen() {
       asset.category === 'investment' &&
       (selectedPnlMarket === 'ALL' || (asset.market_type || 'other') === selectedPnlMarket)
     );
-    const dayAssets = investments.filter(asset => Number.isFinite(asset.day_pnl));
-    const cumulativeAssets = investments.filter(asset => Number.isFinite(asset.pnl));
-    const day = dayAssets.reduce((sum, asset) => sum + asset.day_pnl, 0);
-    const previousValue = dayAssets.reduce((sum, asset) => sum + asset.converted_amount - asset.day_pnl, 0);
-    const cumulative = cumulativeAssets.reduce((sum, asset) => sum + asset.pnl, 0);
+    const dayAssets = investments
+      .map(asset => ({ ...asset, _dayPnl: Number(asset.day_pnl) }))
+      .filter(asset => Number.isFinite(asset._dayPnl));
+    const cumulativeAssets = investments
+      .map(asset => ({ ...asset, _pnl: Number(asset.pnl) }))
+      .filter(asset => Number.isFinite(asset._pnl));
+    const day = dayAssets.reduce((sum, asset) => sum + asset._dayPnl, 0);
+    const previousValue = dayAssets.reduce((sum, asset) => sum + Number(asset.converted_amount) - asset._dayPnl, 0);
+    const cumulative = cumulativeAssets.reduce((sum, asset) => sum + asset._pnl, 0);
     const cost = cumulativeAssets.reduce((sum, asset) => sum + (asset.converted_cost || 0), 0);
     return {
       day,
@@ -451,7 +456,7 @@ export default function DashboardScreen() {
       if (error) throw error;
 
       const baseCurrency     = profileData?.base_currency || 'TWD';
-      const uniqueCurrencies = [...new Set(assetsData.map(a => a.currency).filter(Boolean))];
+      const uniqueCurrencies = [...new Set(assetsData.map(a => getAssetCurrency(a, baseCurrency)).filter(Boolean))];
       const ratesMap         = await fetchExchangeRatesBatch(uniqueCurrencies, baseCurrency);
 
       const converted = await valueAssets(assetsData, baseCurrency, { ratesMap });

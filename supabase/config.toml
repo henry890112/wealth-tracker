@@ -136,3 +136,24 @@ enabled = true
 verify_jwt = true
 import_map = "./functions/ai-chat/deno.json"
 entrypoint = "./functions/ai-chat/index.ts"
+
+[functions.market-history]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/market-history/index.ts"
+
+[functions.signal-notifications]
+enabled = true
+# LINE webhooks and scheduled calls authenticate with provider signatures or a
+# dedicated cron secret; signed-in app calls are checked inside the function.
+verify_jwt = false
+import_map = "./functions/signal-notifications/deno.json"
+entrypoint = "./functions/signal-notifications/index.ts"
+
+[functions.market-event-notifications]
+enabled = true
+# Preview calls validate the signed-in user in code; scheduled calls use the
+# dedicated cron secret shared with the existing notification scheduler.
+verify_jwt = false
+import_map = "./functions/market-event-notifications/deno.json"
+entrypoint = "./functions/market-event-notifications/index.ts"

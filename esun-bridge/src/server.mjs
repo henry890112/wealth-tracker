@@ -173,8 +173,12 @@ http.createServer(async (req, res) => {
     const holdings = await getHoldings();
     return respond(req, res, 200, { provider: 'esun', fetchedAt: new Date().toISOString(), holdings });
   } catch (error) {
-    console.error('E.Sun read-only sync failed:', error.message);
-    return respond(req, res, 502, { error: 'Unable to read E.Sun holdings. Check the local SDK login and configuration.' });
+    const resource = url.pathname === '/v1/balance' ? 'balance' : 'holdings';
+    console.error(`E.Sun read-only ${resource} sync failed:`, error.message);
+    const message = resource === 'balance'
+      ? '無法讀取玉山帳務餘額；模擬環境或目前帳戶可能不提供此查詢，持倉仍可獨立更新。'
+      : '無法讀取玉山持倉；請確認本機 SDK 登入、憑證與設定。';
+    return respond(req, res, 502, { error: message, resource });
   }
 }).listen(port, host, () => {
   console.log(`E.Sun read-only bridge listening on http://${host}:${port}`);

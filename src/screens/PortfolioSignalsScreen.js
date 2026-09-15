@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BarChart3, ChevronRight, CircleAlert, RefreshCw, ShieldCheck } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/ThemeContext';
-import { analyzeTechnicalData, fetchMarketTechnicalData } from '../services/technicalAnalysis';
+import { analyzeTechnicalData, fetchMarketTechnicalContext } from '../services/technicalAnalysis';
 
 const STATUS_LABELS = {
   bullish_ready: '偏多已確認',
@@ -27,24 +27,47 @@ const STATUS_ORDER = {
 };
 
 const format = value => Number(value || 0).toLocaleString('zh-TW', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const compactShares = value => {
+  const amount = Number(value || 0);
+  const absolute = Math.abs(amount);
+  const formatted = absolute >= 1000000 ? `${(absolute / 1000000).toFixed(1)}M` : absolute >= 1000 ? `${(absolute / 1000).toFixed(1)}K` : absolute.toFixed(0);
+  return `${amount > 0 ? '+' : amount < 0 ? '−' : ''}${formatted}`;
+};
 
-const MARKET_LABELS = { WATCHLIST: '自選', TW: '台股', US: '美股', CRYPTO: '加密貨幣' };
+function quoteClock(value, market) {
+  if (!value) return '';
+  try {
+    return new Intl.DateTimeFormat('zh-TW', {
+      timeZone: market === 'TW' ? 'Asia/Taipei' : market === 'US' ? 'America/New_York' : 'UTC',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(new Date(value));
+  } catch {
+    return '';
+  }
+}
+
+const MARKET_LABELS = { TW: '台股', US: '美股', CRYPTO: '加密貨幣' };
 const STRATEGY_FILTERS = [
   { key: 'ALL', label: '綜合策略' },
   { key: 'divergence', label: 'MACD 背離' },
   { key: 'pullback', label: '趨勢回檔' },
   { key: 'breakout', label: '放量突破' },
   { key: 'rsi', label: 'RSI 反轉' },
+  { key: 'boundary', label: '雙軌邊界' },
+  { key: 'smc', label: 'SMC' },
 ];
+const STRATEGY_LABELS = Object.fromEntries(STRATEGY_FILTERS.filter(item => item.key !== 'ALL').map(item => [item.key, item.label]));
 
 const STRATEGY_RULES = {
   ALL: {
     title: '綜合策略怎麼判斷？',
-    intro: '四項策略各自判斷，再以已確認訊號優先形成目前方向。',
+    intro: '不是六項投票；必須依序通過趨勢、進場路線、量能與相對強弱。',
     lines: [
-      'MACD 背離：使用 1 年趨勢、6 個月型態與 3 個月觸發。',
-      '趨勢回檔、放量突破及 RSI 反轉：依最新日 K 獨立判斷。',
-      '多空策略同時確認會標示「方向分歧」；全部未成立則顯示原因，不強制給訊號。',
+      '趨勢：Close > SMA200，且 EMA20 > EMA50；未通過就不做多。',
+      '進場：放量突破（HH20、RVOL > 1.2、ADX14 > 18）或 5 日內回檔 EMA20 後與 RSI50 同步站回。',
+      '量能：CMF20 > 0 或 OBV 近 5 日斜率向上。',
+      '相對強弱：台股對加權、美股對 QQQ、加密貨幣對 BTC；BTC 看自身 SMA50。',
+      'MACD 是風險警告，雙軌邊界與 SMC 是結構輔助，不再用成立項目數決定買進。',
     ],
   },
   divergence: {
@@ -81,6 +104,26 @@ const STRATEGY_RULES = {
       '偏多：RSI14 從 30 以下重新站回 30，且價格位於最近支撐區附近。',
       '偏空：RSI14 從 70 以上跌回 70，且價格位於最近壓力區附近。',
       '觀察：RSI 接近 35／65 且靠近關鍵區，但尚未完成穿越確認。',
+    ],
+  },
+  boundary: {
+    title: '雙軌邊界怎麼判斷？',
+    intro: '只研究自動上下邊界附近的反轉或突破回踩，中軸附近不建立訊號。',
+    lines: [
+      '下邊界：日 K 刺破後收回並留下長下影，且 KD 低檔黃金交叉或 MACD 柱翻正。',
+      '上邊界：收盤突破且量能至少 1.2 倍，買盤確認後等待十個交易日內完成回踩。',
+      '台股以外資／投信確認；美股與加密貨幣以 CMF20 為正、OBV 五日走升替代。',
+      '風險超過 3%、跌破停損或逾期時不列為確認；日 K 訊號只在收盤資料更新後成立。',
+    ],
+  },
+  smc: {
+    title: 'SMC 智慧資金怎麼判斷？',
+    intro: '依序劃流動性池、分折溢價、辨識 Sweep／CHoCH，再等待 FVG／OB 回踩。',
+    lines: [
+      'BSL／SSL：以已確認的顯著高低點與密集測試區建立；兩者中點為 EQ 50%。',
+      'Sweep：折價區刺破 SSL 收回，或溢價區刺破 BSL 收回，並出現長影線。',
+      'CHoCH：大實體 K 棒收破最近內部結構，形成 FVG 或找到突破前最後一根反向 OB，等待回踩才確認。',
+      '股票需有相對量與大盤同向；預估 R:R 未達 2.5，或位於 EQ 無人區，只列觀察或不成立。',
     ],
   },
 };
@@ -177,11 +220,11 @@ function isActionable(state) {
   return state?.key?.endsWith('_confirmed') || state?.key?.endsWith('_pending');
 }
 
-function buildMultiHorizon(rows) {
+function buildMultiHorizon(rows, context) {
   const periods = {
-    short: analyzeTechnicalData(rows, Math.min(65, rows.length)),
-    medium: analyzeTechnicalData(rows, Math.min(130, rows.length)),
-    long: analyzeTechnicalData(rows, Math.min(260, rows.length)),
+    short: analyzeTechnicalData(rows, Math.min(65, rows.length), context),
+    medium: analyzeTechnicalData(rows, Math.min(130, rows.length), context),
+    long: analyzeTechnicalData(rows, Math.min(260, rows.length), context),
   };
   const trend = trendState(periods.long);
   const setup = latestSignalState(periods.medium);
@@ -273,19 +316,96 @@ function strategyDisplayState(item, strategyFilter) {
     };
   }
 
-  const confirmed = strategies.filter(strategy => strategy.status === 'confirmed');
-  const watching = strategies.filter(strategy => strategy.status === 'watch');
-  const active = confirmed.length ? confirmed : watching;
-  if (!active.length) return { key: 'neutral', reason: '四項策略目前都未成立；卡片仍保留各策略結果供檢查。', meta: '0/4 策略啟動' };
-  const directions = [...new Set(active.map(strategy => strategy.direction).filter(direction => direction !== 'neutral'))];
-  if (directions.length > 1) return { key: 'mixed', reason: '目前策略同時出現偏多與偏空判斷，方向尚未形成共識。', meta: `${active.length}/4 策略啟動` };
-  const direction = directions[0] || 'neutral';
-  const labels = active.map(strategy => strategy.label).join('、');
+  const hybrid = item.analysis.hybrid;
+  if (!hybrid || hybrid.status === 'none') return { key: 'neutral', label: '趨勢未通過', reason: hybrid?.reason || '混合策略資料不足。', meta: '分層策略未進入候選' };
   return {
-    key: direction === 'neutral' ? 'neutral' : `${direction}_${confirmed.length ? 'ready' : 'watch'}`,
-    reason: `${labels}${confirmed.length ? '已確認' : '接近成立'}。`,
-    meta: `${active.length}/4 策略啟動`,
+    key: hybrid.status === 'confirmed' ? 'bullish_ready' : 'bullish_watch',
+    label: hybrid.status === 'confirmed' ? '混合進場確認' : '混合策略觀察',
+    reason: hybrid.reason,
+    meta: hybrid.route === 'breakout' ? '放量突破路線' : hybrid.route === 'pullback' ? '趨勢回檔路線' : '等待進場路線',
   };
+}
+
+function selectedInstitutionalState(item, strategyFilter) {
+  if (marketKey(item.holding) !== 'TW' || !item.analysis) return null;
+  const strategies = item.analysis.strategies || [];
+  const active = strategyFilter === 'ALL'
+    ? strategies.filter(strategy => strategy.status !== 'none')
+    : strategies.filter(strategy => strategy.key === strategyFilter);
+  const matched = active.find(strategy => strategy.institutional?.passed);
+  const pressure = matched?.institutional || active[0]?.institutional || null;
+  return pressure ? { ...pressure, matched: Boolean(matched) } : null;
+}
+
+function intradayStatesForItem(item, states, strategyFilter) {
+  const symbol = String(item.holding?.symbol || '').trim().toUpperCase();
+  const market = marketKey(item.holding);
+  return states
+    .filter(state => String(state.symbol || '').trim().toUpperCase() === symbol
+      && String(state.market || '').trim().toUpperCase() === market
+      && (strategyFilter === 'ALL' || state.strategy === strategyFilter))
+    .sort((a, b) => {
+      const priority = { risk: 0, recovered: 1 };
+      return (priority[a.status] ?? 2) - (priority[b.status] ?? 2)
+        || new Date(b.last_event_at || b.updated_at || 0).getTime() - new Date(a.last_event_at || a.updated_at || 0).getTime();
+    });
+}
+
+function intradayDescription(state) {
+  const price = Number(state.last_price);
+  const level = Number(state.invalidation_level);
+  const hasPrice = Number.isFinite(price) && price > 0;
+  const hasLevel = Number.isFinite(level) && level > 0;
+  const direction = state.direction === 'bearish' ? '偏空' : '偏多';
+  if (state.status === 'risk') {
+    const action = state.direction === 'bearish' ? '站上' : '跌破';
+    return `${direction}訊號盤中${action}失效價${hasPrice ? `（現價 ${format(price)}）` : ''}${hasLevel ? `；日線失效價 ${format(level)}` : ''}，等待收盤確認。`;
+  }
+  if (state.status === 'recovered') {
+    return `${direction}訊號已回到失效價緩衝區${hasPrice ? `（現價 ${format(price)}）` : ''}${hasLevel ? `；日線失效價 ${format(level)}` : ''}。日線結論尚未變更。`;
+  }
+  return `${direction}日線訊號已啟動盤中監控${hasLevel ? `；失效價 ${format(level)}` : ''}。只有觸發風險或收回時才會寄信。`;
+}
+
+function intradayCandidates(items) {
+  const candidates = [];
+  for (const item of items) {
+    const analysis = item.analysis;
+    const holding = item.holding;
+    if (!analysis?.latest?.time || !holding?.symbol) continue;
+    for (const strategy of analysis.strategies || []) {
+      if (strategy.status !== 'confirmed' || !['bullish', 'bearish'].includes(strategy.direction)) continue;
+      const signal = strategy.signal || {};
+      const invalidationLevel = Number(
+        signal.neckline
+        || signal.stop
+        || strategy.level
+        || signal.level
+        || 0,
+      );
+      if (!(invalidationLevel > 0)) continue;
+      candidates.push({
+        symbol: holding.symbol,
+        market: marketKey(holding),
+        strategy: strategy.key,
+        direction: strategy.direction,
+        candleDate: analysis.latest.time,
+        invalidationLevel,
+      });
+    }
+    const hybrid = analysis.hybrid;
+    if (hybrid?.status === 'confirmed' && Number(hybrid?.risk?.initialStop) > 0) {
+      candidates.push({
+        symbol: holding.symbol,
+        market: marketKey(holding),
+        strategy: 'hybrid',
+        direction: 'bullish',
+        candleDate: analysis.latest.time,
+        invalidationLevel: Number(hybrid.risk.initialStop),
+      });
+    }
+  }
+  return candidates;
 }
 
 async function analyzeWithLimit(holdings, mapper, limit = 3) {
@@ -309,17 +429,21 @@ export default function PortfolioSignalsScreen({ navigation }) {
   const [refreshing, setRefreshing] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [error, setError] = useState(null);
+  const [sourceFilter, setSourceFilter] = useState('ALL');
   const [marketFilter, setMarketFilter] = useState('ALL');
-  const [strategyFilter, setStrategyFilter] = useState('divergence');
+  const [strategyFilter, setStrategyFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const [institutionalOnly, setInstitutionalOnly] = useState(false);
+  const [intradayStates, setIntradayStates] = useState([]);
+  const [checkingIntraday, setCheckingIntraday] = useState(false);
 
-  const load = useCallback(async (forceRefresh = false) => {
+  const load = useCallback(async (forceRefresh = false, includeIntraday = true) => {
     forceRefresh ? setRefreshing(true) : setLoading(true);
     setError(null);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('請先登入');
-      const [assetsResult, watchlistResult, localWatchlistRaw] = await Promise.all([
+      const [assetsResult, watchlistResult, localWatchlistRaw, intradayResult, hybridResult] = await Promise.all([
         supabase.from('assets')
           .select('id,name,symbol,market_type,currency,current_shares,average_cost,category')
           .eq('user_id', user.id)
@@ -327,8 +451,36 @@ export default function PortfolioSignalsScreen({ navigation }) {
           .gt('current_shares', 0),
         supabase.from('watchlist').select('id,symbol,market_type').eq('user_id', user.id),
         AsyncStorage.getItem('watchlist').catch(() => null),
+        supabase.from('signal_intraday_states')
+          .select('symbol,market,strategy,direction,invalidation_level,status,last_price,last_event_at,updated_at')
+          .eq('user_id', user.id)
+          .in('status', ['active', 'risk', 'recovered']),
+        supabase.from('hybrid_strategy_positions')
+          .select('symbol,market,status,last_price,last_event_at,updated_at,effective_stop,entry_date')
+          .eq('user_id', user.id)
+          .in('status', ['active', 'risk', 'recovered']),
       ]);
       if (assetsResult.error) throw assetsResult.error;
+      // Intraday monitoring must never prevent the daily-K signal list from loading.
+      if (intradayResult.error) {
+        console.warn('Unable to load intraday signal states:', intradayResult.error.message);
+        setIntradayStates([]);
+      } else {
+        const hybridStates = hybridResult.error ? [] : (hybridResult.data || []).map(position => ({
+          symbol: position.symbol,
+          market: position.market,
+          strategy: 'hybrid',
+          direction: 'bullish',
+          invalidation_level: position.effective_stop,
+          status: position.status,
+          last_price: position.last_price,
+          last_event_at: position.last_event_at,
+          updated_at: position.updated_at,
+          candle_date: position.entry_date,
+        }));
+        if (hybridResult.error) console.warn('Unable to load hybrid position states:', hybridResult.error.message);
+        setIntradayStates([...(intradayResult.data || []), ...hybridStates]);
+      }
       let localWatchlist = null;
       if (localWatchlistRaw !== null) {
         try { localWatchlist = JSON.parse(localWatchlistRaw); } catch { localWatchlist = []; }
@@ -340,9 +492,12 @@ export default function PortfolioSignalsScreen({ navigation }) {
       let done = 0;
       const analyzed = await analyzeWithLimit(universe, async holding => {
         try {
-          const rows = await fetchMarketTechnicalData(holding.symbol, holding.market_type, 1095, forceRefresh);
-          const horizon = buildMultiHorizon(rows);
-          return { holding, analysis: horizon.periods.long, ...horizon };
+          const context = await fetchMarketTechnicalContext(holding.symbol, holding.market_type, 1095, forceRefresh, includeIntraday);
+          const horizon = buildMultiHorizon(context.rows, context);
+          const resolvedHolding = context.name && context.name !== holding.symbol
+            ? { ...holding, name: context.name }
+            : holding;
+          return { holding: resolvedHolding, analysis: horizon.periods.long, isIntraday: context.isIntraday, quoteTime: context.quoteTime, intradayUnavailable: context.intradayUnavailable, ...horizon };
         } catch (itemError) {
           return { holding, analysis: null, key: 'unavailable', signal: null, error: itemError.message || '無法取得行情' };
         } finally {
@@ -361,8 +516,44 @@ export default function PortfolioSignalsScreen({ navigation }) {
 
   useEffect(() => { load(); }, [load]);
 
+  const refreshIntraday = useCallback(async () => {
+    if (checkingIntraday) return;
+    setCheckingIntraday(true);
+    try {
+      const { data, error: invokeError } = await supabase.functions.invoke('signal-notifications', {
+        body: { action: 'refresh_intraday', candidates: intradayCandidates(items) },
+      });
+      if (invokeError) {
+        let message = invokeError.message || '目前無法取得盤中報價';
+        try {
+          const detail = await invokeError.context?.json?.();
+          if (detail?.error) message = detail.error;
+        } catch {}
+        throw new Error(message);
+      }
+      if (data?.error) throw new Error(data.error);
+      setIntradayStates(data?.states || []);
+      await load(true, true);
+      if (!data?.states?.length) {
+        Alert.alert('盤中行情已更新', '已用目前盤中價量重算卡片；目前沒有已確認訊號需要監控失效價。');
+      } else {
+        Alert.alert('盤中行情已更新', `卡片已用盤中暫估日 K 重算，並監控 ${data.states.length} 個正式日 K 訊號的失效風險。`);
+      }
+    } catch (refreshError) {
+      Alert.alert('無法檢查盤中訊號', refreshError.message || '請確認網路與登入狀態後重試。');
+    } finally {
+      setCheckingIntraday(false);
+    }
+  }, [checkingIntraday, items, load]);
+
+  const sourceItems = useMemo(() => {
+    if (sourceFilter === 'HOLDING') return items.filter(item => item.holding.isHolding);
+    if (sourceFilter === 'WATCHLIST') return items.filter(item => item.holding.isWatchlist);
+    return items;
+  }, [items, sourceFilter]);
+
   const marketFilters = useMemo(() => {
-    const available = [...new Set(items.map(item => marketKey(item.holding)))];
+    const available = [...new Set(sourceItems.map(item => marketKey(item.holding)))];
     const preferred = ['TW', 'US', 'CRYPTO'];
     available.sort((a, b) => {
       const aIndex = preferred.indexOf(a);
@@ -372,40 +563,49 @@ export default function PortfolioSignalsScreen({ navigation }) {
       if (bIndex === -1) return -1;
       return aIndex - bIndex;
     });
-    return ['ALL', 'WATCHLIST', ...available];
-  }, [items]);
+    return ['ALL', ...preferred, ...available.filter(market => !preferred.includes(market))];
+  }, [sourceItems]);
 
   useEffect(() => {
     if (!marketFilters.includes(marketFilter)) setMarketFilter('ALL');
   }, [marketFilter, marketFilters]);
 
   const marketItems = useMemo(
-    () => marketFilter === 'ALL'
-      ? items
-      : marketFilter === 'WATCHLIST'
-        ? items.filter(item => item.holding.isWatchlist)
-        : items.filter(item => marketKey(item.holding) === marketFilter),
-    [items, marketFilter],
+    () => marketFilter === 'ALL' ? sourceItems : sourceItems.filter(item => marketKey(item.holding) === marketFilter),
+    [sourceItems, marketFilter],
   );
 
   const evaluatedItems = useMemo(() => marketItems
-    .map(item => ({ ...item, display: strategyDisplayState(item, strategyFilter) }))
-    .sort((a, b) => STATUS_ORDER[a.display.key] - STATUS_ORDER[b.display.key] || String(a.holding.symbol).localeCompare(String(b.holding.symbol))), [marketItems, strategyFilter]);
+    .map(item => ({
+      ...item,
+      display: strategyDisplayState(item, strategyFilter),
+      intraday: intradayStatesForItem(item, intradayStates, strategyFilter),
+    }))
+    .sort((a, b) => STATUS_ORDER[a.display.key] - STATUS_ORDER[b.display.key] || String(a.holding.symbol).localeCompare(String(b.holding.symbol))), [marketItems, strategyFilter, intradayStates]);
+
+  const institutionFilteredItems = useMemo(
+    () => institutionalOnly
+      ? evaluatedItems.filter(item => selectedInstitutionalState(item, strategyFilter)?.matched)
+      : evaluatedItems,
+    [evaluatedItems, institutionalOnly, strategyFilter],
+  );
 
   const counts = useMemo(() => ({
-    bullish: evaluatedItems.filter(item => item.display.key === 'bullish_ready').length,
-    bearish: evaluatedItems.filter(item => item.display.key === 'bearish_ready').length,
-    pending: evaluatedItems.filter(item => item.display.key.endsWith('_watch') || item.display.key === 'mixed').length,
-  }), [evaluatedItems]);
+    bullish: institutionFilteredItems.filter(item => item.display.key === 'bullish_ready').length,
+    bearish: institutionFilteredItems.filter(item => item.display.key === 'bearish_ready').length,
+    pending: institutionFilteredItems.filter(item => item.display.key.endsWith('_watch') || item.display.key === 'mixed').length,
+  }), [institutionFilteredItems]);
 
-  const displayItems = useMemo(() => evaluatedItems.filter(item => {
+  const displayItems = useMemo(() => institutionFilteredItems.filter(item => {
     if (statusFilter === 'bullish') return item.display.key === 'bullish_ready';
     if (statusFilter === 'bearish') return item.display.key === 'bearish_ready';
     if (statusFilter === 'pending') return item.display.key.endsWith('_watch') || item.display.key === 'mixed';
     return true;
-  }), [evaluatedItems, statusFilter]);
+  }), [institutionFilteredItems, statusFilter]);
 
   const selectedRules = STRATEGY_RULES[strategyFilter] || STRATEGY_RULES.ALL;
+  const selectedUniverseTitle = sourceFilter === 'HOLDING' ? '持倉' : sourceFilter === 'WATCHLIST' ? '自選' : '全部';
+  const selectedMarketTitle = marketFilter === 'ALL' ? '全部市場' : marketLabel(marketFilter);
 
   const statusColor = key => {
     if (key === 'bullish_ready') return colors.positive;
@@ -418,7 +618,7 @@ export default function PortfolioSignalsScreen({ navigation }) {
 
   return (
     <ScrollView style={{ backgroundColor: colors.bg }} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={colors.accent} />}>
-      <View style={[styles.hero, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={[styles.heroIcon, { backgroundColor: colors.accentSoft }]}><ShieldCheck size={22} color={colors.accent} /></View><View style={styles.flex}><Text style={[styles.heroTitle, { color: colors.text }]}>持倉與自選進出場訊號</Text><Text style={[styles.heroSub, { color: colors.textSub }]}>多週期共識：1 年看趨勢、6 個月找型態、3 個月確認觸發。</Text></View></View>
+      <View style={[styles.hero, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={[styles.heroIcon, { backgroundColor: colors.accentSoft }]}><ShieldCheck size={22} color={colors.accent} /></View><View style={styles.flex}><Text style={[styles.heroTitle, { color: colors.text }]}>持倉與自選進出場訊號</Text><Text style={[styles.heroSub, { color: colors.textSub }]}>多頭趨勢過濾後，等待突破或回檔，再確認量能與相對強弱。</Text></View><TouchableOpacity accessibilityRole="button" accessibilityLabel="立即檢查盤中" disabled={checkingIntraday} onPress={refreshIntraday} style={[styles.intradayRefresh, { backgroundColor: colors.accentSoft, borderColor: colors.accent, opacity: checkingIntraday ? 0.6 : 1 }]}>{checkingIntraday ? <ActivityIndicator size="small" color={colors.accent} /> : <RefreshCw size={15} color={colors.accent} />}<Text style={[styles.intradayRefreshText, { color: colors.accent }]}>{checkingIntraday ? '檢查中' : '盤中檢查'}</Text></TouchableOpacity></View>
 
       <View><Text style={[styles.filterLabel, { color: colors.textMuted }]}>判斷策略</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
         {STRATEGY_FILTERS.map(strategy => {
@@ -433,6 +633,18 @@ export default function PortfolioSignalsScreen({ navigation }) {
         {selectedRules.lines.map((line, index) => <View key={`${strategyFilter}-${index}`} style={styles.ruleLine}><View style={[styles.ruleBullet, { backgroundColor: colors.accent }]} /><Text style={[styles.rulesText, { color: colors.textSub }]}>{line}</Text></View>)}
       </View>
 
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityState={{ selected: institutionalOnly }}
+        activeOpacity={0.8}
+        onPress={() => setInstitutionalOnly(value => !value)}
+        style={[styles.institutionalFilter, { backgroundColor: institutionalOnly ? colors.accentSoft : colors.card, borderColor: institutionalOnly ? colors.accent : colors.border }]}
+      >
+        <View style={[styles.strategyMiniDot, { backgroundColor: institutionalOnly ? colors.accent : colors.textMuted }]} />
+        <View style={styles.flex}><Text style={[styles.institutionalFilterTitle, { color: institutionalOnly ? colors.accent : colors.text }]}>只看法人同向確認</Text><Text style={[styles.institutionalFilterSub, { color: colors.textMuted }]}>僅適用台股；外資＋投信近 5 日同向至少 3 日</Text></View>
+        <Text style={[styles.institutionalFilterState, { color: institutionalOnly ? colors.accent : colors.textMuted }]}>{institutionalOnly ? '開啟' : '關閉'}</Text>
+      </TouchableOpacity>
+
       <View style={styles.summaryRow}>{[
         ['bullish', '偏多確認', counts.bullish, colors.positive], ['bearish', '偏空確認', counts.bearish, colors.negative], ['pending', '等待確認', counts.pending, colors.warning],
       ].map(([key, label, value, color]) => {
@@ -440,28 +652,62 @@ export default function PortfolioSignalsScreen({ navigation }) {
         return <TouchableOpacity key={key} accessibilityRole="button" accessibilityState={{ selected }} activeOpacity={0.78} onPress={() => setStatusFilter(selected ? 'ALL' : key)} style={[styles.summary, { backgroundColor: selected ? `${color}18` : colors.card, borderColor: selected ? color : colors.border }]}><Text style={[styles.summaryValue, { color }]}>{value}</Text><Text style={[styles.summaryLabel, { color: selected ? color : colors.textSub }]}>{label}</Text><Text style={[styles.summaryHint, { color: selected ? color : colors.textMuted }]}>{selected ? '篩選中 · 再按取消' : '點擊篩選'}</Text></TouchableOpacity>;
       })}</View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
-        {marketFilters.map(market => {
-          const selected = marketFilter === market;
-          const count = market === 'ALL' ? items.length : market === 'WATCHLIST' ? items.filter(item => item.holding.isWatchlist).length : items.filter(item => marketKey(item.holding) === market).length;
-          return <TouchableOpacity key={market} style={[styles.filterChip, { backgroundColor: selected ? colors.accent : colors.card, borderColor: selected ? colors.accent : colors.border }]} onPress={() => setMarketFilter(market)} activeOpacity={0.8}>
-            <Text style={[styles.filterText, { color: selected ? colors.accentContrast : colors.textSub }]}>{market === 'ALL' ? '全部' : marketLabel(market)}</Text>
+      <View><Text style={[styles.filterLabel, { color: colors.textMuted }]}>標的來源</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+        {[
+          ['ALL', '全部', items.length],
+          ['HOLDING', '持倉', items.filter(item => item.holding.isHolding).length],
+          ['WATCHLIST', '自選', items.filter(item => item.holding.isWatchlist).length],
+        ].map(([source, label, count]) => {
+          const selected = sourceFilter === source;
+          return <TouchableOpacity key={source} style={[styles.filterChip, { backgroundColor: selected ? colors.accent : colors.card, borderColor: selected ? colors.accent : colors.border }]} onPress={() => setSourceFilter(source)} activeOpacity={0.8}>
+            <Text style={[styles.filterText, { color: selected ? colors.accentContrast : colors.textSub }]}>{label}</Text>
             <View style={[styles.filterCount, { backgroundColor: selected ? `${colors.accentContrast}25` : colors.cardAlt }]}><Text style={[styles.filterCountText, { color: selected ? colors.accentContrast : colors.textMuted }]}>{count}</Text></View>
           </TouchableOpacity>;
         })}
-      </ScrollView>
+      </ScrollView></View>
 
-      <View style={styles.sectionHeader}><View><Text style={[styles.sectionTitle, { color: colors.text }]}>{statusFilter === 'ALL' ? (marketFilter === 'ALL' ? '全部標的' : marketFilter === 'WATCHLIST' ? '自選清單' : `${marketLabel(marketFilter)}標的`) : statusFilter === 'bullish' ? '偏多確認' : statusFilter === 'bearish' ? '偏空確認' : '等待確認'}</Text><Text style={[styles.sectionSub, { color: colors.textSub }]}>{displayItems.length} 檔 · {STRATEGY_FILTERS.find(strategy => strategy.key === strategyFilter)?.label}</Text></View><TouchableOpacity style={[styles.refresh, { borderColor: colors.border }]} onPress={() => load(true)}><RefreshCw size={16} color={colors.textSub} /></TouchableOpacity></View>
+      <View><Text style={[styles.filterLabel, { color: colors.textMuted }]}>市場</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+        {marketFilters.map(market => {
+          const selected = marketFilter === market;
+          const count = market === 'ALL' ? sourceItems.length : sourceItems.filter(item => marketKey(item.holding) === market).length;
+          return <TouchableOpacity key={market} style={[styles.filterChip, { backgroundColor: selected ? colors.accent : colors.card, borderColor: selected ? colors.accent : colors.border }]} onPress={() => setMarketFilter(market)} activeOpacity={0.8}>
+            <Text style={[styles.filterText, { color: selected ? colors.accentContrast : colors.textSub }]}>{market === 'ALL' ? '全部市場' : marketLabel(market)}</Text>
+            <View style={[styles.filterCount, { backgroundColor: selected ? `${colors.accentContrast}25` : colors.cardAlt }]}><Text style={[styles.filterCountText, { color: selected ? colors.accentContrast : colors.textMuted }]}>{count}</Text></View>
+          </TouchableOpacity>;
+        })}
+      </ScrollView></View>
 
-      {error ? <View style={[styles.empty, { backgroundColor: colors.card, borderColor: colors.border }]}><CircleAlert size={24} color={colors.negative} /><Text style={[styles.emptyTitle, { color: colors.text }]}>無法載入訊號</Text><Text style={[styles.emptyText, { color: colors.textSub }]}>{error}</Text></View> : items.length === 0 ? <View style={[styles.empty, { backgroundColor: colors.card, borderColor: colors.border }]}><BarChart3 size={24} color={colors.textMuted} /><Text style={[styles.emptyTitle, { color: colors.text }]}>目前沒有持倉或自選</Text><Text style={[styles.emptyText, { color: colors.textSub }]}>新增具有代號的投資資產或自選標的後，就會出現在這裡。</Text></View> : displayItems.length === 0 ? <View style={[styles.empty, { backgroundColor: colors.card, borderColor: colors.border }]}><BarChart3 size={24} color={colors.textMuted} /><Text style={[styles.emptyTitle, { color: colors.text }]}>{statusFilter !== 'ALL' ? '沒有符合此訊號的標的' : marketFilter === 'WATCHLIST' ? '目前沒有自選標的' : '這個市場沒有標的'}</Text><Text style={[styles.emptyText, { color: colors.textSub }]}>{statusFilter !== 'ALL' ? '再次點擊上方已選取的統計卡即可取消篩選。' : '請切換其他分類查看目前的進出場訊號。'}</Text></View> : displayItems.map(item => {
+      <View style={styles.sectionHeader}><View><Text style={[styles.sectionTitle, { color: colors.text }]}>{statusFilter === 'ALL' ? `${selectedUniverseTitle} · ${selectedMarketTitle}` : statusFilter === 'bullish' ? '偏多確認' : statusFilter === 'bearish' ? '偏空確認' : '等待確認'}</Text><Text style={[styles.sectionSub, { color: colors.textSub }]}>{displayItems.length} 檔 · {STRATEGY_FILTERS.find(strategy => strategy.key === strategyFilter)?.label}{institutionalOnly ? ' · 法人同向' : ''}</Text></View><TouchableOpacity style={[styles.refresh, { borderColor: colors.border }]} onPress={() => load(true)}><RefreshCw size={16} color={colors.textSub} /></TouchableOpacity></View>
+
+      {error ? <View style={[styles.empty, { backgroundColor: colors.card, borderColor: colors.border }]}><CircleAlert size={24} color={colors.negative} /><Text style={[styles.emptyTitle, { color: colors.text }]}>無法載入訊號</Text><Text style={[styles.emptyText, { color: colors.textSub }]}>{error}</Text></View> : items.length === 0 ? <View style={[styles.empty, { backgroundColor: colors.card, borderColor: colors.border }]}><BarChart3 size={24} color={colors.textMuted} /><Text style={[styles.emptyTitle, { color: colors.text }]}>目前沒有持倉或自選</Text><Text style={[styles.emptyText, { color: colors.textSub }]}>新增具有代號的投資資產或自選標的後，就會出現在這裡。</Text></View> : displayItems.length === 0 ? <View style={[styles.empty, { backgroundColor: colors.card, borderColor: colors.border }]}><BarChart3 size={24} color={colors.textMuted} /><Text style={[styles.emptyTitle, { color: colors.text }]}>{institutionalOnly ? '沒有法人同向的台股標的' : statusFilter !== 'ALL' ? '沒有符合此訊號的標的' : sourceFilter === 'HOLDING' && sourceItems.length === 0 ? '目前沒有持倉標的' : sourceFilter === 'WATCHLIST' && sourceItems.length === 0 ? '目前沒有自選標的' : '這個市場沒有標的'}</Text><Text style={[styles.emptyText, { color: colors.textSub }]}>{institutionalOnly ? '法人篩選只適用台股，並要求外資＋投信近 5 日至少 3 日與技術方向同向。' : statusFilter !== 'ALL' ? '再次點擊上方已選取的統計卡即可取消篩選。' : '請切換其他來源或市場查看目前的進出場訊號。'}</Text></View> : displayItems.map(item => {
         const { holding, analysis } = item;
         const { display } = item;
         const color = statusColor(display.key);
-        return <TouchableOpacity key={`${holding.symbol}:${holding.market_type}`} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]} activeOpacity={0.82} onPress={() => navigation.navigate('TechnicalAnalysis', { symbol: holding.symbol, name: holding.name, averageCost: holding.average_cost, marketType: holding.market_type })}>
+        const hasIntradayState = Boolean(item.intraday?.length);
+        const market = marketKey(holding);
+        const intradayTime = quoteClock(item.quoteTime, market);
+        return <TouchableOpacity key={`${holding.symbol}:${holding.market_type}`} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]} activeOpacity={0.82} onPress={() => navigation.navigate('TechnicalAnalysis', { symbol: holding.symbol, name: holding.name, averageCost: holding.average_cost, marketType: holding.market_type, strategyKey: strategyFilter })}>
           <View style={styles.cardHeader}><View style={styles.flex}><View style={styles.symbolRow}><Text style={[styles.symbol, { color: colors.text }]}>{holding.symbol}</Text>{holding.isHolding && <View style={[styles.sourceBadge, { backgroundColor: colors.cardAlt, borderColor: colors.accent }]}><Text style={[styles.sourceBadgeText, { color: colors.accent }]}>持倉</Text></View>}{holding.isWatchlist && <View style={[styles.sourceBadge, { backgroundColor: colors.accentSoft, borderColor: colors.accent }]}><Text style={[styles.sourceBadgeText, { color: colors.accent }]}>自選</Text></View>}</View><Text style={[styles.name, { color: colors.textSub }]}>{holding.name}{holding.isHolding ? ` · ${holding.current_shares.toLocaleString()} 股` : ' · 尚未持有'}</Text></View><View style={[styles.badge, { backgroundColor: `${color}20`, borderColor: color }]}><Text style={[styles.badgeText, { color }]}>{display.label || STATUS_LABELS[display.key]}</Text></View><ChevronRight size={17} color={colors.textMuted} /></View>
-          {analysis && <View style={[styles.quoteRow, { borderTopColor: colors.borderLight }]}><View><Text style={[styles.quoteLabel, { color: colors.textMuted }]}>最新收盤</Text><Text style={[styles.quoteValue, { color: colors.text }]}>{format(analysis.latest.close)}</Text></View><View><Text style={[styles.quoteLabel, { color: colors.textMuted }]}>資料日期</Text><Text style={[styles.quoteValue, { color: colors.text }]}>{analysis.latest.time}</Text></View><View><Text style={[styles.quoteLabel, { color: colors.textMuted }]}>平均成本</Text><Text style={[styles.quoteValue, { color: colors.text }]}>{holding.isHolding ? format(holding.average_cost) : '—'}</Text></View></View>}
+          <View style={styles.dataModeRow}>
+            <View style={[styles.dataModeBadge, { backgroundColor: item.isIntraday ? `${colors.warning}18` : colors.cardAlt, borderColor: item.isIntraday ? colors.warning : colors.border }]}><Text style={[styles.dataModeText, { color: item.isIntraday ? colors.warning : colors.textSub }]}>{item.isIntraday ? `盤中暫估日 K${intradayTime ? ` · ${intradayTime}` : ''}` : '正式收盤日 K'}</Text></View>
+            {item.intradayUnavailable && <View style={[styles.dataModeBadge, { backgroundColor: `${colors.negative}14`, borderColor: colors.negative }]}><Text style={[styles.dataModeText, { color: colors.negative }]}>盤中行情取得失敗</Text></View>}
+            {hasIntradayState && <View style={[styles.dataModeBadge, { backgroundColor: colors.accentSoft, borderColor: colors.accent }]}><Text style={[styles.dataModeText, { color: colors.accent }]}>含盤中監控狀態</Text></View>}
+          </View>
+          {analysis && <View style={[styles.quoteRow, { borderTopColor: colors.borderLight }]}><View><Text style={[styles.quoteLabel, { color: colors.textMuted }]}>{item.isIntraday ? '盤中現價' : '最新收盤'}</Text><Text style={[styles.quoteValue, { color: colors.text }]}>{format(analysis.latest.close)}</Text></View><View><Text style={[styles.quoteLabel, { color: colors.textMuted }]}>{item.isIntraday ? '盤中日期' : '資料日期'}</Text><Text style={[styles.quoteValue, { color: colors.text }]}>{analysis.latest.time}</Text></View><View><Text style={[styles.quoteLabel, { color: colors.textMuted }]}>平均成本</Text><Text style={[styles.quoteValue, { color: colors.text }]}>{holding.isHolding ? format(holding.average_cost) : '—'}</Text></View></View>}
+          {item.intraday?.map(state => {
+            const isRisk = state.status === 'risk';
+            const isRecovered = state.status === 'recovered';
+            const stateColor = isRisk ? colors.warning : isRecovered ? colors.positive : colors.accent;
+            return <View key={`${state.strategy}:${state.direction}:${state.last_event_at || state.updated_at}`} style={[styles.intradayRow, { backgroundColor: `${stateColor}14`, borderColor: `${stateColor}70` }]}>
+              <View style={[styles.intradayDot, { backgroundColor: stateColor }]} />
+              <View style={styles.flex}>
+                <Text style={[styles.intradayTitle, { color: stateColor }]}>盤中{isRisk ? '風險' : isRecovered ? '已收回' : '監控中'} · {STRATEGY_LABELS[state.strategy] || state.strategy}</Text>
+                <Text style={[styles.intradayText, { color: colors.textSub }]}>{intradayDescription(state)}</Text>
+              </View>
+            </View>;
+          })}
           {item.error ? <Text style={[styles.noSignal, { color: colors.textSub }]}>{item.error}</Text> : <>
-            {(strategyFilter === 'divergence' || strategyFilter === 'ALL') && <View style={styles.horizonRow}>
+            {strategyFilter === 'divergence' && <View style={styles.horizonRow}>
               {[
                 ['1 年', `${horizonLabel('trend', item.trend)} ${item.trendReturn >= 0 ? '+' : ''}${item.trendReturn.toFixed(1)}%`, item.trend],
                 ['6 個月', horizonLabel('signal', item.setup), signalDirection(item.setup)],
@@ -471,20 +717,34 @@ export default function PortfolioSignalsScreen({ navigation }) {
                 return <View key={period} style={[styles.horizon, { backgroundColor: colors.cardAlt, borderColor: colors.borderLight }]}><Text style={[styles.horizonPeriod, { color: colors.textMuted }]}>{period}</Text><Text style={[styles.horizonValue, { color: horizonColor }]} numberOfLines={1}>{label}</Text></View>;
               })}
             </View>}
-            <View style={styles.strategyMiniList}>{(analysis?.strategies || []).map(strategy => {
+            {strategyFilter === 'ALL' ? <View style={styles.hybridGateList}>{[
+              ['大趨勢', analysis?.hybrid?.gates?.trend],
+              ['突破路線', analysis?.hybrid?.gates?.breakout],
+              ['回檔路線', analysis?.hybrid?.gates?.pullback],
+              ['量能確認', analysis?.hybrid?.gates?.volume],
+              ['相對強弱', analysis?.hybrid?.gates?.relativeStrength],
+            ].map(([label, gate]) => <View key={label} style={[styles.hybridGate, { backgroundColor: colors.cardAlt, borderColor: gate?.passed ? colors.positive : gate?.candidate ? colors.warning : colors.borderLight }]}><View style={[styles.strategyMiniDot, { backgroundColor: gate?.passed ? colors.positive : gate?.candidate ? colors.warning : colors.textMuted }]} /><View style={styles.flex}><Text style={[styles.hybridGateTitle, { color: colors.text }]}>{label} · {gate?.passed ? '通過' : gate?.candidate ? '接近' : '未通過'}</Text><Text style={[styles.hybridGateText, { color: colors.textMuted }]} numberOfLines={2}>{gate?.label || '資料不足'}</Text></View></View>)}</View> : <View style={styles.strategyMiniList}>{(analysis?.strategies || []).map(strategy => {
               const strategyColor = strategy.status === 'confirmed'
                 ? (strategy.direction === 'bearish' ? colors.negative : colors.positive)
                 : strategy.status === 'watch' ? colors.warning : colors.textMuted;
               const stateLabel = strategy.status === 'confirmed' ? '確認' : strategy.status === 'watch' ? '觀察' : '未成立';
               const selected = strategyFilter === 'ALL' || strategyFilter === strategy.key;
               return <View key={strategy.key} style={[styles.strategyMini, { backgroundColor: colors.cardAlt, borderColor: selected ? strategyColor : colors.borderLight, opacity: selected ? 1 : 0.62 }]}><View style={[styles.strategyMiniDot, { backgroundColor: strategyColor }]} /><Text style={[styles.strategyMiniText, { color: colors.textSub }]} numberOfLines={1}>{strategy.label} · {stateLabel}</Text></View>;
-            })}</View>
+            })}</View>}
+            {strategyFilter === 'ALL' && analysis?.hybrid?.status === 'confirmed' && <View style={[styles.riskRow, { backgroundColor: colors.positiveSoft, borderColor: colors.positive }]}><Text style={[styles.riskTitle, { color: colors.positive }]}>ATR 風控</Text><Text style={[styles.riskText, { color: colors.textSub }]}>Entry {format(analysis.hybrid.risk.entryPrice)} · ATR14 {format(analysis.hybrid.risk.atr14)} · 初始停損 {format(analysis.hybrid.risk.initialStop)}</Text></View>}
+            {marketKey(holding) === 'TW' && analysis.institutional?.day5 && <><Text style={[styles.institutionalAsOf, { color: colors.textMuted }]}>法人資料截至 {analysis.institutional.day5.asOf || '待更新'}</Text><View style={styles.institutionalRow}>
+              {[
+                ['外資 5日', analysis.institutional.day5.foreign],
+                ['投信 5日', analysis.institutional.day5.trust],
+                ['自營 5日', analysis.institutional.day5.dealerSelf],
+              ].map(([label, value]) => <View key={label} style={[styles.institutionalMetric, { backgroundColor: colors.cardAlt, borderColor: colors.borderLight }]}><Text style={[styles.institutionalMetricLabel, { color: colors.textMuted }]}>{label}</Text><Text style={[styles.institutionalMetricValue, { color: Number(value) > 0 ? colors.positive : Number(value) < 0 ? colors.negative : colors.textSub }]}>{compactShares(value)}</Text></View>)}
+            </View></>}
             <View style={[styles.signalRow, { backgroundColor: `${color}12` }]}><View style={[styles.signalDot, { backgroundColor: color }]} /><View style={styles.flex}><Text style={[styles.signalText, { color: colors.text }]}>{display.reason}</Text><Text style={[styles.signalMeta, { color: colors.textMuted }]}>{display.meta}{display.meta ? ' · ' : ''}點入查看完整條件</Text></View></View>
           </>}
         </TouchableOpacity>;
       })}
 
-      <View style={[styles.notice, { backgroundColor: colors.accentSoft, borderColor: colors.border }]}><CircleAlert size={15} color={colors.accent} /><Text style={[styles.noticeText, { color: colors.textSub }]}>MACD 背離使用 1 年／6 個月／3 個月共識；其他策略依最近一年資料中的最新日 K 判斷。所有結果皆為研究訊號，不保證進出場結果。</Text></View>
+      <View style={[styles.notice, { backgroundColor: colors.accentSoft, borderColor: colors.border }]}><CircleAlert size={15} color={colors.accent} /><Text style={[styles.noticeText, { color: colors.textSub }]}>市場開盤時，卡片會以當日盤中 OHLCV 顯示暫估策略結果；正式進場與失效仍以收盤日 K 為準。法人資訊為額外標記，不參與混合策略必要條件。所有結果皆為研究訊號，不會自動下單。</Text></View>
       <View style={{ height: 40 }} />
     </ScrollView>
   );
@@ -492,16 +752,21 @@ export default function PortfolioSignalsScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   content: { padding: 16, gap: 13 }, flex: { flex: 1 }, center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 28 }, loadingTitle: { fontSize: 16, fontWeight: '800', marginTop: 13 }, loadingSub: { fontSize: 12, marginTop: 5 },
-  hero: { borderWidth: 1, borderRadius: 18, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 11 }, heroIcon: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' }, heroTitle: { fontSize: 17, fontWeight: '800' }, heroSub: { fontSize: 11, lineHeight: 17, marginTop: 3 },
+  hero: { borderWidth: 1, borderRadius: 18, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 11 }, heroIcon: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' }, heroTitle: { fontSize: 17, fontWeight: '800' }, heroSub: { fontSize: 11, lineHeight: 17, marginTop: 3 }, intradayRefresh: { minWidth: 66, minHeight: 48, borderWidth: 1, borderRadius: 11, paddingHorizontal: 7, alignItems: 'center', justifyContent: 'center', gap: 3 }, intradayRefreshText: { fontSize: 8, fontWeight: '900' },
   rules: { borderWidth: 1, borderRadius: 15, padding: 12, gap: 7 }, rulesTitle: { fontSize: 13, fontWeight: '800' }, rulesIntro: { fontSize: 10, lineHeight: 16, marginBottom: 2 }, ruleLine: { flexDirection: 'row', alignItems: 'flex-start', gap: 7 }, ruleBullet: { width: 5, height: 5, borderRadius: 3, marginTop: 6 }, rulesText: { flex: 1, fontSize: 10, lineHeight: 16 },
   summaryRow: { flexDirection: 'row', gap: 8 }, summary: { flex: 1, minHeight: 82, borderWidth: 1, borderRadius: 14, paddingVertical: 9, paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center' }, summaryValue: { fontSize: 20, fontWeight: '900' }, summaryLabel: { fontSize: 9, marginTop: 2 }, summaryHint: { fontSize: 7, fontWeight: '700', marginTop: 4 },
   filterRow: { gap: 8, paddingRight: 4 }, filterChip: { minHeight: 38, borderWidth: 1, borderRadius: 19, paddingLeft: 13, paddingRight: 7, flexDirection: 'row', alignItems: 'center', gap: 7 }, filterText: { fontSize: 11, fontWeight: '800' }, filterCount: { minWidth: 24, height: 24, paddingHorizontal: 6, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, filterCountText: { fontSize: 9, fontWeight: '900' },
   filterLabel: { fontSize: 9, fontWeight: '700', marginBottom: 7 }, strategyFilterChip: { minHeight: 36, borderWidth: 1, borderRadius: 18, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center' }, strategyFilterText: { fontSize: 10, fontWeight: '800' },
+  institutionalFilter: { minHeight: 54, borderWidth: 1, borderRadius: 14, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 9 }, institutionalFilterTitle: { fontSize: 11, fontWeight: '800' }, institutionalFilterSub: { fontSize: 8, marginTop: 3 }, institutionalFilterState: { fontSize: 9, fontWeight: '900' },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }, sectionTitle: { fontSize: 19, fontWeight: '800' }, sectionSub: { fontSize: 10, marginTop: 3 }, refresh: { width: 36, height: 36, borderWidth: 1, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   card: { borderWidth: 1, borderRadius: 17, padding: 13, gap: 10 }, cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 }, symbolRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }, symbol: { fontSize: 18, fontWeight: '900' }, sourceBadge: { borderWidth: 1, borderRadius: 7, paddingHorizontal: 6, paddingVertical: 3 }, sourceBadgeText: { fontSize: 8, fontWeight: '900' }, name: { fontSize: 11, marginTop: 2 }, badge: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 6 }, badgeText: { fontSize: 9, fontWeight: '800' },
+  dataModeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 }, dataModeBadge: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4 }, dataModeText: { fontSize: 8, fontWeight: '800' },
   quoteRow: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 10, flexDirection: 'row', justifyContent: 'space-between' }, quoteLabel: { fontSize: 9, marginBottom: 3 }, quoteValue: { fontSize: 11, fontWeight: '700' },
+  intradayRow: { borderWidth: 1, borderRadius: 10, padding: 9, flexDirection: 'row', alignItems: 'flex-start', gap: 7 }, intradayDot: { width: 7, height: 7, borderRadius: 4, marginTop: 4 }, intradayTitle: { fontSize: 9, fontWeight: '900' }, intradayText: { fontSize: 9, lineHeight: 14, marginTop: 2 },
   horizonRow: { flexDirection: 'row', gap: 6 }, horizon: { flex: 1, minWidth: 0, borderWidth: 1, borderRadius: 10, paddingHorizontal: 7, paddingVertical: 8 }, horizonPeriod: { fontSize: 8, marginBottom: 3 }, horizonValue: { fontSize: 9, fontWeight: '800' },
   strategyMiniList: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 }, strategyMini: { width: '48.8%', minWidth: 0, borderWidth: 1, borderRadius: 9, paddingHorizontal: 7, minHeight: 30, flexDirection: 'row', alignItems: 'center', gap: 5 }, strategyMiniDot: { width: 6, height: 6, borderRadius: 3 }, strategyMiniText: { flex: 1, fontSize: 8, fontWeight: '700' },
+  hybridGateList: { gap: 6 }, hybridGate: { borderWidth: 1, borderRadius: 10, padding: 9, flexDirection: 'row', alignItems: 'flex-start', gap: 7 }, hybridGateTitle: { fontSize: 10, fontWeight: '900' }, hybridGateText: { fontSize: 8, lineHeight: 13, marginTop: 2 }, riskRow: { borderWidth: 1, borderRadius: 10, padding: 10, gap: 3 }, riskTitle: { fontSize: 10, fontWeight: '900' }, riskText: { fontSize: 9, lineHeight: 14 },
+  institutionalAsOf: { fontSize: 8, marginTop: 2 }, institutionalRow: { flexDirection: 'row', gap: 6 }, institutionalMetric: { flex: 1, minWidth: 0, borderWidth: 1, borderRadius: 9, paddingHorizontal: 7, paddingVertical: 7 }, institutionalMetricLabel: { fontSize: 8 }, institutionalMetricValue: { fontSize: 10, fontWeight: '900', marginTop: 3 },
   signalRow: { borderRadius: 11, padding: 9, flexDirection: 'row', alignItems: 'center', gap: 7 }, signalDot: { width: 8, height: 8, borderRadius: 4 }, signalText: { fontSize: 10, fontWeight: '700', lineHeight: 15 }, signalMeta: { fontSize: 9, marginTop: 3 }, noSignal: { fontSize: 10, lineHeight: 15 },
   empty: { borderWidth: 1, borderRadius: 17, padding: 24, alignItems: 'center', gap: 7 }, emptyTitle: { fontSize: 15, fontWeight: '800' }, emptyText: { fontSize: 11, lineHeight: 17, textAlign: 'center' },
   notice: { borderWidth: 1, borderRadius: 13, padding: 11, flexDirection: 'row', gap: 8, alignItems: 'flex-start' }, noticeText: { flex: 1, fontSize: 10, lineHeight: 16 },

@@ -24,6 +24,8 @@ import EsunSyncScreen from './src/screens/EsunSyncScreen';
 import InvestmentSignalsScreen from './src/screens/InvestmentSignalsScreen';
 import TechnicalAnalysisScreen from './src/screens/TechnicalAnalysisScreen';
 import PortfolioSignalsScreen from './src/screens/PortfolioSignalsScreen';
+import SignalNotificationSettingsScreen from './src/screens/SignalNotificationSettingsScreen';
+import MajorEventNotificationScreen from './src/screens/MajorEventNotificationScreen';
 
 const Tab = createBottomTabNavigator();
 const DashboardStack = createNativeStackNavigator();
@@ -234,6 +236,8 @@ function MainStackScreen() {
       <MainStack.Screen name="InvestmentSignals" component={InvestmentSignalsScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '研究訊號' })} />
       <MainStack.Screen name="TechnicalAnalysis" component={TechnicalAnalysisScreen} options={({ navigation, route }) => ({ ...withAI({ navigation }), title: `${route.params?.symbol || ''} 技術分析` })} />
       <MainStack.Screen name="PortfolioSignals" component={PortfolioSignalsScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '持倉與自選訊號' })} />
+      <MainStack.Screen name="SignalNotificationSettings" component={SignalNotificationSettingsScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '訊號通知' })} />
+      <MainStack.Screen name="MajorEventNotifications" component={MajorEventNotificationScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '重大事件通知' })} />
       <MainStack.Screen
         name="Settings"
         component={SettingsScreen}
@@ -254,8 +258,12 @@ function AppInner() {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session }, error }) => {
-      if (error) supabase.auth.signOut();
-      else setSession(session);
+      if (error) {
+        console.warn('Failed to restore auth session:', error.message);
+        setSession(null);
+      } else {
+        setSession(session);
+      }
       setLoading(false);
     });
 
@@ -265,7 +273,6 @@ function AppInner() {
         event === 'USER_DELETED' ||
         (event === 'TOKEN_REFRESHED' && !session)
       ) {
-        supabase.auth.signOut();
         setSession(null);
       } else {
         setSession(session);

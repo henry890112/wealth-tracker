@@ -8,8 +8,6 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
-  Keyboard,
-  TouchableWithoutFeedback,
 } from 'react-native';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/ThemeContext';
@@ -53,7 +51,6 @@ export default function AuthScreen() {
   };
 
   return (
-    <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={[styles.container, { backgroundColor: bg }]}
@@ -117,7 +114,6 @@ export default function AuthScreen() {
         </View>
       </View>
     </KeyboardAvoidingView>
-    </TouchableWithoutFeedback>
   );
 }
 

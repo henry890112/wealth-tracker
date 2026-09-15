@@ -2,8 +2,8 @@ import React from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  BarChart3, Bot, ChevronRight, CircleHelp, CloudUpload, CreditCard, Landmark,
-  FileDown, Globe, Info, Palette, Settings2, UserRound,
+  BarChart3, BellRing, Bot, ChevronRight, CircleHelp, CloudUpload, CreditCard, Landmark,
+  FileDown, Globe, Info, Newspaper, Palette, Settings2, UserRound,
 } from 'lucide-react-native';
 import { useTheme } from '../lib/ThemeContext';
 
@@ -27,6 +27,8 @@ const SECTIONS = [
   {
     title: '偏好設定',
     items: [
+      { title: '訊號通知', subtitle: '設定每日／每小時 Email 與 LINE 提醒', Icon: BellRing, route: 'SignalNotificationSettings' },
+      { title: '重大事件通知', subtitle: 'AI 搜尋持倉相關事件與來源連結', Icon: Newspaper, route: 'MajorEventNotifications' },
       { title: '外觀與主題', subtitle: '調整淺色、深色與系統主題', Icon: Palette, route: 'Settings', params: { section: 'theme' } },
       { title: '基準貨幣', subtitle: '設定預設貨幣與顯示方式', Icon: Globe, route: 'Settings', params: { section: 'currency' } },
       { title: '所有設定', subtitle: '帳號、資料與其他選項', Icon: Settings2, route: 'Settings' },

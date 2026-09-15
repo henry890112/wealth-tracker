@@ -132,6 +132,8 @@ supabase functions serve ai-chat --env-file supabase/functions/.env
 
 從「更多 → 台股研究訊號」可查看每一檔已分析台股的分數與條件，不只顯示候選股；未符合者也會列出估值、法人、趨勢或流動性等未達原因。按「立即分析目前資料」可直接重新計算，不必等待每日排程。系統只分析已持有或自選的台股，最多 50 檔；策略預設要求：本益比低於自身近三年有效數據的 25 百分位、外資或投信近五日買超、價格與 MA20／MA60 趨勢確認，以及足夠成交額。
 
+持倉與自選進出場頁的六項技術策略會另外套用台股法人確認：外資加投信近 5 個交易日淨額須與訊號方向一致，且至少 3 日同向；不符時會把「已確認」降為「觀察」，法人資料尚未更新時則保留原技術判斷並清楚標示。資產詳情會顯示 1／3／5／20 日法人方向，以及外資、投信與自營商自行買賣的近 5 日分項。自營商避險部位獨立保存，不用來判定多空方向。
+
 訊號會標示資料日期與風險提醒，並非保證報酬、目標價或下單指令。雲端排程與推播設定請見 [DEPLOYMENT.md](DEPLOYMENT.md#台股研究訊號與每日推播)。
 
 ### 玉山證券唯讀同步
@@ -260,6 +262,63 @@ WealthTracker/
 ```
 
 ## 部署到 Supabase Cloud
+
+### 進出場訊號 Email／LINE 通知
+
+App 的「更多 → 訊號通知」可讓每位登入使用者分別設定持倉／自選、市場、策略、訊號狀態與每日／每小時頻率。台股或美股開盤時，後端會以當日盤中 OHLCV 合成暫估日 K 重新計算策略；收盤後則使用正式日 K。後端只在符合條件且結果改變時寄出摘要，並以 K 棒日期、盤中／收盤快照、標的、策略、方向及狀態去重。
+
+先套用 migration 並部署通知 Function：
+
+```bash
+npx supabase@latest db push
+npx supabase@latest functions deploy signal-notifications --no-verify-jwt
+```
+
+設定後端 Secrets（不可放進 `EXPO_PUBLIC_*` 或提交到 Git）：
+
+```bash
+npx supabase@latest secrets set \
+  SIGNAL_CRON_SECRET="請產生一組長隨機字串" \
+  FINMIND_API_TOKEN="你的 FinMind token" \
+  RESEND_API_KEY="你的 Resend API key" \
+  SIGNAL_EMAIL_FROM="WealthTracker <alerts@你的已驗證網域>" \
+  LINE_CHANNEL_SECRET="LINE Messaging API channel secret" \
+  LINE_CHANNEL_ACCESS_TOKEN="LINE Messaging API channel access token"
+```
+
+在 Supabase Dashboard 的 Cron 建立一條「每小時」工作，對下列網址送出 `POST`：
+
+```text
+https://<project-ref>.supabase.co/functions/v1/signal-notifications
+```
+
+Header 加入 `Content-Type: application/json` 與 `x-signal-cron-secret: <SIGNAL_CRON_SECRET>`，Body 使用：
+
+```json
+{ "action": "run" }
+```
+
+Function 會自行判斷每位使用者目前是否到達其每小時或每日排程，不需要為每位使用者建立 Cron。LINE 端請建立 Messaging API channel，將 Webhook URL 設為同一個 Function URL；使用者加入官方帳號後，在聊天室輸入 App 產生的一次性綁定碼即可。Email 由 Resend 發送，正式寄送前必須先完成寄件網域驗證。
+
+### AI 重大事件通知
+
+App 的「更多 → 重大事件通知」會依使用者的持倉與自選清單，以 Gemini Google Search 搜尋當日重大事件，回傳繁體中文摘要、關聯標的、重要性與可開啟的來源連結。台股、美股與加密貨幣可分別開關，Email／LINE 收件管道沿用「訊號通知」設定。
+
+```bash
+npx supabase@latest db push
+npx supabase@latest functions deploy market-event-notifications --no-verify-jwt
+```
+
+不需要新增第二條 Cron：現有 `signal-notifications` 每小時排程會呼叫 `market-event-notifications`，後者再依每位使用者設定的每日時間判斷是否執行。需要的 Secrets 與既有通知相同，另外會使用 `GEMINI_API_KEY`。Google Search grounding 可能產生 Gemini API 搜尋用量；搜尋結果可能遺漏或誤判，App 與通知都會保留來源供使用者核對。
+
+可用下列方式手動測試排程（請勿把 Secret 留在 shell history 或截圖）：
+
+```bash
+curl -X POST 'https://<project-ref>.supabase.co/functions/v1/signal-notifications' \
+  -H 'Content-Type: application/json' \
+  -H 'x-signal-cron-secret: <SIGNAL_CRON_SECRET>' \
+  -d '{"action":"run"}'
+```
 
 ```bash
 supabase login
