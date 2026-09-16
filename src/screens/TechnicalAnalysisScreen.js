@@ -326,7 +326,7 @@ export default function TechnicalAnalysisScreen({ navigation, route }) {
     setLoading(true);
     setError(null);
     try {
-      const context = await fetchMarketTechnicalContext(symbol, marketType, 1095, forceRefresh);
+      const context = await fetchMarketTechnicalContext(symbol, marketType, 1095, forceRefresh, true);
       setRawRows(context.rows);
       setMarketContext(context);
       const { data: { user } } = await supabase.auth.getUser();
@@ -430,7 +430,7 @@ export default function TechnicalAnalysisScreen({ navigation, route }) {
     <ScrollView style={{ backgroundColor: colors.bg }} contentContainerStyle={styles.content}>
       <View style={styles.quoteRow}>
         <View style={styles.flex}><Text style={[styles.symbol, { color: colors.text }]}>{symbol}</Text><Text style={[styles.name, { color: colors.textSub }]}>{displayName} · 日 K 完成至 {latestCompletedDate}{hasProvisionalCandle ? ` · ${intradayCandleDate} 盤中暫估` : ''}</Text></View>
-        <View style={styles.quoteRight}><Text style={[styles.close, { color: colors.text }]}>{money(displayedPrice)}</Text><Text style={[styles.change, { color: changeColor }]}>{change >= 0 ? '+' : ''}{money(change)}（{changePct >= 0 ? '+' : ''}{changePct.toFixed(2)}%）</Text>{liveQuote && <Text style={[styles.quoteMeta, { color: colors.textMuted }]}>{liveQuote.isLive ? '盤中報價' : '最近報價'} · {quoteTime(liveQuote.time, marketType)}</Text>}<TouchableOpacity onPress={() => load(true)} style={[styles.quoteRefresh, { borderColor: colors.border, backgroundColor: colors.cardAlt }]}><RefreshCw size={11} color={colors.textSub} /><Text style={[styles.quoteRefreshText, { color: colors.textSub }]}>更新</Text></TouchableOpacity></View>
+        <View style={styles.quoteRight}><Text style={[styles.close, { color: colors.text }]}>{money(displayedPrice)}</Text><Text style={[styles.change, { color: changeColor }]}>{change >= 0 ? '+' : ''}{money(change)}（{changePct >= 0 ? '+' : ''}{changePct.toFixed(2)}%）</Text>{liveQuote && <Text style={[styles.quoteMeta, { color: colors.textMuted }]}>{marketContext.quoteSource || liveQuote.source || '行情來源'} · {liveQuote.isLive ? '盤中' : '最近報價'} · {quoteTime(liveQuote.time, marketType)}</Text>}<TouchableOpacity onPress={() => load(true)} style={[styles.quoteRefresh, { borderColor: colors.border, backgroundColor: colors.cardAlt }]}><RefreshCw size={11} color={colors.textSub} /><Text style={[styles.quoteRefreshText, { color: colors.textSub }]}>更新</Text></TouchableOpacity></View>
       </View>
 
       <View style={styles.periodRow}>{PERIODS.map(item => <TouchableOpacity key={item.key} style={[styles.chip, { borderColor: period === item.key ? colors.accent : colors.border, backgroundColor: period === item.key ? colors.accentSoft : colors.card }]} onPress={() => setPeriod(item.key)}><Text style={[styles.chipText, { color: period === item.key ? colors.accent : colors.textSub }]}>{item.label}</Text></TouchableOpacity>)}</View>

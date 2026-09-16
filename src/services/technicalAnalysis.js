@@ -1053,6 +1053,8 @@ export async function fetchMarketTechnicalContext(symbol, marketType = 'TW', day
       relativeStrengthBenchmark: data.relativeStrengthBenchmark || '',
       name: data.name || '',
       quote: data.quote || null,
+      quoteSource: data.quoteSource || data.quote?.source || '',
+      quoteStatus: data.quoteStatus || (data.isIntraday ? 'intraday' : 'official_close'),
       isIntraday: Boolean(data.isIntraday),
       quoteTime: data.quoteTime || '',
       intradayUnavailable: Boolean(data.intradayUnavailable),
@@ -1063,7 +1065,7 @@ export async function fetchMarketTechnicalContext(symbol, marketType = 'TW', day
     return result;
   } catch (error) {
     const rows = await fetchMarketTechnicalData(symbol, market, days, forceRefresh);
-    return { rows, institutional: [], benchmarkRows: [], relativeStrengthRows: [], relativeStrengthBenchmark: '', name: '', quote: null, isIntraday: false, quoteTime: '', intradayUnavailable: includeIntraday, marketType: market, symbol: String(symbol).toUpperCase(), contextError: error.message };
+    return { rows, institutional: [], benchmarkRows: [], relativeStrengthRows: [], relativeStrengthBenchmark: '', name: '', quote: null, quoteSource: '', quoteStatus: 'unavailable', isIntraday: false, quoteTime: '', intradayUnavailable: includeIntraday, marketType: market, symbol: String(symbol).toUpperCase(), contextError: error.message };
   }
 }
 

@@ -198,11 +198,16 @@ async function nasdaqQuote(symbol: string): Promise<MarketQuote | null> {
 }
 
 async function marketQuote(symbol: string, market: string) {
-  try {
-    const quote = await yahooQuote(symbol, market);
-    if (quote?.isLive) return quote;
-  } catch {
-    // Yahoo minute endpoints can return 429; US quotes then use Nasdaq.
+  const candidates = market === "TW" && /^\d+$/.test(symbol)
+    ? [`${symbol}.TW`, `${symbol}.TWO`]
+    : [symbol];
+  for (const candidate of candidates) {
+    try {
+      const quote = await yahooQuote(candidate, market);
+      if (quote?.isLive) return quote;
+    } catch {
+      // Try the next Taiwan suffix, or Nasdaq for US symbols.
+    }
   }
   return market === "US" ? nasdaqQuote(symbol) : null;
 }
@@ -316,7 +321,7 @@ Deno.serve(async (request) => {
     const relativeStrengthBenchmark = market === "US" ? "QQQ" : market === "TW" ? "加權指數" : "BTC";
     const quoteRequest = market === "CRYPTO"
       ? Promise.resolve(null)
-      : marketQuote(market === "TW" ? `${safeSymbol}.TW` : safeSymbol, market).catch(() => null);
+      : marketQuote(safeSymbol, market).catch(() => null);
     const benchmarkQuoteRequest = market === "CRYPTO"
       ? Promise.resolve(null)
       : marketQuote(market === "TW" ? "^TWII" : "^GSPC", market).catch(() => null);
@@ -344,9 +349,11 @@ Deno.serve(async (request) => {
       relativeStrengthRows: useIntraday ? (cryptoIntraday ? relativeStrengthRows : mergeIntradayQuote(completedRelativeStrengthRows, relativeStrengthQuote)) : completedRelativeStrengthRows,
       relativeStrengthBenchmark,
       quote,
+      quoteSource: quote?.source || "",
+      quoteStatus: useIntraday ? "intraday" : "official_close",
       isIntraday: useIntraday,
       quoteTime: useIntraday ? (quote?.time || new Date().toISOString()) : "",
-      intradayUnavailable: Boolean(includeIntraday) && market === "US" && usMarketIsOpen() && !useIntraday,
+      intradayUnavailable: Boolean(includeIntraday) && ["TW", "US"].includes(market) && marketSessionIsOpen(market) && !useIntraday,
     };
     if (result.rows.length < 60) return json({ error: "歷史資料不足 60 個交易日。" }, 422);
     return json(result);

@@ -28,6 +28,69 @@ const TW_STOCK_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 const BINANCE_BASE_URL = 'https://api.binance.com/api/v3';
 const STABLECOINS = new Set(['USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'FDUSD']);
 
+const quoteStatusFromState = state => String(state || '').toUpperCase() === 'REGULAR'
+  ? 'intraday'
+  : 'official_close';
+
+const normalizeQuoteMetadata = priceData => {
+  const fetchedAt = priceData.fetched_at || new Date().toISOString();
+  const sourceTime = priceData.source_time || priceData.price_time || fetchedAt;
+  return {
+    ...priceData,
+    source: priceData.source || 'unknown',
+    source_time: sourceTime,
+    fetched_at: fetchedAt,
+    price_time: sourceTime,
+    quote_status: priceData.quote_status || 'unknown',
+    is_stale: Boolean(priceData.is_stale),
+  };
+};
+
+const normalizeServerQuote = quote => normalizeQuoteMetadata({
+  symbol: String(quote.symbol || '').toUpperCase(),
+  price: Number(quote.price),
+  change_percent: Number(quote.changePercent || 0),
+  volume: Number(quote.volume || 0),
+  market_type: String(quote.market || '').toUpperCase() === 'CRYPTO' ? 'Crypto' : quote.market,
+  source: quote.source,
+  source_time: quote.sourceTime,
+  fetched_at: quote.fetchedAt,
+  quote_status: quote.quoteStatus,
+  is_stale: quote.isStale,
+});
+
+const rememberQuote = priceData => {
+  const memKey = `${priceData.symbol}::${priceData.market_type}`;
+  _priceMemCache.set(memKey, { data: priceData, timestamp: Date.now() });
+  if (priceData.is_stale) _priceStaleCache.set(memKey, priceData);
+  else _priceStaleCache.delete(memKey);
+};
+
+// Primary quote gateway. Providers are called from the Edge Function so mobile
+// clients are not dependent on third-party CORS behavior or device networking.
+// Existing direct provider calls remain below as a resilient fallback.
+const fetchServerQuotes = async targets => {
+  const symbols = targets
+    .filter(target => target?.symbol)
+    .map(target => ({
+      symbol: String(target.symbol).toUpperCase(),
+      market: String(target.market || '').toUpperCase(),
+    }));
+  if (!symbols.length) return {};
+  const { data, error } = await supabase.functions.invoke('market-data', {
+    body: { symbols },
+  });
+  if (error) throw error;
+  const result = {};
+  for (const quote of data?.quotes || []) {
+    const normalized = normalizeServerQuote(quote);
+    if (!(normalized.price > 0)) continue;
+    rememberQuote(normalized);
+    result[normalized.symbol] = normalized;
+  }
+  return result;
+};
+
 export const US_POPULAR_STOCKS = [
   { symbol: 'AAPL', name: 'Apple Inc.', market_type: 'US' },
   { symbol: 'NVDA', name: 'NVIDIA Corporation', market_type: 'US' },
@@ -61,6 +124,11 @@ export const fetchTWStockPrice = async (symbol) => {
     const cached = await getCachedPrice(symbol, 'TW');
     if (cached) return cached;
 
+    try {
+      const serverQuotes = await fetchServerQuotes([{ symbol, market: 'TW' }]);
+      if (serverQuotes[String(symbol).toUpperCase()]) return serverQuotes[String(symbol).toUpperCase()];
+    } catch { /* fall through to direct providers */ }
+
     // Layer 1: TWSE MIS 盤中即時（交易時間內最準確）
     for (const prefix of ['tse', 'otc']) {
       try {
@@ -86,6 +154,8 @@ export const fetchTWStockPrice = async (symbol) => {
             : 0,
           volume: parseFloat(item.v) * 1000 || 0,
           market_type: 'TW',
+          source: 'TWSE MIS',
+          quote_status: 'intraday',
           price_time: twTime,
         };
         await cachePrice(priceData);
@@ -112,6 +182,8 @@ export const fetchTWStockPrice = async (symbol) => {
             change_percent: quote.regularMarketChangePercent ?? 0,
             volume: quote.regularMarketVolume ?? 0,
             market_type: 'TW',
+            source: 'Yahoo Finance',
+            quote_status: quoteStatusFromState(quote.marketState),
             price_time: quote.regularMarketTime
               ? new Date(quote.regularMarketTime * 1000).toISOString()
               : new Date().toISOString(),
@@ -145,6 +217,8 @@ export const fetchTWStockPrice = async (symbol) => {
             change_percent: calculateChangePercent(prevClose, meta.regularMarketPrice),
             volume: meta.regularMarketVolume ?? 0,
             market_type: 'TW',
+            source: 'Yahoo Finance',
+            quote_status: quoteStatusFromState(meta.marketState),
             price_time: meta.regularMarketTime
               ? new Date(meta.regularMarketTime * 1000).toISOString()
               : new Date().toISOString(),
@@ -172,6 +246,8 @@ export const fetchTWStockPrice = async (symbol) => {
         change_percent: calculateChangePercent(prevClose, parseFloat(latest.close)),
         volume: parseFloat(latest.Trading_Volume),
         market_type: 'TW',
+        source: 'FinMind',
+        quote_status: 'official_close',
         price_time: new Date(latest.date).toISOString(),
       };
       await cachePrice(priceData);
@@ -197,6 +273,11 @@ export const fetchUSStockPrice = async (symbol) => {
     const cached = await getCachedPrice(symbol, 'US');
     if (cached) return cached;
 
+    try {
+      const serverQuotes = await fetchServerQuotes([{ symbol, market: 'US' }]);
+      if (serverQuotes[String(symbol).toUpperCase()]) return serverQuotes[String(symbol).toUpperCase()];
+    } catch { /* fall through to direct providers */ }
+
     // Primary: Yahoo Finance v7/quote (supports batch, more current)
     try {
       const res = await fetch(
@@ -217,6 +298,8 @@ export const fetchUSStockPrice = async (symbol) => {
               )),
             volume: quote.regularMarketVolume ?? 0,
             market_type: 'US',
+            source: 'Yahoo Finance',
+            quote_status: quoteStatusFromState(quote.marketState),
             price_time: quote.regularMarketTime
               ? new Date(quote.regularMarketTime * 1000).toISOString()
               : new Date().toISOString(),
@@ -247,6 +330,8 @@ export const fetchUSStockPrice = async (symbol) => {
           : calculateChangePercent(usPrevClose, meta.regularMarketPrice ?? meta.previousClose),
         volume: meta.regularMarketVolume ?? 0,
         market_type: 'US',
+        source: 'Yahoo Finance',
+        quote_status: quoteStatusFromState(meta.marketState),
         price_time: meta.regularMarketTime
           ? new Date(meta.regularMarketTime * 1000).toISOString()
           : new Date().toISOString(),
@@ -301,10 +386,15 @@ export const fetchCryptoPrice = async (symbol) => {
 
     // Stablecoins are always ~1 USD, skip API call
     if (STABLECOINS.has(upperSymbol)) {
-      const priceData = { symbol: upperSymbol, price: 1, change_percent: 0, volume: 0, market_type: 'Crypto' };
+      const priceData = { symbol: upperSymbol, price: 1, change_percent: 0, volume: 0, market_type: 'Crypto', source: 'Fixed USD peg', quote_status: 'reference' };
       await cachePrice(priceData);
       return priceData;
     }
+
+    try {
+      const serverQuotes = await fetchServerQuotes([{ symbol: upperSymbol, market: 'CRYPTO' }]);
+      if (serverQuotes[upperSymbol]) return serverQuotes[upperSymbol];
+    } catch { /* fall through to direct providers */ }
 
     // Primary: Binance 24hr ticker (real-time, no key needed)
     try {
@@ -318,6 +408,8 @@ export const fetchCryptoPrice = async (symbol) => {
             change_percent: parseFloat(data.priceChangePercent),
             volume: parseFloat(data.quoteVolume) || 0,
             market_type: 'Crypto',
+            source: 'Binance',
+            quote_status: 'intraday',
             price_time: data.closeTime
               ? new Date(parseInt(data.closeTime)).toISOString()
               : new Date().toISOString(),
@@ -348,6 +440,8 @@ export const fetchCryptoPrice = async (symbol) => {
         change_percent: data[coinId].usd_24h_change || 0,
         volume: data[coinId].usd_24h_vol || 0,
         market_type: 'Crypto',
+        source: 'CoinGecko',
+        quote_status: 'intraday',
         price_time: new Date().toISOString(),
       };
       await cachePrice(priceData);
@@ -370,10 +464,16 @@ export const fetchCryptoPrice = async (symbol) => {
  */
 export const fetchTWStockPriceBatch = async (symbols) => {
   if (!symbols || symbols.length === 0) return {};
-  const results = await Promise.allSettled(symbols.map(s => fetchTWStockPrice(s)));
-  return Object.fromEntries(
-    symbols.map((s, i) => [s, results[i].status === 'fulfilled' ? results[i].value : null])
-  );
+  let result = {};
+  try {
+    result = await fetchServerQuotes(symbols.map(symbol => ({ symbol, market: 'TW' })));
+  } catch { /* use individual fallbacks below */ }
+  const missing = symbols.filter(symbol => !result[String(symbol).toUpperCase()]);
+  const fallbacks = await Promise.allSettled(missing.map(symbol => fetchTWStockPrice(symbol)));
+  missing.forEach((symbol, index) => {
+    result[symbol] = fallbacks[index].status === 'fulfilled' ? fallbacks[index].value : null;
+  });
+  return Object.fromEntries(symbols.map(symbol => [symbol, result[String(symbol).toUpperCase()] ?? result[symbol] ?? null]));
 };
 
 /**
@@ -395,8 +495,16 @@ export const fetchUSStockPriceBatch = async (symbols) => {
   if (toFetch.length === 0) return result;
 
   try {
+    const serverQuotes = await fetchServerQuotes(toFetch.map(symbol => ({ symbol, market: 'US' })));
+    Object.assign(result, serverQuotes);
+  } catch { /* use direct Yahoo fallback below */ }
+
+  const directFetchSymbols = toFetch.filter(sym => !result[String(sym).toUpperCase()]);
+  if (directFetchSymbols.length === 0) return result;
+
+  try {
     const res = await fetch(
-      `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${toFetch.join(',')}`
+      `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${directFetchSymbols.join(',')}`
     );
     if (res.ok) {
       const data = await res.json();
@@ -414,6 +522,8 @@ export const fetchUSStockPriceBatch = async (symbols) => {
             )),
           volume: quote.regularMarketVolume ?? 0,
           market_type: 'US',
+          source: 'Yahoo Finance',
+          quote_status: quoteStatusFromState(quote.marketState),
           price_time: quote.regularMarketTime
             ? new Date(quote.regularMarketTime * 1000).toISOString()
             : new Date().toISOString(),
@@ -426,7 +536,7 @@ export const fetchUSStockPriceBatch = async (symbols) => {
 
   // Individual fallback for any symbols still missing
   await Promise.allSettled(
-    toFetch
+    directFetchSymbols
       .filter(sym => !result[sym])
       .map(async (sym) => {
         try {
@@ -451,7 +561,7 @@ export const fetchCryptoPriceBatch = async (symbols) => {
   for (const sym of symbols) {
     const upper = sym.toUpperCase();
     if (STABLECOINS.has(upper)) {
-      result[upper] = { symbol: upper, price: 1, change_percent: 0, volume: 0, market_type: 'Crypto' };
+      result[upper] = normalizeQuoteMetadata({ symbol: upper, price: 1, change_percent: 0, volume: 0, market_type: 'Crypto', source: 'Fixed USD peg', quote_status: 'reference' });
       continue;
     }
     const cached = await getCachedPrice(upper, 'Crypto');
@@ -461,7 +571,15 @@ export const fetchCryptoPriceBatch = async (symbols) => {
   if (toFetch.length === 0) return result;
 
   try {
-    const binanceSymbols = toFetch.map(s => `"${s}USDT"`).join(',');
+    const serverQuotes = await fetchServerQuotes(toFetch.map(symbol => ({ symbol, market: 'CRYPTO' })));
+    Object.assign(result, serverQuotes);
+  } catch { /* use direct Binance fallback below */ }
+
+  const directFetchSymbols = toFetch.filter(sym => !result[String(sym).toUpperCase()]);
+  if (directFetchSymbols.length === 0) return result;
+
+  try {
+    const binanceSymbols = directFetchSymbols.map(s => `"${s}USDT"`).join(',');
     const res = await fetch(`${BINANCE_BASE_URL}/ticker/24hr?symbols=[${binanceSymbols}]`);
     if (res.ok) {
       const tickers = await res.json();
@@ -475,6 +593,8 @@ export const fetchCryptoPriceBatch = async (symbols) => {
             change_percent: parseFloat(t.priceChangePercent),
             volume: parseFloat(t.quoteVolume),
             market_type: 'Crypto',
+            source: 'Binance',
+            quote_status: 'intraday',
             price_time: t.closeTime
               ? new Date(parseInt(t.closeTime)).toISOString()
               : new Date().toISOString(),
@@ -488,7 +608,7 @@ export const fetchCryptoPriceBatch = async (symbols) => {
 
   // Individual fallback for missing symbols — sequential with 200ms delay to avoid CoinGecko 429
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-  const missingSymbols = toFetch.filter(sym => !result[sym]);
+  const missingSymbols = directFetchSymbols.filter(sym => !result[sym]);
   for (const sym of missingSymbols) {
     try {
       const priceData = await fetchCryptoPrice(sym);
@@ -1389,26 +1509,34 @@ const getCachedPrice = async (symbol, marketType) => {
 
       if (error || !data) return null;
 
-      if (isRecentCache(data.updated_at)) {
-        const priceData = {
+      if (isRecentCache(data.fetched_at || data.updated_at)) {
+        const priceData = normalizeQuoteMetadata({
           symbol: data.symbol,
           price: parseFloat(data.price),
           change_percent: parseFloat(data.change_percent),
           volume: parseFloat(data.volume),
           market_type: data.market_type,
-          price_time: data.updated_at,
-        };
+          source: data.source,
+          source_time: data.source_time || data.updated_at,
+          fetched_at: data.fetched_at || data.updated_at,
+          quote_status: data.quote_status,
+          is_stale: data.is_stale,
+        });
         _priceMemCache.set(memKey, { data: priceData, timestamp: Date.now() });
         return priceData;
       }
-      _priceStaleCache.set(memKey, {
+      _priceStaleCache.set(memKey, normalizeQuoteMetadata({
         symbol: data.symbol,
         price: parseFloat(data.price),
         change_percent: parseFloat(data.change_percent),
         volume: parseFloat(data.volume),
         market_type: data.market_type,
-        price_time: data.updated_at,
-      });
+        source: data.source,
+        source_time: data.source_time || data.updated_at,
+        fetched_at: data.fetched_at || data.updated_at,
+        quote_status: 'stale',
+        is_stale: true,
+      }));
       return null;
     } catch {
       return null;
@@ -1426,19 +1554,26 @@ const getStaleCachedPrice = (symbol, marketType) =>
 
 const cachePrice = async (priceData) => {
   try {
+    const normalized = normalizeQuoteMetadata(priceData);
+    Object.assign(priceData, normalized);
     // Fix 5: write to L1 in-memory cache immediately (no round-trip needed)
-    const memKey = `${priceData.symbol}::${priceData.market_type}`;
-    _priceMemCache.set(memKey, { data: priceData, timestamp: Date.now() });
+    const memKey = `${normalized.symbol}::${normalized.market_type}`;
+    _priceMemCache.set(memKey, { data: normalized, timestamp: Date.now() });
     _priceStaleCache.delete(memKey);
 
     await supabase
       .from('price_cache')
       .upsert({
-        symbol: priceData.symbol,
-        market_type: priceData.market_type,
-        price: priceData.price,
-        change_percent: priceData.change_percent,
-        volume: priceData.volume,
+        symbol: normalized.symbol,
+        market_type: normalized.market_type,
+        price: normalized.price,
+        change_percent: normalized.change_percent,
+        volume: normalized.volume,
+        source: normalized.source,
+        source_time: normalized.source_time,
+        fetched_at: normalized.fetched_at,
+        quote_status: normalized.quote_status,
+        is_stale: normalized.is_stale,
         updated_at: new Date().toISOString(),
       }, { onConflict: 'symbol,market_type' });
   } catch (error) {

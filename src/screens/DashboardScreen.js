@@ -20,6 +20,7 @@ import {
 } from '../services/portfolio';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../lib/ThemeContext';
+import { describeQuote, getQuoteStatusColor } from '../lib/quoteMetadata';
 
 const DASHBOARD_CACHE_KEY = '@wt_dashboard_cache';
 
@@ -937,6 +938,28 @@ export default function DashboardScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.assetName, { color: C.text }]}>{asset.name}</Text>
                   <Text style={[styles.assetMeta, { color: C.textMuted }]}>{asset.currency}</Text>
+                  {asset.category === 'investment' && asset.price_source_time && (
+                    <Text
+                      style={[
+                        styles.assetQuoteMeta,
+                        {
+                          color: getQuoteStatusColor(
+                            asset.price_quote_status,
+                            asset.price_is_stale,
+                            colors,
+                          ),
+                        },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {describeQuote({
+                        source: asset.price_source,
+                        source_time: asset.price_source_time,
+                        quote_status: asset.price_quote_status,
+                        is_stale: asset.price_is_stale,
+                      })}
+                    </Text>
+                  )}
                 </View>
                 <View style={{ alignItems: 'flex-end' }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -1144,6 +1167,7 @@ const styles = StyleSheet.create({
   assetRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1 },
   assetName:   { fontSize: 15, fontWeight: '500', marginBottom: 2 },
   assetMeta:   { fontSize: 12 },
+  assetQuoteMeta: { fontSize: 10, fontWeight: '600', marginTop: 3 },
   assetAmount: { fontSize: 16, fontWeight: '600' },
   assetShares: { fontSize: 12, marginTop: 2 },
 

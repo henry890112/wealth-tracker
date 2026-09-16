@@ -26,6 +26,7 @@ import { buildTechnicalsText } from '../services/indicators';
 import { analyzeAsset } from '../services/ai';
 import { getAssetCurrency } from '../services/portfolio';
 import { useTheme } from '../lib/ThemeContext';
+import { describeQuote, getQuoteStatusColor } from '../lib/quoteMetadata';
 import TechnicalAnalysisChart from '../components/TechnicalAnalysisChart';
 import MarkdownText from '../components/MarkdownText';
 import { analyzeTechnicalData, fetchMarketTechnicalContext } from '../services/technicalAnalysis';
@@ -243,18 +244,6 @@ const chipLineStyles = StyleSheet.create({
 
 const todayString = () => new Date().toISOString().split('T')[0];
 
-const formatPriceTime = (isoStr) => {
-  if (!isoStr) return null;
-  const d = new Date(isoStr);
-  if (isNaN(d.getTime())) return null;
-  const now = new Date();
-  const sameDay = d.getFullYear() === now.getFullYear()
-    && d.getMonth() === now.getMonth()
-    && d.getDate() === now.getDate();
-  const hms = `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
-  return sameDay ? hms : `${d.getMonth()+1}/${d.getDate()} ${hms}`;
-};
-
 export default function AssetDetailScreen() {
   const route = useRoute();
   const navigation = useNavigation();
@@ -276,6 +265,7 @@ export default function AssetDetailScreen() {
   const [technicalStrategy, setTechnicalStrategy] = useState('divergence');
   const [technicalLayers, setTechnicalLayers] = useState({ ma: true, levels: true, volume: true, volumeProfile: true, macd: false, rsi: false, kd: false });
   const [priceTime, setPriceTime] = useState(null);
+  const [quoteMetadata, setQuoteMetadata] = useState(null);
   const [chipData, setChipData] = useState(null);
   const [marginData, setMarginData] = useState(null);
   const [holdingData, setHoldingData] = useState(null);
@@ -313,7 +303,7 @@ export default function AssetDetailScreen() {
     setTechnicalLoading(true);
     setTechnicalError(null);
     try {
-      const context = await fetchMarketTechnicalContext(asset.symbol, asset.market_type, 1095, forceRefresh);
+      const context = await fetchMarketTechnicalContext(asset.symbol, asset.market_type, 1095, forceRefresh, true);
       setTechnicalRows(context.rows);
       setTechnicalContext(context);
     } catch (error) {
@@ -485,6 +475,15 @@ export default function AssetDetailScreen() {
             // Discard if a newer fetch has started
             if (fetchId !== livePriceFetchIdRef.current) return;
             if (priceData?.price_time) setPriceTime(priceData.price_time);
+            if (priceData) {
+              setQuoteMetadata({
+                source: priceData.source,
+                source_time: priceData.source_time || priceData.price_time,
+                fetched_at: priceData.fetched_at,
+                quote_status: priceData.quote_status,
+                is_stale: priceData.is_stale,
+              });
+            }
             // Recalculate converted_amount from live price so P&L is accurate
             if (priceData?.price && totalShares > 0) {
               const lev2 = primaryAsset.leverage || 1;
@@ -722,14 +721,18 @@ export default function AssetDetailScreen() {
               {formatCurrency(asset.converted_amount)}
             </Text>
           </View>
-          {priceTime && (
-            <Text style={{ color: colors.textSub, fontSize: 11, textAlign: 'center', marginTop: 2 }}>
-              {`報價時間 ${formatPriceTime(priceTime)}`}
-            </Text>
-          )}
-          {asset.market_type === 'US' && (
-            <Text style={{ color: colors.textMuted, fontSize: 10, textAlign: 'center', marginTop: 1 }}>
-              （延遲 15 分鐘）
+          {(quoteMetadata || priceTime) && (
+            <Text style={{
+              color: getQuoteStatusColor(
+                quoteMetadata?.quote_status,
+                quoteMetadata?.is_stale,
+                colors,
+              ),
+              fontSize: 11,
+              textAlign: 'center',
+              marginTop: 4,
+            }}>
+              {describeQuote({ ...quoteMetadata, price_time: priceTime })}
             </Text>
           )}
           {asset.current_shares > 0 && (

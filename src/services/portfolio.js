@@ -147,6 +147,11 @@ export const valueAssets = async (
     live_price: usesLivePrice ? quote.price : null,
     price_change_pct: Number.isFinite(quoteChangePct) ? quoteChangePct : null,
     price_time: quote?.price_time || asset.price_time || null,
+    price_source: quote?.source || asset.price_source || null,
+    price_source_time: quote?.source_time || quote?.price_time || asset.price_source_time || asset.price_time || null,
+    price_fetched_at: quote?.fetched_at || asset.price_fetched_at || null,
+    price_quote_status: quote?.quote_status || asset.price_quote_status || 'unknown',
+    price_is_stale: Boolean(quote?.is_stale || asset.price_is_stale),
   };
 }));
 

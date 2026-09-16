@@ -142,6 +142,11 @@ enabled = true
 verify_jwt = true
 entrypoint = "./functions/market-history/index.ts"
 
+[functions.market-data]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/market-data/index.ts"
+
 [functions.signal-notifications]
 enabled = true
 # LINE webhooks and scheduled calls authenticate with provider signatures or a

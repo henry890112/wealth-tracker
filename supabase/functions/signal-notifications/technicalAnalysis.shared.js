@@ -1037,13 +1037,13 @@ export async function fetchMarketTechnicalData(symbol, marketType = 'TW', days =
   throw new Error(`目前尚未支援 ${marketType || '此市場'} 的 K 線資料。`);
 }
 
-export async function fetchMarketTechnicalContext(symbol, marketType = 'TW', days = 1095, forceRefresh = false) {
+export async function fetchMarketTechnicalContext(symbol, marketType = 'TW', days = 1095, forceRefresh = false, includeIntraday = false) {
   const market = String(marketType || (/^\d+$/.test(String(symbol)) ? 'TW' : 'US')).toUpperCase();
-  const key = `CTX:${market}:${symbol}:${days}`;
+  const key = `CTX:${market}:${symbol}:${days}:${includeIntraday ? 'intraday' : 'closed'}`;
   const hit = cache.get(key);
   if (!forceRefresh && hit && Date.now() - hit.timestamp < CACHE_TTL) return hit.data;
   try {
-    const { data, error } = await supabase.functions.invoke('market-history', { body: { symbol, marketType: market, days } });
+    const { data, error } = await supabase.functions.invoke('market-history', { body: { symbol, marketType: market, days, includeIntraday } });
     if (error) throw error;
     if (!Array.isArray(data?.rows) || data.rows.length < 60) throw new Error(data?.error || '歷史資料不足');
     const result = {
@@ -1054,6 +1054,11 @@ export async function fetchMarketTechnicalContext(symbol, marketType = 'TW', day
       relativeStrengthBenchmark: data.relativeStrengthBenchmark || '',
       name: data.name || '',
       quote: data.quote || null,
+      quoteSource: data.quoteSource || data.quote?.source || '',
+      quoteStatus: data.quoteStatus || (data.isIntraday ? 'intraday' : 'official_close'),
+      isIntraday: Boolean(data.isIntraday),
+      quoteTime: data.quoteTime || '',
+      intradayUnavailable: Boolean(data.intradayUnavailable),
       marketType: market,
       symbol: String(symbol).toUpperCase(),
     };
@@ -1061,12 +1066,14 @@ export async function fetchMarketTechnicalContext(symbol, marketType = 'TW', day
     return result;
   } catch (error) {
     const rows = await fetchMarketTechnicalData(symbol, market, days, forceRefresh);
-    return { rows, institutional: [], benchmarkRows: [], relativeStrengthRows: [], relativeStrengthBenchmark: '', name: '', quote: null, marketType: market, symbol: String(symbol).toUpperCase(), contextError: error.message };
+    return { rows, institutional: [], benchmarkRows: [], relativeStrengthRows: [], relativeStrengthBenchmark: '', name: '', quote: null, quoteSource: '', quoteStatus: 'unavailable', isIntraday: false, quoteTime: '', intradayUnavailable: includeIntraday, marketType: market, symbol: String(symbol).toUpperCase(), contextError: error.message };
   }
 }
 
 export function analyzeTechnicalData(rawRows, displayCount = rawRows.length, context = {}) {
   const closes = rawRows.map(row => row.close);
+  const ma5Values = movingAverage(closes, 5);
+  const ma10Values = movingAverage(closes, 10);
   const ma20Values = movingAverage(closes, 20);
   const ma50Values = movingAverage(closes, 50);
   const ma60Values = movingAverage(closes, 60);
@@ -1086,6 +1093,8 @@ export function analyzeTechnicalData(rawRows, displayCount = rawRows.length, con
   const { kValues, dValues } = stochasticOscillator(rawRows, 9, 3);
   const enrichedAll = rawRows.map((row, index) => ({
     ...row,
+    ma5: ma5Values[index],
+    ma10: ma10Values[index],
     ma20: ma20Values[index],
     ma50: ma50Values[index],
     ma60: ma60Values[index],
