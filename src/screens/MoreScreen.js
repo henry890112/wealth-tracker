@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-nati
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   BarChart3, BellRing, Bot, ChevronRight, CircleHelp, CloudUpload, CreditCard, Landmark,
-  FileDown, Globe, Info, Newspaper, Palette, Settings2, UserRound,
+  FileDown, Globe, Info, Newspaper, Palette, Settings2, TrendingUp, UserRound,
 } from 'lucide-react-native';
 import { useTheme } from '../lib/ThemeContext';
 
@@ -12,6 +12,8 @@ const SECTIONS = [
     title: '財務工具',
     items: [
       { title: '固定支出', subtitle: '管理定期扣款與固定支出', Icon: CreditCard, route: 'FixedExpenses' },
+      { title: '市場動態', subtitle: '台美大盤、科技、半導體、估值與利率', Icon: TrendingUp, route: 'MarketOverview' },
+      { title: '美股／台股選擇權分析', subtitle: 'Gamma 敞口、Call／Put Wall 與成交量分布', Icon: BarChart3, route: 'OptionsAnalysis' },
       { title: 'AI 財務分析', subtitle: '資產組合分析與投資建議', Icon: Bot, route: 'AI' },
       { title: '台股研究訊號', subtitle: '低估值、法人與趨勢的每日篩選', Icon: BarChart3, route: 'InvestmentSignals' },
     ],

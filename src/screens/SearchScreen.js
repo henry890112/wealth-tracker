@@ -25,7 +25,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Svg, Polyline, Circle, Line, Path, Defs, LinearGradient, Stop, Text as SvgText } from 'react-native-svg';
 import { supabase } from '../lib/supabase';
 import {
-  searchAssets,
+  searchAssetsDetailed,
   fetchTrendingAssets,
   fetchBOTRatesForFX,
   fetchTWStockPrice,
@@ -34,10 +34,11 @@ import {
   fetchUSStockPriceBatch,
   fetchCryptoPriceBatch,
   fetchTWStockPriceBatch,
+  resolveTWStockNames,
 } from '../services/api';
 import { useTheme } from '../lib/ThemeContext';
 import { getAlerts, saveAlert, deleteAlert, resetAlert, checkAndFireAlerts, requestNotificationPermission, registerBackgroundPriceAlerts } from '../lib/priceAlerts';
-import { syncLocalWatchlistToCloud } from '../services/investmentSignals';
+import { loadCloudWatchlist, syncLocalWatchlistToCloud } from '../services/investmentSignals';
 
 const MARKET_TABS = [
   { id: 'watchlist', label: '★ 自選' },
@@ -65,6 +66,7 @@ const INDEX_TV_MAP = {
   '^TWII':  'TWSE:IX0001',
   '^TWOII': 'TWSE:IX0023',
   '^GSPC':  'FOREXCOM:SPXUSD',
+  '^NDX':   'NASDAQ:NDX',
   '^IXIC':  'FOREXCOM:NASUSD',
   '^DJI':   'FOREXCOM:DJUSD',
   '^RUT':   'TVC:RUT',
@@ -437,6 +439,7 @@ export default function SearchScreen() {
   const [query, setQuery] = useState('');
   const [activeTab, setActiveTab] = useState('all');
   const [results, setResults] = useState([]);
+  const [searchNotice, setSearchNotice] = useState('');
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedAsset, setSelectedAsset] = useState(null);
@@ -449,6 +452,7 @@ export default function SearchScreen() {
   const [hotPrices, setHotPrices] = useState({});
   const [hotUpdatedAt, setHotUpdatedAt] = useState(null);
   const [hotLoading, setHotLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [fxRates, setFxRates] = useState([]);
   const [fxUpdatedAt, setFxUpdatedAt] = useState(null);
   const [baseCurrency, setBaseCurrency] = useState('TWD');
@@ -483,6 +487,7 @@ export default function SearchScreen() {
   const [alertPrice, setAlertPrice] = useState('');
   const [alertDirection, setAlertDirection] = useState('above');
   const debounceRef = useRef(null);
+  const searchSequenceRef = useRef(0);
   const priceInputRef = useRef(null);
   const leverageInputRef = useRef(null);
 
@@ -726,8 +731,8 @@ export default function SearchScreen() {
     }
   };
 
-  const loadHotPrices = async () => {
-    setHotLoading(true);
+  const loadHotPrices = async ({ showLoading = true } = {}) => {
+    if (showLoading) setHotLoading(true);
     try {
       const { assets, prices } = await fetchTrendingAssets();
       setHotAssetList(assets);
@@ -736,7 +741,7 @@ export default function SearchScreen() {
     } catch (e) {
       console.warn('loadHotPrices error:', e.message);
     } finally {
-      setHotLoading(false);
+      if (showLoading) setHotLoading(false);
     }
   };
 
@@ -778,12 +783,26 @@ export default function SearchScreen() {
 
   const loadWatchlist = async () => {
     try {
-      const val = await AsyncStorage.getItem('watchlist');
-      if (val) {
-        const list = JSON.parse(val);
-        setWatchlist(list);
-        if (activeTab === 'watchlist') fetchWatchlistPrices(list);
+      const localValue = await AsyncStorage.getItem('watchlist');
+      const localList = localValue ? JSON.parse(localValue) : [];
+      let cloudList = [];
+      try { cloudList = await loadCloudWatchlist(); } catch { cloudList = []; }
+      let list = cloudList.length > 0 ? cloudList.map(item => ({
+        ...item,
+        name: localList.find(local => local.symbol === item.symbol && local.market_type === item.market_type)?.name || item.symbol,
+      })) : localList;
+      const unresolvedTWSymbols = list
+        .filter(item => item.market_type === 'TW' && (!item.name || item.name === item.symbol))
+        .map(item => item.symbol);
+      if (unresolvedTWSymbols.length) {
+        const twNames = await resolveTWStockNames(unresolvedTWSymbols);
+        list = list.map(item => item.market_type === 'TW' && twNames[item.symbol]
+          ? { ...item, name: twNames[item.symbol] }
+          : item);
       }
+      setWatchlist(list);
+      await AsyncStorage.setItem('watchlist', JSON.stringify(list));
+      if (activeTab === 'watchlist') fetchWatchlistPrices(list);
     } catch {}
   };
 
@@ -812,47 +831,81 @@ export default function SearchScreen() {
 
   // Fix 4: group symbols by market type and use batch fetch functions so US and
   //         Crypto each require only one HTTP request instead of one per symbol.
-  const fetchWatchlistPrices = async (list) => {
+  const fetchWatchlistPrices = async (list, { showLoading = true } = {}) => {
     if (!list || list.length === 0) return;
-    setWatchlistLoading(true);
-    const prices = {};
+    if (showLoading) setWatchlistLoading(true);
+    try {
+      const prices = {};
+      const twItems = list.filter(i => i.market_type === 'TW');
+      const usSymbols = list.filter(i => i.market_type === 'US').map(i => i.symbol);
+      const cryptoSymbols = list.filter(i => i.market_type === 'Crypto').map(i => i.symbol);
 
-    const twItems     = list.filter(i => i.market_type === 'TW');
-    const usSymbols   = list.filter(i => i.market_type === 'US').map(i => i.symbol);
-    const cryptoSymbols = list.filter(i => i.market_type === 'Crypto').map(i => i.symbol);
+      // All three market types fetched in parallel using batch functions
+      const twSymbols = twItems.map(i => i.symbol);
+      const [usBatch, cryptoBatch, twBatch] = await Promise.all([
+        fetchUSStockPriceBatch(usSymbols),
+        fetchCryptoPriceBatch(cryptoSymbols),
+        fetchTWStockPriceBatch(twSymbols),
+      ]);
+      Object.assign(prices, usBatch, cryptoBatch, twBatch);
 
-    // All three market types fetched in parallel using batch functions
-    const twSymbols = twItems.map(i => i.symbol);
-    const [usBatch, cryptoBatch, twBatch] = await Promise.all([
-      fetchUSStockPriceBatch(usSymbols),
-      fetchCryptoPriceBatch(cryptoSymbols),
-      fetchTWStockPriceBatch(twSymbols),
-    ]);
-    Object.assign(prices, usBatch, cryptoBatch, twBatch);
+      setWatchlistPrices(prices);
+      // Check price alerts with freshly fetched prices and refresh alert state
+      await checkAndFireAlerts(prices);
+      const refreshedAlerts = await getAlerts();
+      setAlerts(refreshedAlerts);
+    } catch (error) {
+      console.warn('fetchWatchlistPrices error:', error?.message || error);
+    } finally {
+      if (showLoading) setWatchlistLoading(false);
+    }
+  };
 
-    setWatchlistPrices(prices);
-    setWatchlistLoading(false);
-    // Check price alerts with freshly fetched prices and refresh alert state
-    await checkAndFireAlerts(prices);
-    const refreshedAlerts = await getAlerts();
-    setAlerts(refreshedAlerts);
+  const handleRefresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      if (activeTab === 'watchlist') {
+        await fetchWatchlistPrices(watchlist, { showLoading: false });
+      } else if (activeTab === 'FX') {
+        await loadFxRates();
+      } else {
+        await loadHotPrices({ showLoading: false });
+      }
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   // Debounced search
   useEffect(() => {
-    if (!query.trim()) { setResults([]); setSearchPrices({}); setSearchPriceLoading(false); return; }
+    const requestId = ++searchSequenceRef.current;
+    if (!query.trim()) {
+      setResults([]);
+      setSearchPrices({});
+      setSearchPriceLoading(false);
+      setSearchNotice('');
+      setLoading(false);
+      return;
+    }
+    setSearchNotice('');
     clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => handleSearch(query), 300);
+    debounceRef.current = setTimeout(() => handleSearch(query, requestId), 300);
     return () => clearTimeout(debounceRef.current);
   }, [query, activeTab]);
 
-  const handleSearch = async (q = query) => {
-    if (!q.trim()) return;
+  const handleSearch = async (q = query, requestId = ++searchSequenceRef.current) => {
+    const normalizedQuery = String(q || '').trim();
+    if (!normalizedQuery) return;
     setLoading(true);
     setSearchPrices({});
+    setSearchPriceLoading(false);
+    setSearchNotice('');
     try {
-      const found = await searchAssets(q, activeTab);
+      const { assets: found, warnings = [] } = await searchAssetsDetailed(normalizedQuery, activeTab);
+      if (requestId !== searchSequenceRef.current) return;
       setResults(found);
+      setSearchNotice(warnings.join(' '));
       // Fetch live prices for results in the background
       const fetchable = found.filter(a => a.symbol && !a.isIndex && ['TW','US','Crypto'].includes(a.market_type));
       if (fetchable.length > 0) {
@@ -864,16 +917,19 @@ export default function SearchScreen() {
             if (asset.market_type === 'TW') priceData = await fetchTWStockPrice(asset.symbol);
             else if (asset.market_type === 'US') priceData = await fetchUSStockPrice(asset.symbol);
             else if (asset.market_type === 'Crypto') priceData = await fetchCryptoPrice(asset.symbol);
-            if (priceData) setSearchPrices(prev => ({ ...prev, [asset.symbol]: priceData }));
+            if (priceData && requestId === searchSequenceRef.current) setSearchPrices(prev => ({ ...prev, [asset.symbol]: priceData }));
           } catch {}
           remaining--;
-          if (remaining === 0) setSearchPriceLoading(false);
+          if (remaining === 0 && requestId === searchSequenceRef.current) setSearchPriceLoading(false);
         });
       }
     } catch {
-      Alert.alert('錯誤', '搜尋失敗，請稍後再試');
+      if (requestId === searchSequenceRef.current) {
+        setResults([]);
+        setSearchNotice('搜尋資料暫時無法取得，請稍後重試。');
+      }
     } finally {
-      setLoading(false);
+      if (requestId === searchSequenceRef.current) setLoading(false);
     }
   };
 
@@ -921,6 +977,27 @@ export default function SearchScreen() {
   const handleShowChart = (asset) => {
     setChartAsset(asset);
     setChartVisible(true);
+  };
+
+  const supportsTechnicalAnalysis = (asset) =>
+    !asset?.isIndex && ['TW', 'US', 'CRYPTO'].includes(String(asset?.market_type || '').toUpperCase());
+
+  const handleOpenAsset = (asset) => {
+    if (supportsTechnicalAnalysis(asset)) {
+      navigation.navigate('TechnicalAnalysis', {
+        symbol: asset.symbol,
+        name: asset.name,
+        averageCost: 0,
+        marketType: asset.market_type,
+        currency: asset.currency,
+      });
+      return;
+    }
+    if (asset.isIndex) {
+      handleShowChart(asset);
+      return;
+    }
+    handleSelectAsset(asset);
   };
 
   const openAlertModal = async (asset) => {
@@ -982,13 +1059,28 @@ export default function SearchScreen() {
       // Prevent adding the same symbol twice
       const { data: existing } = await supabase
         .from('assets')
-        .select('id')
+        .select('id, current_shares')
         .eq('user_id', user.id)
         .eq('symbol', selectedAsset.symbol)
         .eq('market_type', selectedAsset.market_type || '')
         .maybeSingle();
       if (existing) {
-        Alert.alert('已持有此資產', '您已持有此資產，請在總覽頁面或紀錄中新增交易');
+        if (Number(existing.current_shares || 0) > 0) {
+          Alert.alert('已持有此資產', '您已持有此資產，請在總覽頁面或紀錄中新增交易');
+          setAdding(false);
+          return;
+        }
+        const { error: reopenError } = await supabase.from('transactions').insert({
+          asset_id: existing.id,
+          type: 'BUY',
+          shares: sharesNum,
+          price: priceNum,
+          total_amount: totalAmount,
+          trans_date: new Date().toISOString(),
+        });
+        if (reopenError) throw reopenError;
+        Alert.alert('完成', '已沿用原本資產與交易歷史，重新建立部位');
+        setAddModalVisible(false);
         setAdding(false);
         return;
       }
@@ -1020,6 +1112,7 @@ export default function SearchScreen() {
           price: priceNum,
           total_amount: totalAmount,
           trans_date: new Date().toISOString(),
+          external_source: 'initial_position',
         });
       if (transError) throw transError;
 
@@ -1076,7 +1169,7 @@ export default function SearchScreen() {
       <TouchableOpacity
         key={`${keyPrefix}-${asset.symbol}-${index}`}
         style={[styles.resultCard, { backgroundColor: colors.card, borderBottomColor: colors.borderLight }]}
-        onPress={() => asset.isIndex ? handleShowChart(asset) : handleSelectAsset(asset)}
+        onPress={() => handleOpenAsset(asset)}
       >
         <View style={styles.resultInfo}>
           <Text style={[styles.resultName, { color: colors.text }]}>{asset.name}</Text>
@@ -1103,10 +1196,29 @@ export default function SearchScreen() {
           {!asset.isIndex && (
             <TouchableOpacity
               style={styles.chartBtn}
-              onPress={() => handleShowChart(asset)}
+              onPress={(event) => {
+                event.stopPropagation?.();
+                supportsTechnicalAnalysis(asset) ? handleOpenAsset(asset) : handleShowChart(asset);
+              }}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel={`查看 ${asset.name} 技術分析`}
             >
               <LineChartIcon size={18} color={colors.textSub} />
+            </TouchableOpacity>
+          )}
+          {!asset.isIndex && (
+            <TouchableOpacity
+              style={styles.chartBtn}
+              onPress={(event) => {
+                event.stopPropagation?.();
+                handleSelectAsset(asset);
+              }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel={`新增 ${asset.name} 到資產`}
+            >
+              <Plus size={18} color={PRIMARY} />
             </TouchableOpacity>
           )}
           {activeTab === 'watchlist' && isInWatchlist(asset.symbol) && (() => {
@@ -1203,10 +1315,10 @@ export default function SearchScreen() {
   }, [fxDetailHistory]);
 
   return (
-    <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+    <TouchableWithoutFeedback onPress={Platform.OS === 'web' ? undefined : Keyboard.dismiss}>
     <KeyboardAvoidingView
       style={[styles.container, { backgroundColor: colors.bg }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      behavior={Platform.OS === 'web' ? undefined : Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={90}
     >
       {/* Search Bar */}
@@ -1220,7 +1332,12 @@ export default function SearchScreen() {
           placeholderTextColor={colors.textMuted}
           value={query}
           onChangeText={setQuery}
-          onSubmitEditing={() => { saveRecentSearch(query); handleSearch(); }}
+          onSubmitEditing={() => {
+            clearTimeout(debounceRef.current);
+            const requestId = ++searchSequenceRef.current;
+            saveRecentSearch(query);
+            handleSearch(query, requestId);
+          }}
           returnKeyType="search"
           autoCorrect={false}
           autoCapitalize="none"
@@ -1258,8 +1375,8 @@ export default function SearchScreen() {
         refreshControl={
           query.length === 0 ? (
             <RefreshControl
-              refreshing={activeTab === 'watchlist' ? watchlistLoading : hotLoading}
-              onRefresh={activeTab === 'watchlist' ? () => fetchWatchlistPrices(watchlist) : loadHotPrices}
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
               tintColor={PRIMARY}
             />
           ) : undefined
@@ -1272,6 +1389,7 @@ export default function SearchScreen() {
         ) : query.length > 0 ? (
           results.length > 0
             ? <>
+                {searchNotice ? <Text style={[styles.searchNotice, { color: colors.warning }]}>{searchNotice}</Text> : null}
                 {searchPriceLoading && (
                   <View style={styles.priceLoadingBar}>
                     <ActivityIndicator size="small" color={PRIMARY} />
@@ -1280,7 +1398,7 @@ export default function SearchScreen() {
                 )}
                 {results.map((asset, i) => renderAssetCard(asset, 'search', i))}
               </>
-            : <View style={styles.emptyState}><Text style={[styles.emptyStateText, { color: colors.textMuted }]}>無搜尋結果</Text></View>
+            : <View style={styles.emptyState}><Text style={[styles.emptyStateText, { color: searchNotice ? colors.warning : colors.textMuted }]}>{searchNotice || '無搜尋結果'}</Text></View>
         ) : activeTab === 'watchlist' ? (
           watchlist.length === 0 ? (
             <View style={[styles.emptyState, { paddingTop: 64 }]}>
@@ -1294,8 +1412,8 @@ export default function SearchScreen() {
               <ActivityIndicator size="large" color={PRIMARY} />
             </View>
           ) : (
-            watchlistGrouped.map(group => (
-              <React.Fragment key={group.id}>
+            watchlistGrouped.map((group, index) => (
+              <React.Fragment key={`${group.id}-${group.label}-${index}`}>
                 <View style={[styles.indexHeader, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
                   <Star size={14} color={PRIMARY} fill={PRIMARY} />
                   <Text style={[styles.indexHeaderText, { color: colors.textSub }]}>{group.label}</Text>
@@ -1413,7 +1531,7 @@ export default function SearchScreen() {
                 ))}
               </View>
             </View>
-            {hotLoading ? (
+            {hotLoading && hotAssetList.length === 0 ? (
               <View style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color={PRIMARY} />
               </View>
@@ -1428,9 +1546,9 @@ export default function SearchScreen() {
       <Modal visible={modalVisible} animationType="slide" transparent onRequestClose={() => setModalVisible(false)}>
         <KeyboardAvoidingView
           style={styles.modalOverlay}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior={Platform.OS === 'web' ? undefined : Platform.OS === 'ios' ? 'padding' : 'height'}
         >
-          <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <TouchableWithoutFeedback onPress={Platform.OS === 'web' ? undefined : Keyboard.dismiss}>
           <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
             <View style={styles.modalHeader}>
               <Text style={[styles.modalTitle, { color: colors.text }]}>新增資產</Text>
@@ -1514,8 +1632,8 @@ export default function SearchScreen() {
 
       {/* FX Record Modal */}
       <Modal visible={fxModal} transparent animationType="slide" onRequestClose={() => setFxModal(false)}>
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
+        <TouchableWithoutFeedback onPress={Platform.OS === 'web' ? undefined : Keyboard.dismiss}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'web' ? undefined : Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
             <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
               <View style={styles.modalHeader}>
                 <Text style={[styles.modalTitle, { color: colors.text }]}>
@@ -1759,8 +1877,8 @@ export default function SearchScreen() {
 
       {/* Price Alert Modal */}
       <Modal visible={alertModalVisible} transparent animationType="slide" onRequestClose={() => setAlertModalVisible(false)}>
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
+        <TouchableWithoutFeedback onPress={Platform.OS === 'web' ? undefined : Keyboard.dismiss}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'web' ? undefined : Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
             <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
               <View style={styles.modalHeader}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -1997,6 +2115,7 @@ const styles = StyleSheet.create({
   recentItemText: { fontSize: 15 },
   emptyState: { alignItems: 'center', justifyContent: 'center', padding: 48 },
   emptyStateText: { fontSize: 16 },
+  searchNotice: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8, fontSize: 12, lineHeight: 17, textAlign: 'center' },
   priceLoadingBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 8 },
   priceLoadingText: { fontSize: 12 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },

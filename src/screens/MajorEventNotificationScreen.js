@@ -18,6 +18,23 @@ const sourceDomain = source => {
   try { return new URL(source.url).hostname.replace(/^www\./, ''); }
   catch { return source.title || '新聞來源'; }
 };
+const exactPublishedAt = event => event?.publishedAt || event?.published_at || '';
+const hasExactPublishedTime = event => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/.test(exactPublishedAt(event))
+  && Number.isFinite(Date.parse(exactPublishedAt(event)));
+const isCompleteEvent = event => hasExactPublishedTime(event) && (event?.sourceUrls || []).some(url => /^https?:\/\//i.test(url));
+const formatPublishedTime = event => new Intl.DateTimeFormat('zh-TW', {
+  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+  timeZone: 'Asia/Taipei', timeZoneName: 'short',
+}).format(new Date(exactPublishedAt(event)));
+const openSource = async source => {
+  try {
+    const supported = await Linking.canOpenURL(source.url);
+    if (!supported) throw new Error('unsupported');
+    await Linking.openURL(source.url);
+  } catch {
+    Alert.alert('無法開啟新聞', '這個新聞連結目前無法使用。');
+  }
+};
 
 export default function MajorEventNotificationScreen() {
   const { colors } = useTheme();
@@ -82,7 +99,13 @@ export default function MajorEventNotificationScreen() {
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
       setReport(data);
-      Alert.alert('搜尋完成', data?.events?.length ? `找到 ${data.events.length} 筆重要事件。` : '今天沒有找到達到門檻的事件。');
+      const completeCount = (data?.events || []).filter(isCompleteEvent).length;
+      const incompleteCount = Math.max(Number(data?.discardedCount) || 0, (data?.events || []).length - completeCount);
+      Alert.alert('搜尋完成', completeCount
+        ? `找到 ${completeCount} 筆有時間與來源的重要事件。`
+        : incompleteCount
+          ? `找到 ${incompleteCount} 筆候選新聞，但缺少可核對的時間或來源，已略過。`
+          : '今天沒有找到符合條件的重大事件。');
     } catch (error) { Alert.alert('搜尋失敗', error.message || 'AI Web Search 暫時無法使用'); }
     finally { setScanning(false); }
   };
@@ -91,6 +114,8 @@ export default function MajorEventNotificationScreen() {
   const switchRow = (title, subtitle, value, onValueChange, Icon) => <View style={styles.switchRow}><View style={[styles.icon, { backgroundColor: colors.accentSoft }]}><Icon size={18} color={colors.accent} /></View><View style={styles.flex}><Text style={[styles.rowTitle, { color: colors.text }]}>{title}</Text><Text style={[styles.rowSub, { color: colors.textSub }]}>{subtitle}</Text></View><Switch value={value} onValueChange={onValueChange} trackColor={{ false: colors.border, true: colors.accentSoft }} thumbColor={value ? colors.accent : colors.textMuted} /></View>;
 
   if (loading) return <View style={[styles.center, { backgroundColor: colors.bg }]}><ActivityIndicator size="large" color={colors.accent} /><Text style={[styles.loading, { color: colors.textSub }]}>正在讀取重大事件設定…</Text></View>;
+  const displayableEvents = (report?.events || []).filter(isCompleteEvent);
+  const incompleteEventCount = Math.max(Number(report?.discardedCount) || 0, (report?.events || []).length - displayableEvents.length);
 
   return <ScrollView style={{ backgroundColor: colors.bg }} contentContainerStyle={styles.content}>
     <View style={[styles.hero, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={[styles.heroIcon, { backgroundColor: colors.accentSoft }]}><Newspaper size={24} color={colors.accent} /></View><View style={styles.flex}><Text style={[styles.heroTitle, { color: colors.text }]}>重大事件通知</Text><Text style={[styles.heroSub, { color: colors.textSub }]}>AI 以 Web Search 尋找當日與持倉、自選相關的重大事件，並附上可開啟的來源連結。</Text></View><Switch value={form.enabled} onValueChange={value => update({ enabled: value })} trackColor={{ false: colors.border, true: colors.accentSoft }} thumbColor={form.enabled ? colors.accent : colors.textMuted} /></View>
@@ -117,34 +142,35 @@ export default function MajorEventNotificationScreen() {
     <TouchableOpacity onPress={scanNow} disabled={scanning} style={[styles.previewButton, { borderColor: colors.accent, backgroundColor: colors.accentSoft }]}>{scanning ? <ActivityIndicator color={colors.accent} /> : <Search size={17} color={colors.accent} />}<Text style={[styles.previewText, { color: colors.accent }]}>{scanning ? 'AI 正在搜尋與核對來源…' : '立即搜尋今日事件'}</Text></TouchableOpacity>
 
     {report && <Section title={`最新結果 · ${report.reportDate || report.report_date || ''}`} colors={colors} Icon={Newspaper}>
-      <View style={[styles.methodBox, { backgroundColor: colors.cardAlt, borderColor: colors.borderLight }]}><Text style={[styles.methodTitle, { color: colors.text }]}>重要性評分方式</Text><Text style={[styles.methodText, { color: colors.textSub }]}>總分 100：事件直接影響 30、來源可信度 25、資訊時效 20、可能影響幅度 15、需立即留意程度 10。卡片僅顯示總分，詳細評分不重複佔用版面。</Text></View>
-      {(report.events || []).length ? report.events.map((event, index) => {
+      <View style={[styles.methodBox, { backgroundColor: colors.cardAlt, borderColor: colors.borderLight }]}><Text style={[styles.methodTitle, { color: colors.text }]}>顯示條件</Text><Text style={[styles.methodText, { color: colors.textSub }]}>重要性達標，且同時有明確發布時間與可開啟新聞來源。</Text></View>
+      {displayableEvents.length ? displayableEvents.map((event, index) => {
         const eventKey = `${event.title}-${index}`;
         const expanded = Boolean(expandedEvents[eventKey]);
         const mappedSources = (event.sourceUrls || []).map(url => (report.sources || []).find(source => source.url === url) || { url, title: sourceDomain({ url }) });
-        const isSingleLegacyEvent = !(event.sourceUrls || []).length && (report.events || []).length === 1;
-        const eventSources = uniqueSources(mappedSources.length ? mappedSources : (isSingleLegacyEvent ? report.sources : []));
+        const eventSources = uniqueSources(mappedSources);
         const visibleSources = expanded ? eventSources : eventSources.slice(0, 2);
         return <View key={eventKey} style={[styles.eventCard, { backgroundColor: colors.cardAlt, borderColor: colors.borderLight }]}>
           <View style={styles.eventHeader}><Text style={[styles.eventSymbols, { color: colors.accent }]}>{(event.symbols || []).join('、')}</Text><Text style={[styles.importance, { color: event.importance >= 80 ? colors.negative : colors.warning }]}>重要性 {event.importance}/100</Text></View>
-          <Text style={[styles.eventTime, { color: colors.textMuted }]}>發布時間：{event.publishedAt || '來源未提供明確時間'}</Text>
+          <Text style={[styles.eventTime, { color: colors.textMuted }]}>發布時間：{formatPublishedTime(event)}</Text>
           <Text style={[styles.eventTitle, { color: colors.text }]}>{event.title}</Text>
           <Text numberOfLines={expanded ? undefined : 4} style={[styles.eventSummary, { color: colors.textSub }]}>{event.summary}</Text>
           <Text numberOfLines={expanded ? undefined : 3} style={[styles.eventImpact, { color: colors.textSub }]}>可能影響：{event.impact}</Text>
           <TouchableOpacity style={styles.expandButton} onPress={() => setExpandedEvents(current => ({ ...current, [eventKey]: !expanded }))}>
             <Text style={[styles.expandText, { color: colors.accent }]}>{expanded ? '收合事件內容' : '展開完整內容'}</Text>{expanded ? <ChevronUp size={15} color={colors.accent} /> : <ChevronDown size={15} color={colors.accent} />}
           </TouchableOpacity>
-          {eventSources.length ? <View style={[styles.eventSources, { borderTopColor: colors.borderLight }]}>
-            <Text style={[styles.eventSourcesTitle, { color: colors.text }]}>這則事件的新聞來源</Text>
-            {visibleSources.map((source, sourceIndex) => <TouchableOpacity key={`${source.url}-${sourceIndex}`} style={[styles.newsButton, { borderColor: colors.accent, backgroundColor: sourceIndex === 0 ? colors.accentSoft : colors.card }]} onPress={() => Linking.openURL(source.url)}>
+          <View style={[styles.eventSources, { borderTopColor: colors.borderLight }]}>
+            <Text style={[styles.eventSourcesTitle, { color: colors.text }]}>新聞來源</Text>
+            {visibleSources.map((source, sourceIndex) => <TouchableOpacity key={`${source.url}-${sourceIndex}`} style={[styles.newsButton, { borderColor: colors.accent, backgroundColor: sourceIndex === 0 ? colors.accentSoft : colors.card }]} onPress={() => openSource(source)}>
               <View style={[styles.sourceNumber, { backgroundColor: colors.accent }]}><Text style={[styles.sourceNumberText, { color: colors.accentContrast }]}>{sourceIndex + 1}</Text></View>
-              <View style={styles.sourceCopy}><Text numberOfLines={1} style={[styles.newsButtonText, { color: colors.text }]}>閱讀新聞來源</Text><Text numberOfLines={1} style={[styles.newsDomain, { color: colors.textMuted }]}>{source.title || sourceDomain(source)}</Text></View>
+              <View style={styles.sourceCopy}><Text numberOfLines={1} style={[styles.newsButtonText, { color: colors.text }]}>{source.title || '閱讀原文'}</Text><Text numberOfLines={1} style={[styles.newsDomain, { color: colors.textMuted }]}>{sourceDomain(source)}</Text></View>
               <ExternalLink size={16} color={colors.accent} />
             </TouchableOpacity>)}
             {!expanded && eventSources.length > 2 && <TouchableOpacity style={styles.moreSourcesButton} onPress={() => setExpandedEvents(current => ({ ...current, [eventKey]: true }))}><Text style={[styles.moreSourcesText, { color: colors.accent }]}>再查看 {eventSources.length - 2} 個來源</Text><ChevronDown size={14} color={colors.accent} /></TouchableOpacity>}
-          </View> : <View style={[styles.sourcePending, { borderColor: colors.borderLight }]}><Text style={[styles.sourcePendingText, { color: colors.textMuted }]}>{(report.events || []).length > 1 ? '這是舊版搜尋資料，無法確定來源屬於哪一則事件；請重新搜尋以取得逐則配對的新聞來源。' : '此筆搜尋尚未提供可開啟的新聞來源，請重新搜尋後再試。'}</Text></View>}
+          </View>
         </View>;
-      }) : <Text style={[styles.empty, { color: colors.textMuted }]}>今天沒有找到達到門檻的重大事件。</Text>}
+      }) : <Text style={[styles.empty, { color: colors.textMuted }]}>{incompleteEventCount
+        ? `搜尋到 ${incompleteEventCount} 筆候選新聞，但因缺少可核對時間或來源而未顯示。`
+        : '今天沒有找到符合條件的重大事件。'}</Text>}
     </Section>}
 
     <View style={[styles.notice, { backgroundColor: colors.cardAlt, borderColor: colors.border }]}><ShieldCheck size={17} color={colors.accent} /><Text style={[styles.noticeText, { color: colors.textSub }]}>AI 只整理搜尋結果，可能遺漏、誤判或遇到來源更新延遲。請開啟原始連結核對，不會自動下單。</Text></View>

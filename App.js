@@ -7,6 +7,8 @@ import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LayoutGrid, BarChart3, Bot, ClipboardList, MoreHorizontal, Search } from 'lucide-react-native';
 import { supabase } from './src/lib/supabase';
+import { activateUserStorage, deactivateUserStorage } from './src/lib/userScopedStorage';
+import { rememberAccountSession } from './src/lib/accountSessions';
 import { ThemeProvider, useTheme, COLORS } from './src/lib/ThemeContext';
 
 import DashboardScreen from './src/screens/DashboardScreen';
@@ -26,6 +28,8 @@ import TechnicalAnalysisScreen from './src/screens/TechnicalAnalysisScreen';
 import PortfolioSignalsScreen from './src/screens/PortfolioSignalsScreen';
 import SignalNotificationSettingsScreen from './src/screens/SignalNotificationSettingsScreen';
 import MajorEventNotificationScreen from './src/screens/MajorEventNotificationScreen';
+import MarketOverviewScreen from './src/screens/MarketOverviewScreen';
+import OptionsAnalysisScreen from './src/screens/OptionsAnalysisScreen';
 
 const Tab = createBottomTabNavigator();
 const DashboardStack = createNativeStackNavigator();
@@ -234,10 +238,12 @@ function MainStackScreen() {
       <MainStack.Screen name="FixedExpenses" component={FixedExpensesScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '固定支出' })} />
       <MainStack.Screen name="EsunSync" component={EsunSyncScreen} options={{ presentation: 'card', animation: 'slide_from_right' }} />
       <MainStack.Screen name="InvestmentSignals" component={InvestmentSignalsScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '研究訊號' })} />
-      <MainStack.Screen name="TechnicalAnalysis" component={TechnicalAnalysisScreen} options={({ navigation, route }) => ({ ...withAI({ navigation }), title: `${route.params?.symbol || ''} 技術分析` })} />
+      <MainStack.Screen name="TechnicalAnalysis" component={TechnicalAnalysisScreen} options={({ navigation, route }) => ({ ...withAI({ navigation }), title: `${route.params?.name || route.params?.symbol || ''} 技術分析`, gestureEnabled: false })} />
       <MainStack.Screen name="PortfolioSignals" component={PortfolioSignalsScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '持倉與自選訊號' })} />
       <MainStack.Screen name="SignalNotificationSettings" component={SignalNotificationSettingsScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '訊號通知' })} />
       <MainStack.Screen name="MajorEventNotifications" component={MajorEventNotificationScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '重大事件通知' })} />
+      <MainStack.Screen name="MarketOverview" component={MarketOverviewScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '市場動態', gestureEnabled: false })} />
+      <MainStack.Screen name="OptionsAnalysis" component={OptionsAnalysisScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '選擇權分析' })} />
       <MainStack.Screen
         name="Settings"
         component={SettingsScreen}
@@ -253,28 +259,43 @@ function MainStackScreen() {
 function AppInner() {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
+  const sessionRef = useRef(null);
   const { isDark, colors } = useTheme();
   const t = toTheme(colors);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session }, error }) => {
+    supabase.auth.getSession().then(async ({ data: { session }, error }) => {
       if (error) {
         console.warn('Failed to restore auth session:', error.message);
+        await deactivateUserStorage().catch(storageError => console.warn('Failed to clear user storage:', storageError));
+        sessionRef.current = null;
         setSession(null);
       } else {
+        if (session?.user?.id) {
+          await activateUserStorage(session.user.id);
+          await rememberAccountSession(session);
+        }
+        sessionRef.current = session;
         setSession(session);
       }
       setLoading(false);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (
         event === 'SIGNED_OUT' ||
         event === 'USER_DELETED' ||
         (event === 'TOKEN_REFRESHED' && !session)
       ) {
+        await deactivateUserStorage(sessionRef.current?.user?.id).catch(error => console.warn('Failed to store departing user data:', error));
+        sessionRef.current = null;
         setSession(null);
       } else {
+        if (session?.user?.id) {
+          await activateUserStorage(session.user.id);
+          await rememberAccountSession(session);
+        }
+        sessionRef.current = session;
         setSession(session);
       }
     });
@@ -292,7 +313,7 @@ function AppInner() {
   return (
     <>
       <StatusBar style={isDark ? 'light' : 'dark'} />
-      <NavigationContainer theme={navTheme}>
+      <NavigationContainer key={session.user.id} theme={navTheme}>
         <RootStack.Navigator screenOptions={{ headerShown: false }}>
           <RootStack.Screen name="Main" component={MainStackScreen} />
         </RootStack.Navigator>

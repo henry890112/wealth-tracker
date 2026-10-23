@@ -2,6 +2,8 @@ import http from 'node:http';
 import { URL } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
+import { asNumber, normalizeEsunHolding } from './holdings.mjs';
+import { normalizeEsunTransactions } from './transactions.mjs';
 
 // This intentionally loads only the bridge's private .env file. Values are
 // never returned from an HTTP endpoint or logged.
@@ -80,15 +82,6 @@ async function withClientRetry(operation) {
   }
 }
 
-// The broker SDK returns numeric fields as formatted strings (for example
-// "1,234.50"). `Number()` cannot parse the thousands separator and silently
-// produced zero before, which could erase an existing cost basis on sync.
-const asNumber = (value) => {
-  const normalized = String(value ?? '').replace(/,/g, '').trim();
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : 0;
-};
-
 async function getHoldings() {
   return withClientRetry(async ({ trade, stock }) => {
     const inventories = await trade.getInventories();
@@ -100,26 +93,7 @@ async function getHoldings() {
       } catch {
         // Market may be closed or the quote endpoint may be temporarily unavailable.
       }
-      const quantity = asNumber(item.stkDats?.reduce((sum, row) => sum + asNumber(row.qty), 0)) || asNumber(item.qty);
-      // The broker returns purchase cost as a negative cash outflow. WealthTracker
-      // stores cost basis as a positive amount so P&L remains market value − cost.
-      const costBasis = Math.abs(asNumber(item.costSum));
-      const averageCost = asNumber(item.priceAvg) || (quantity > 0 ? costBasis / quantity : 0);
-      // Prefer the price and value from the broker inventory response. They use
-      // the same valuation basis as the broker's own unrealized P&L screen.
-      const marketPrice = asNumber(item.priceMkt) || asNumber(quote?.lastPrice || quote?.closePrice || quote?.previousClose);
-      const marketValue = asNumber(item.valueMkt) || marketPrice * quantity;
-      return {
-        symbol,
-        name: item.stkNa || quote?.name || symbol,
-        quantity,
-        averageCost,
-        costBasis,
-        marketPrice,
-        marketValue,
-        currency: 'TWD',
-        marketType: 'TW',
-      };
+      return normalizeEsunHolding(item, quote);
     }));
     return holdings.filter((item) => item.symbol && item.quantity > 0);
   });
@@ -134,6 +108,13 @@ async function getBalance() {
       stockPreSaveAmount: asNumber(balance?.stockPreSaveAmount),
       currency: 'TWD',
     };
+  });
+}
+
+async function getTransactions(duration = '3m') {
+  return withClientRetry(async ({ trade }) => {
+    const transactions = await trade.getTransactions({ duration });
+    return normalizeEsunTransactions(transactions);
   });
 }
 
@@ -163,9 +144,17 @@ http.createServer(async (req, res) => {
   }
   if (req.method !== 'GET') return respond(req, res, 405, { error: 'Read-only service: GET only' });
   if (url.pathname === '/health') return respond(req, res, 200, { status: 'ok', mode: 'read-only' });
-  if (url.pathname !== '/v1/holdings' && url.pathname !== '/v1/balance') return respond(req, res, 404, { error: 'Not found' });
+  if (!['/v1/holdings', '/v1/balance', '/v1/transactions'].includes(url.pathname)) return respond(req, res, 404, { error: 'Not found' });
 
   try {
+    if (url.pathname === '/v1/transactions') {
+      const duration = url.searchParams.get('duration') || '3m';
+      if (!['0d', '3d', '1m', '3m'].includes(duration)) {
+        return respond(req, res, 400, { error: 'duration must be one of 0d, 3d, 1m, 3m' });
+      }
+      const transactions = await getTransactions(duration);
+      return respond(req, res, 200, { provider: 'esun', duration, fetchedAt: new Date().toISOString(), transactions });
+    }
     if (url.pathname === '/v1/balance') {
       const balance = await getBalance();
       return respond(req, res, 200, { provider: 'esun', fetchedAt: new Date().toISOString(), balance });
@@ -173,11 +162,13 @@ http.createServer(async (req, res) => {
     const holdings = await getHoldings();
     return respond(req, res, 200, { provider: 'esun', fetchedAt: new Date().toISOString(), holdings });
   } catch (error) {
-    const resource = url.pathname === '/v1/balance' ? 'balance' : 'holdings';
+    const resource = url.pathname === '/v1/balance' ? 'balance' : url.pathname === '/v1/transactions' ? 'transactions' : 'holdings';
     console.error(`E.Sun read-only ${resource} sync failed:`, error.message);
     const message = resource === 'balance'
       ? '無法讀取玉山帳務餘額；模擬環境或目前帳戶可能不提供此查詢，持倉仍可獨立更新。'
-      : '無法讀取玉山持倉；請確認本機 SDK 登入、憑證與設定。';
+      : resource === 'transactions'
+        ? '無法讀取玉山成交明細；模擬環境或目前帳戶可能沒有可用的近期成交。'
+        : '無法讀取玉山持倉；請確認本機 SDK 登入、憑證與設定。';
     return respond(req, res, 502, { error: message, resource });
   }
 }).listen(port, host, () => {

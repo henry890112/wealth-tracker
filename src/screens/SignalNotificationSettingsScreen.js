@@ -1,16 +1,20 @@
 import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BellRing, Clock3, Link2, Mail, MessageCircle, ShieldCheck } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/ThemeContext';
+import WebSafeTextInput from '../components/WebSafeTextInput';
+import {
+  NOTIFICATION_STRATEGY_KEYS,
+  NOTIFICATION_STRATEGY_OPTIONS,
+  STRATEGY_SELECTION_CATEGORIES,
+  sortStrategyItems,
+} from '../services/strategyOptions';
 
 const MARKET_OPTIONS = [['TW', '台股'], ['US', '美股'], ['CRYPTO', '加密貨幣']];
-const STRATEGY_OPTIONS = [
-  ['hybrid', '混合策略（建議）'],
-  ['divergence', 'MACD 背離'], ['pullback', '趨勢回檔'], ['breakout', '放量突破'],
-  ['rsi', 'RSI 反轉'], ['boundary', '雙軌邊界'], ['smc', 'SMC'],
-];
+const STRATEGY_SELECTION_STORAGE_KEY = 'wealthtracker.technical-analysis.selected-strategies.v1';
 const HOURS = [8, 12, 16, 20, 22];
 const DEFAULTS = {
   enabled: false,
@@ -27,6 +31,7 @@ const DEFAULTS = {
   strategies: ['hybrid'],
   signal_statuses: ['confirmed'],
   signal_directions: ['bullish', 'bearish'],
+  strategy_settings: {},
 };
 
 const toggleArray = (values, value) => values.includes(value) ? values.filter(item => item !== value) : [...values, value];
@@ -34,6 +39,17 @@ const toggleStrategy = (values, value) => {
   if (value === 'hybrid') return values.includes('hybrid') ? [] : ['hybrid'];
   const withoutHybrid = values.filter(item => item !== 'hybrid');
   return toggleArray(withoutHybrid, value);
+};
+const readCurrentViewingStrategyKeys = async () => {
+  try {
+    const raw = await AsyncStorage.getItem(STRATEGY_SELECTION_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return Array.isArray(parsed?.selectedStrategyKeys)
+      ? [...new Set(parsed.selectedStrategyKeys.filter(key => NOTIFICATION_STRATEGY_KEYS.has(key) && key !== 'hybrid'))]
+      : [];
+  } catch (_) {
+    return [];
+  }
 };
 const currentTestFilters = form => ({
   include_holdings: form.include_holdings,
@@ -79,19 +95,36 @@ export default function SignalNotificationSettingsScreen() {
   const [linking, setLinking] = useState(false);
   const [testingEmail, setTestingEmail] = useState(false);
   const [testingLine, setTestingLine] = useState(false);
+  const [currentViewingStrategyKeys, setCurrentViewingStrategyKeys] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const [{ data: { user } }, viewingStrategyKeys] = await Promise.all([
+        supabase.auth.getUser(),
+        readCurrentViewingStrategyKeys(),
+      ]);
       if (!user) throw new Error('請先登入');
       const { data, error } = await supabase
         .from('investment_signal_preferences')
-        .select('enabled,schedule_frequency,daily_hour,timezone,email_enabled,notification_email,line_enabled,line_user_id,include_holdings,include_watchlist,markets,strategies,signal_statuses,signal_directions')
+        .select('enabled,schedule_frequency,daily_hour,timezone,email_enabled,notification_email,line_enabled,line_user_id,include_holdings,include_watchlist,markets,strategies,signal_statuses,signal_directions,strategy_settings')
         .eq('user_id', user.id)
         .maybeSingle();
       if (error) throw error;
-      setForm({ ...DEFAULTS, notification_email: user.email || '', ...(data || {}) });
+      const savedStrategies = Array.isArray(data?.strategies)
+        ? [...new Set(data.strategies.filter(key => NOTIFICATION_STRATEGY_KEYS.has(key)))]
+        : [];
+      const shouldUseViewingStrategies = viewingStrategyKeys.length > 0
+        && (!data || savedStrategies.length === 0 || (savedStrategies.length === 1 && savedStrategies[0] === 'hybrid'));
+      const strategies = shouldUseViewingStrategies
+        ? viewingStrategyKeys
+        : savedStrategies.length
+          ? savedStrategies
+          : viewingStrategyKeys.length
+            ? viewingStrategyKeys
+            : DEFAULTS.strategies;
+      setCurrentViewingStrategyKeys(viewingStrategyKeys);
+      setForm({ ...DEFAULTS, notification_email: user.email || '', ...(data || {}), strategies });
     } catch (error) {
       Alert.alert('無法讀取通知設定', error.message || '請稍後再試');
     } finally {
@@ -102,6 +135,13 @@ export default function SignalNotificationSettingsScreen() {
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const update = changes => setForm(current => ({ ...current, ...changes }));
+  const applyCurrentViewingStrategies = () => {
+    if (!currentViewingStrategyKeys.length) {
+      Alert.alert('目前沒有選擇策略', '請先到技術分析的「目前查看策略」勾選策略，或直接在這裡選取。');
+      return;
+    }
+    update({ strategies: currentViewingStrategyKeys });
+  };
 
   const validateScanFilters = () => {
     if (!form.include_holdings && !form.include_watchlist) return '請至少選擇持倉或自選清單。';
@@ -205,6 +245,12 @@ export default function SignalNotificationSettingsScreen() {
 
   const chip = (selected, onPress, label, key) => <TouchableOpacity key={key || label} onPress={onPress} style={[styles.chip, { backgroundColor: selected ? colors.accentSoft : colors.cardAlt, borderColor: selected ? colors.accent : colors.border }]}><Text style={[styles.chipText, { color: selected ? colors.accent : colors.textSub }]}>{label}</Text></TouchableOpacity>;
   const row = (title, subtitle, value, onValueChange, Icon) => <View style={styles.switchRow}><View style={[styles.icon, { backgroundColor: colors.accentSoft }]}><Icon size={18} color={colors.accent} /></View><View style={styles.flex}><Text style={[styles.rowTitle, { color: colors.text }]}>{title}</Text><Text style={[styles.rowSub, { color: colors.textSub }]}>{subtitle}</Text></View><Switch value={value} onValueChange={onValueChange} trackColor={{ false: colors.border, true: colors.accentSoft }} thumbColor={value ? colors.accent : colors.textMuted} /></View>;
+  const strategyGroups = STRATEGY_SELECTION_CATEGORIES
+    .map(category => ({ category, items: sortStrategyItems(NOTIFICATION_STRATEGY_OPTIONS.filter(item => item.category === category)) }))
+    .filter(group => group.items.length);
+  const currentViewingStrategyNames = currentViewingStrategyKeys
+    .map(key => NOTIFICATION_STRATEGY_OPTIONS.find(item => item.key === key)?.label)
+    .filter(Boolean);
 
   return <ScrollView style={{ backgroundColor: colors.bg }} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
     <View style={[styles.hero, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={[styles.heroIcon, { backgroundColor: colors.accentSoft }]}><BellRing size={24} color={colors.accent} /></View><View style={styles.flex}><Text style={[styles.heroTitle, { color: colors.text }]}>進出場訊號通知</Text><Text style={[styles.heroSub, { color: colors.textSub }]}>依每位使用者的持倉與自選清單獨立掃描，只通知符合所選策略的研究訊號。</Text></View><Switch value={form.enabled} onValueChange={value => update({ enabled: value })} trackColor={{ false: colors.border, true: colors.accentSoft }} thumbColor={form.enabled ? colors.accent : colors.textMuted} /></View>
@@ -222,15 +268,17 @@ export default function SignalNotificationSettingsScreen() {
     </Section>
 
     <Section title="通知條件" colors={colors}>
-      <Text style={[styles.label, { color: colors.textSub }]}>策略</Text><View style={styles.chips}>{STRATEGY_OPTIONS.map(([key, label]) => chip(form.strategies.includes(key), () => update({ strategies: toggleStrategy(form.strategies, key) }), label, key))}</View>
-      <Text style={[styles.hint, { color: colors.textMuted }]}>混合策略採用趨勢門檻 → 突破或回檔路線 → 量能與相對強弱確認；選取後不會再把舊六策略各自重複寄成多張卡片。</Text>
+      <View style={styles.strategyConditionHeader}><Text style={[styles.label, { color: colors.textSub }]}>策略</Text><TouchableOpacity onPress={applyCurrentViewingStrategies} disabled={!currentViewingStrategyKeys.length} style={[styles.applyViewingButton, { backgroundColor: currentViewingStrategyKeys.length ? colors.accentSoft : colors.cardAlt, borderColor: currentViewingStrategyKeys.length ? colors.accent : colors.border }]}><Text style={[styles.applyViewingButtonText, { color: currentViewingStrategyKeys.length ? colors.accent : colors.textMuted }]}>沿用目前查看策略</Text></TouchableOpacity></View>
+      {currentViewingStrategyNames.length > 0 && <Text style={[styles.hint, { color: colors.accent }]}>目前查看策略已選 {currentViewingStrategyNames.length} 項；開啟本頁時會優先帶入這份清單。</Text>}
+      {strategyGroups.map(group => <View key={group.category} style={styles.strategyGroup}><Text style={[styles.strategyGroupTitle, { color: colors.textMuted }]}>{group.category}</Text><View style={styles.chips}>{group.items.map(item => chip(form.strategies.includes(item.key), () => update({ strategies: toggleStrategy(form.strategies, item.key) }), item.label, item.key))}</View></View>)}
+      <Text style={[styles.hint, { color: colors.textMuted }]}>可直接勾選完整策略庫作為訊號條件；只有策略目前判定為「已確認」或「等待確認」，且符合下方狀態與方向的項目才會通知。資料不足的策略不會產生通知。</Text>
       <Text style={[styles.label, { color: colors.textSub }]}>訊號狀態</Text><View style={styles.chips}>{chip(form.signal_statuses.includes('confirmed'), () => update({ signal_statuses: toggleArray(form.signal_statuses, 'confirmed') }), '已確認進出場', 'confirmed')}{chip(form.signal_statuses.includes('watch'), () => update({ signal_statuses: toggleArray(form.signal_statuses, 'watch') }), '等待確認', 'watch')}</View>
       <Text style={[styles.label, { color: colors.textSub }]}>訊號方向</Text><View style={styles.chips}>{chip(form.signal_directions.includes('bullish'), () => update({ signal_directions: toggleArray(form.signal_directions, 'bullish') }), '偏多／進場注意', 'bullish')}{chip(form.signal_directions.includes('bearish'), () => update({ signal_directions: toggleArray(form.signal_directions, 'bearish') }), '偏空／出場注意', 'bearish')}</View>
     </Section>
 
     <Section title="通知方式" colors={colors}>
       {row('Email', '可使用登入信箱，也能設定另一個通知信箱', form.email_enabled, value => update({ email_enabled: value }), Mail)}
-      {form.email_enabled && <TextInput value={form.notification_email} onChangeText={value => update({ notification_email: value })} placeholder="name@example.com" placeholderTextColor={colors.textMuted} keyboardType="email-address" autoCapitalize="none" style={[styles.input, { color: colors.text, backgroundColor: colors.cardAlt, borderColor: colors.border }]} />}
+      {form.email_enabled && <WebSafeTextInput value={form.notification_email} onChangeText={value => update({ notification_email: value })} placeholder="name@example.com" placeholderTextColor={colors.textMuted} keyboardType="email-address" autoCapitalize="none" style={[styles.input, { color: colors.text, backgroundColor: colors.cardAlt, borderColor: colors.border }]} />}
       {form.email_enabled && <><TouchableOpacity onPress={sendTestEmail} disabled={testingEmail} style={[styles.linkButton, { borderColor: colors.accent, backgroundColor: colors.accentSoft }]}>{testingEmail ? <ActivityIndicator size="small" color={colors.accent} /> : <Mail size={16} color={colors.accent} />}<Text style={[styles.linkText, { color: colors.accent }]}>立即寄出全部符合訊號 Email</Text></TouchableOpacity><Text style={[styles.hint, { color: colors.textMuted }]}>直接依畫面目前條件重新掃描並完整寄出，不比較之前是否寄過，也不必先儲存。市場開盤時會使用盤中暫估日 K；信件會標示為手動寄送，不影響正式排程去重紀錄。</Text></>}
       <View style={[styles.divider, { backgroundColor: colors.borderLight }]} />
       {row('LINE', form.line_user_id ? '已綁定，可由 LINE 官方帳號接收通知' : '加入官方帳號並輸入一次性綁定碼', form.line_enabled, value => update({ line_enabled: value }), MessageCircle)}
@@ -254,6 +302,7 @@ const styles = StyleSheet.create({
   hero: { borderWidth: 1, borderRadius: 20, padding: 15, flexDirection: 'row', alignItems: 'center', gap: 12 }, heroIcon: { width: 46, height: 46, borderRadius: 15, alignItems: 'center', justifyContent: 'center' }, heroTitle: { fontSize: 17, fontWeight: '800' }, heroSub: { fontSize: 11, lineHeight: 17, marginTop: 3 },
   section: { borderWidth: 1, borderRadius: 18, padding: 15, gap: 12 }, sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 7 }, sectionTitle: { fontSize: 15, fontWeight: '800' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, chip: { minHeight: 36, borderWidth: 1, borderRadius: 18, paddingHorizontal: 13, alignItems: 'center', justifyContent: 'center' }, chipText: { fontSize: 11, fontWeight: '800' },
+  strategyConditionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }, strategyGroup: { gap: 7 }, strategyGroupTitle: { fontSize: 10, fontWeight: '900' }, applyViewingButton: { minHeight: 32, borderWidth: 1, borderRadius: 16, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' }, applyViewingButtonText: { fontSize: 10, fontWeight: '900' },
   label: { fontSize: 11, fontWeight: '700', marginTop: 2 }, hint: { fontSize: 10, lineHeight: 16 },
   switchRow: { flexDirection: 'row', alignItems: 'center', gap: 10 }, icon: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, rowTitle: { fontSize: 13, fontWeight: '800' }, rowSub: { fontSize: 10, lineHeight: 15, marginTop: 2 },
   input: { minHeight: 44, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, fontSize: 13 }, divider: { height: StyleSheet.hairlineWidth },

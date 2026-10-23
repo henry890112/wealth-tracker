@@ -105,6 +105,7 @@ export default function AddAssetScreen() {
         price: isInvestment && avgCost ? parseFloat(avgCost) : 0,
         total_amount: parsedAmount,
         trans_date: new Date().toISOString(),
+        external_source: isInvestment ? 'initial_position' : null,
       });
 
       // Snapshot update
@@ -124,10 +125,10 @@ export default function AddAssetScreen() {
   const cat = themedCategories.find(c => c.key === selectedCategory);
 
   return (
-    <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+    <TouchableWithoutFeedback onPress={Platform.OS === 'web' ? undefined : Keyboard.dismiss}>
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: colors.bg }}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'web' ? undefined : Platform.OS === 'ios' ? 'padding' : undefined}
     >
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 12, backgroundColor: colors.bg }]}>

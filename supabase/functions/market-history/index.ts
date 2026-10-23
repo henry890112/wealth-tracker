@@ -1,5 +1,12 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2.49.1";
+import { fetchUnifiedQuote, type UnifiedQuote } from "../_shared/marketData.ts";
+import {
+  aggregateIntradayDailyRows,
+  dateInTimeZone,
+  hasCompleteDailyOhlc,
+  mergeIntradayDailyRows,
+} from "./intradayFallback.mjs";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -42,7 +49,7 @@ async function fetchJson(url: string, headers: Record<string, string> = {}) {
   }
 }
 
-async function yahooRows(symbol: string, days: number) {
+async function yahooRows(symbol: string, days: number): Promise<PriceRow[]> {
   const period1 = Math.floor((Date.now() - days * 86400000) / 1000);
   const period2 = Math.floor(Date.now() / 1000) + 86400;
   const payload = await fetchJson(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?period1=${period1}&period2=${period2}&interval=1d&events=history`, { "User-Agent": "WealthTracker/1.0" });
@@ -50,8 +57,9 @@ async function yahooRows(symbol: string, days: number) {
   const result = payload.chart?.result?.[0];
   const quote = result?.indicators?.quote?.[0];
   const timestamps = result?.timestamp || [];
+  const timeZone = result?.meta?.exchangeTimezoneName || "America/New_York";
   const marketDate = result?.meta?.regularMarketTime ? new Date(result.meta.regularMarketTime * 1000).toISOString().slice(0, 10) : null;
-  return timestamps.map((timestamp: number, index: number) => {
+  let rows: PriceRow[] = timestamps.map((timestamp: number, index: number) => {
     const time = new Date(timestamp * 1000).toISOString().slice(0, 10);
     const reportedClose = Number(quote?.close?.[index]);
     const latestPrice = Number(result?.meta?.regularMarketPrice);
@@ -63,7 +71,39 @@ async function yahooRows(symbol: string, days: number) {
       close: reportedClose > 0 ? reportedClose : (index === timestamps.length - 1 && time === marketDate && latestPrice > 0 ? latestPrice : 0),
       volume: Number(quote?.volume?.[index] || 0),
     };
-  }).filter((row: { open: number; high: number; low: number; close: number }) => row.open > 0 && row.high > 0 && row.low > 0 && row.close > 0);
+  });
+
+  // Yahoo sometimes publishes the daily timestamp before its OHLC fields are
+  // ready (seen on ^SOX). Recover only recent, completed dates from 5-minute
+  // regular-session bars; never synthesize a candle from a close-only quote.
+  const todayInExchange = dateInTimeZone(new Date(), timeZone);
+  const recentCutoff = Date.now() - 30 * 86400000;
+  const missingDates = [...new Set(rows
+    .filter(row => !hasCompleteDailyOhlc(row)
+      && row.time < todayInExchange
+      && Date.parse(`${row.time}T00:00:00Z`) >= recentCutoff)
+    .map(row => row.time))].sort();
+  if (missingDates.length) {
+    try {
+      const fallbackStart = Math.floor(Date.parse(`${missingDates[0]}T00:00:00Z`) / 1000) - 86400;
+      const intradayPayload = await fetchJson(
+        `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?period1=${fallbackStart}&period2=${period2}&interval=5m&events=history`,
+        { "User-Agent": "WealthTracker/1.0" },
+      );
+      if (!intradayPayload.chart?.error) {
+        const intradayResult = intradayPayload.chart?.result?.[0];
+        const intradayRows = aggregateIntradayDailyRows(intradayResult, {
+          timeZone,
+          targetDates: missingDates,
+          todayDate: todayInExchange,
+        });
+        rows = mergeIntradayDailyRows(rows, intradayRows, missingDates);
+      }
+    } catch {
+      // Keep serving the valid daily bars if Yahoo's intraday fallback is unavailable.
+    }
+  }
+  return rows.filter(hasCompleteDailyOhlc).sort((left, right) => left.time.localeCompare(right.time));
 }
 
 type MarketQuote = {
@@ -77,6 +117,9 @@ type MarketQuote = {
   source: string;
   marketState?: string;
   isLive: boolean;
+  quoteStatus?: UnifiedQuote["quoteStatus"];
+  isStale?: boolean;
+  delaySeconds?: number | null;
 };
 
 function marketSessionIsOpen(market: string, date = new Date()) {
@@ -198,18 +241,22 @@ async function nasdaqQuote(symbol: string): Promise<MarketQuote | null> {
 }
 
 async function marketQuote(symbol: string, market: string) {
-  const candidates = market === "TW" && /^\d+$/.test(symbol)
-    ? [`${symbol}.TW`, `${symbol}.TWO`]
-    : [symbol];
-  for (const candidate of candidates) {
-    try {
-      const quote = await yahooQuote(candidate, market);
-      if (quote?.isLive) return quote;
-    } catch {
-      // Try the next Taiwan suffix, or Nasdaq for US symbols.
-    }
-  }
-  return market === "US" ? nasdaqQuote(symbol) : null;
+  const current = await fetchUnifiedQuote(symbol, market);
+  return {
+    price: current.price,
+    time: current.sourceTime,
+    candleDate: current.candleDate,
+    open: current.open,
+    high: current.high,
+    low: current.low,
+    volume: current.volume,
+    source: current.source,
+    marketState: current.session,
+    isLive: current.isIntraday && !current.isStale,
+    quoteStatus: current.quoteStatus,
+    isStale: current.isStale,
+    delaySeconds: current.delaySeconds,
+  } satisfies MarketQuote;
 }
 
 async function taiwanStockName(symbol: string, headers: Record<string, string>) {
@@ -220,7 +267,7 @@ async function taiwanStockName(symbol: string, headers: Record<string, string>) 
   return String(matches.at(-1)?.stock_name || matches[0]?.stock_name || "").trim();
 }
 
-async function finmind(symbol: string, days: number) {
+async function finmind(symbol: string, days: number): Promise<{ rows: PriceRow[]; institutional: Array<Record<string, unknown>>; name: string }> {
   const token = Deno.env.get("FINMIND_API_TOKEN") || "";
   const headers = token ? { Authorization: `Bearer ${token}` } : {};
   const startDate = dateBefore(days);
@@ -235,23 +282,60 @@ async function finmind(symbol: string, days: number) {
   const rows = (prices.data || []).map((row: Record<string, unknown>) => ({
     time: String(row.date), open: Number(row.open), high: Number(row.max), low: Number(row.min), close: Number(row.close), volume: Number(row.Trading_Volume || 0),
   })).filter((row: { time: string; open: number; high: number; low: number; close: number }) => row.time && row.open > 0 && row.high > 0 && row.low > 0 && row.close > 0);
-  const grouped = new Map<string, { time: string; foreign: number; trust: number; dealer: number; dealerSelf: number; dealerHedging: number }>();
+  const averagePriceByDate = new Map<string, number>();
+  for (const price of prices.data || []) {
+    const volume = Number(price.Trading_Volume);
+    const money = Number(price.Trading_money);
+    if (volume > 0 && money > 0 && Number.isFinite(volume) && Number.isFinite(money)) {
+      averagePriceByDate.set(String(price.date), money / volume);
+    }
+  }
+  type InstitutionalDay = {
+    time: string; foreign: number; trust: number; dealer: number; dealerSelf: number; dealerHedging: number;
+    foreignBuy: number | null; trustBuy: number | null; dealerBuy: number | null;
+    seenForeign: boolean; seenTrust: boolean; seenDealerSelf: boolean; seenDealerHedging: boolean;
+  };
+  const grouped = new Map<string, InstitutionalDay>();
   for (const row of institutions.data || []) {
     const time = String(row.date || "");
     if (!time) continue;
-    const item = grouped.get(time) || { time, foreign: 0, trust: 0, dealer: 0, dealerSelf: 0, dealerHedging: 0 };
+    const item: InstitutionalDay = grouped.get(time) || {
+      time, foreign: 0, trust: 0, dealer: 0, dealerSelf: 0, dealerHedging: 0,
+      foreignBuy: 0, trustBuy: 0, dealerBuy: 0,
+      seenForeign: false, seenTrust: false, seenDealerSelf: false, seenDealerHedging: false,
+    };
     const net = Number(row.buy || 0) - Number(row.sell || 0);
+    const buy = Number(row.buy);
+    const validBuy = row.buy !== null && row.buy !== undefined && Number.isFinite(buy) && buy >= 0;
     const name = String(row.name || "");
-    if (name === "Foreign_Investor" || name === "Foreign_Dealer_Self") item.foreign += net;
-    else if (name === "Investment_Trust") item.trust += net;
-    else if (name === "Dealer_self") { item.dealerSelf += net; item.dealer += net; }
-    else if (name === "Dealer_Hedging") { item.dealerHedging += net; item.dealer += net; }
+    if (name === "Foreign_Investor" || name === "Foreign_Dealer_Self") {
+      item.foreign += net;
+      if (name === "Foreign_Investor") item.seenForeign = true;
+      item.foreignBuy = validBuy && item.foreignBuy !== null ? item.foreignBuy + buy : null;
+    } else if (name === "Investment_Trust") {
+      item.trust += net;
+      item.seenTrust = true;
+      item.trustBuy = validBuy && item.trustBuy !== null ? item.trustBuy + buy : null;
+    } else if (name === "Dealer_self" || name === "Dealer_Hedging") {
+      item.dealer += net;
+      if (name === "Dealer_self") { item.dealerSelf += net; item.seenDealerSelf = true; }
+      else { item.dealerHedging += net; item.seenDealerHedging = true; }
+      item.dealerBuy = validBuy && item.dealerBuy !== null ? item.dealerBuy + buy : null;
+    }
     grouped.set(time, item);
   }
-  return { rows, institutional: [...grouped.values()].sort((a, b) => a.time.localeCompare(b.time)), name };
+  const institutional = [...grouped.values()].map(item => ({
+    time: item.time, foreign: item.foreign, trust: item.trust, dealer: item.dealer,
+    dealerSelf: item.dealerSelf, dealerHedging: item.dealerHedging,
+    foreignBuy: item.seenForeign ? item.foreignBuy : null,
+    trustBuy: item.seenTrust ? item.trustBuy : null,
+    dealerBuy: item.seenDealerSelf && item.seenDealerHedging ? item.dealerBuy : null,
+    referencePrice: averagePriceByDate.get(item.time) ?? null,
+  })).sort((a, b) => a.time.localeCompare(b.time));
+  return { rows, institutional, name };
 }
 
-async function binanceRows(symbol: string, days: number) {
+async function binanceRows(symbol: string, days: number): Promise<PriceRow[]> {
   const pair = symbol.endsWith("USDT") ? symbol : `${symbol}USDT`;
   const limit = Math.min(1000, Math.max(60, days));
   const payload = await fetchJson(`https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(pair)}&interval=1d&limit=${limit}`);
@@ -284,7 +368,21 @@ function mergeIntradayQuote(rows: PriceRow[], quote: MarketQuote | null) {
   return merged.sort((a, b) => a.time.localeCompare(b.time));
 }
 
-function completedDailyRows(rows: Array<{ time: string }>, market: string) {
+function mergeOfficialQuote(rows: PriceRow[], quote: MarketQuote | null) {
+  if (!quote || quote.quoteStatus !== "official_close" || !quote.candleDate
+    || !(quote.open! > 0) || !(quote.high! > 0) || !(quote.low! > 0) || !(quote.price > 0)) return rows;
+  const latestDate = rows.at(-1)?.time || "";
+  if (quote.candleDate < latestDate) return rows;
+  const official = {
+    time: quote.candleDate,
+    open: Number(quote.open), high: Number(quote.high), low: Number(quote.low),
+    close: quote.price, volume: Number(quote.volume || 0),
+  };
+  return [...rows.filter(row => row.time !== official.time), official]
+    .sort((a, b) => a.time.localeCompare(b.time));
+}
+
+function completedDailyRows<T extends { time: string }>(rows: T[], market: string): T[] {
   if (!rows.length) return rows;
   if (market === "CRYPTO") {
     const utcDate = new Date().toISOString().slice(0, 10);
@@ -302,13 +400,35 @@ Deno.serve(async (request) => {
   if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
   try {
     if (!await authenticate(request)) return json({ error: "Unauthorized" }, 401);
-    const { symbol, marketType, days = 1095, includeIntraday = false } = await request.json();
+    const { symbol, marketType, days = 1095, includeIntraday = false, comparisonSymbols = [] } = await request.json();
     const safeSymbol = String(symbol || "").trim().toUpperCase();
     const market = String(marketType || (/^\d+$/.test(safeSymbol) ? "TW" : "US")).toUpperCase();
     const safeDays = Math.min(Math.max(Number(days) || 1095, 60), 2000);
-    if (!/^[A-Z0-9.-]+$/.test(safeSymbol)) return json({ error: "Invalid symbol" }, 400);
+    if (!/^\^?[A-Z0-9.-]+$/.test(safeSymbol)) return json({ error: "Invalid symbol" }, 400);
     if (!["TW", "US", "CRYPTO"].includes(market)) return json({ error: "Unsupported market" }, 400);
-    const primaryRequest = market === "TW"
+    const safeComparisonTargets = Array.isArray(comparisonSymbols)
+      ? comparisonSymbols.map(value => {
+        const comparisonSymbol = typeof value === "object" ? value?.symbol : value;
+        const comparisonMarketValue = typeof value === "object" ? (value?.marketType || value?.market_type || value?.market) : market;
+        const comparisonMarket = String(comparisonMarketValue || market).trim().toUpperCase() === "CRYPTOCURRENCY"
+          ? "CRYPTO"
+          : String(comparisonMarketValue || market).trim().toUpperCase();
+        return { symbol: String(comparisonSymbol || "").trim().toUpperCase(), market: comparisonMarket };
+      })
+        .filter(target => target.symbol && ["TW", "US", "CRYPTO"].includes(target.market))
+        .filter(target => /^\^?[A-Z0-9.-]+$/.test(target.symbol))
+        .filter(target => target.symbol !== safeSymbol || target.market !== market)
+        .filter(target => target.market === "TW"
+          ? /^\d{4,6}$/.test(target.symbol)
+          : target.market === "CRYPTO"
+            ? /^[A-Z0-9-]{2,15}$/.test(target.symbol)
+            : !/^\d+$/.test(target.symbol))
+        .filter((target, index, list) => list.findIndex(item => item.symbol === target.symbol && item.market === target.market) === index)
+        .slice(0, 3)
+      : [];
+    const primaryRequest = safeSymbol.startsWith("^")
+      ? yahooRows(safeSymbol, safeDays).then(rows => ({ rows, institutional: [], name: "" }))
+      : market === "TW"
       ? finmind(safeSymbol, safeDays)
       : (market === "CRYPTO" ? binanceRows(safeSymbol, safeDays) : yahooRows(safeSymbol, safeDays))
         .then(rows => ({ rows, institutional: [] }));
@@ -319,22 +439,34 @@ Deno.serve(async (request) => {
       ? yahooRows("QQQ", safeDays)
       : benchmarkRequest;
     const relativeStrengthBenchmark = market === "US" ? "QQQ" : market === "TW" ? "加權指數" : "BTC";
-    const quoteRequest = market === "CRYPTO"
-      ? Promise.resolve(null)
-      : marketQuote(safeSymbol, market).catch(() => null);
-    const benchmarkQuoteRequest = market === "CRYPTO"
-      ? Promise.resolve(null)
-      : marketQuote(market === "TW" ? "^TWII" : "^GSPC", market).catch(() => null);
+    const quoteRequest = marketQuote(safeSymbol, market).catch(() => null);
+    const benchmarkQuoteRequest = marketQuote(
+      market === "TW" ? "^TWII" : market === "US" ? "^GSPC" : "BTC",
+      market,
+    ).catch(() => null);
     const relativeStrengthQuoteRequest = market === "US"
       ? marketQuote("QQQ", market).catch(() => null)
       : benchmarkQuoteRequest;
-    const [primary, benchmarkRows, relativeStrengthRows, quote, benchmarkQuote, relativeStrengthQuote] = await Promise.all([
+    const comparisonRequests = safeComparisonTargets.map(async target => {
+      try {
+        const source = target.market === "TW"
+          ? await finmind(target.symbol, safeDays)
+          : target.market === "CRYPTO"
+            ? { rows: await binanceRows(target.symbol, safeDays) }
+            : { rows: await yahooRows(target.symbol, safeDays) };
+        return { symbol: target.symbol, marketType: target.market, market: target.market, rows: completedDailyRows(source.rows, target.market) };
+      } catch (error) {
+        return { symbol: target.symbol, marketType: target.market, market: target.market, rows: [], error: error instanceof Error ? error.message : "比較資料取得失敗" };
+      }
+    });
+    const [primary, benchmarkRows, relativeStrengthRows, quote, benchmarkQuote, relativeStrengthQuote, comparisonRows] = await Promise.all([
       primaryRequest,
       benchmarkRequest.catch(() => []),
       relativeStrengthRequest.catch(() => []),
       quoteRequest,
       benchmarkQuoteRequest,
       relativeStrengthQuoteRequest,
+      Promise.all(comparisonRequests),
     ]);
     const completedRows = completedDailyRows(primary.rows, market);
     const completedBenchmarkRows = completedDailyRows(benchmarkRows, market);
@@ -342,17 +474,21 @@ Deno.serve(async (request) => {
     const cryptoDate = zonedClock("UTC").date;
     const cryptoIntraday = market === "CRYPTO" && primary.rows.at(-1)?.time === cryptoDate;
     const useIntraday = Boolean(includeIntraday) && (cryptoIntraday || Boolean(quote?.isLive));
+    const officialRows = mergeOfficialQuote(completedRows, quote);
+    const officialBenchmarkRows = mergeOfficialQuote(completedBenchmarkRows, benchmarkQuote);
+    const officialRelativeStrengthRows = mergeOfficialQuote(completedRelativeStrengthRows, relativeStrengthQuote);
     const result = {
       ...primary,
-      rows: useIntraday ? (cryptoIntraday ? primary.rows : mergeIntradayQuote(completedRows, quote)) : completedRows,
-      benchmarkRows: useIntraday ? (cryptoIntraday ? benchmarkRows : mergeIntradayQuote(completedBenchmarkRows, benchmarkQuote)) : completedBenchmarkRows,
-      relativeStrengthRows: useIntraday ? (cryptoIntraday ? relativeStrengthRows : mergeIntradayQuote(completedRelativeStrengthRows, relativeStrengthQuote)) : completedRelativeStrengthRows,
+      rows: useIntraday ? (cryptoIntraday ? primary.rows : mergeIntradayQuote(completedRows, quote)) : officialRows,
+      benchmarkRows: useIntraday ? (cryptoIntraday ? benchmarkRows : mergeIntradayQuote(completedBenchmarkRows, benchmarkQuote)) : officialBenchmarkRows,
+      relativeStrengthRows: useIntraday ? (cryptoIntraday ? relativeStrengthRows : mergeIntradayQuote(completedRelativeStrengthRows, relativeStrengthQuote)) : officialRelativeStrengthRows,
       relativeStrengthBenchmark,
+      comparisonRows,
       quote,
       quoteSource: quote?.source || "",
-      quoteStatus: useIntraday ? "intraday" : "official_close",
+      quoteStatus: useIntraday ? "intraday" : (quote?.quoteStatus || "official_close"),
       isIntraday: useIntraday,
-      quoteTime: useIntraday ? (quote?.time || new Date().toISOString()) : "",
+      quoteTime: quote?.time || "",
       intradayUnavailable: Boolean(includeIntraday) && ["TW", "US"].includes(market) && marketSessionIsOpen(market) && !useIntraday,
     };
     if (result.rows.length < 60) return json({ error: "歷史資料不足 60 個交易日。" }, 422);

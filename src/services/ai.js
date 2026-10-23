@@ -189,7 +189,7 @@ export async function askAI(messages, portfolioContext = {}) {
 }
 
 // ── Single-asset AI analysis (news + technicals) ──────────────────────────
-export async function analyzeAsset({ name, symbol, marketType, currentPrice, pnlPct, currency, technicals, news }) {
+export async function analyzeAsset({ name, symbol, marketType, currentPrice, priceLabel = '目前價格', priceTime = null, priceSource = '', pnlPct, currency, technicals, news }) {
   const newsBlock = news?.length > 0
     ? news.map((n, i) =>
         `${i + 1}. [${n.publishedAt}] ${n.title}${n.summary ? ' — ' + n.summary.slice(0, 120) : ''}`
@@ -198,7 +198,7 @@ export async function analyzeAsset({ name, symbol, marketType, currentPrice, pnl
 
   const techBlock = technicals || '（無技術指標資料）';
   const pnlLine   = pnlPct != null
-    ? `目前損益：${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%`
+    ? `${priceLabel}對應持倉價格報酬估算（未含匯率與費用）：${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%`
     : '';
 
   const systemPrompt = [
@@ -209,7 +209,8 @@ export async function analyzeAsset({ name, symbol, marketType, currentPrice, pnl
     '只能引用以下提供的數字，不可自行編造任何數據。',
     '',
     `分析標的：${name}（${symbol}，${marketType} 市場）`,
-    currentPrice ? `目前價格：${currentPrice.toFixed(2)} ${currency}` : '',
+    currentPrice ? `${priceLabel}：${currentPrice.toFixed(2)} ${currency}${priceTime ? `；資料時間 ${priceTime}` : ''}${priceSource ? `；來源 ${priceSource}` : ''}` : '',
+    '只有標記為盤中報價且附有時間的價格可稱為目前價格；歷史收盤價、延遲或過期報價不可寫成現價。RSI 與均線根據歷史日線計算，盤中價僅用於與均線比較。',
     pnlLine,
     '',
     '════ 技術指標 ════',

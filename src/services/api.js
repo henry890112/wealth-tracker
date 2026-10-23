@@ -1,4 +1,5 @@
 // API Service for external data sources
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
 
 const FINMIND_BASE_URL = 'https://api.finmindtrade.com/api/v4';
@@ -7,6 +8,13 @@ const BOT_CSV_URL = 'https://rate.bot.com.tw/xrt/flcsv/0/day';
 
 // Cache duration in milliseconds (1 minute)
 const CACHE_DURATION = 60 * 1000;
+const MARKET_PULSE_CACHE_KEY = 'wealthtracker:market-pulse-quotes:v1';
+const MARKET_PULSE_CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
+const MARKET_PULSE_CACHE_SYMBOLS = new Set([
+  'TW:^TWII', 'TW:TPEX', 'TW:0050', 'TW:0052', 'TW:00891',
+  'US:^GSPC', 'US:^DJI', 'US:^RUT', 'US:^NDX', 'US:^IXIC', 'US:^SOX', 'US:^VIX',
+]);
+let _marketPulseCacheWriteQueue = Promise.resolve();
 
 // ── L1 in-memory price cache ───────────────────────────────────────────────
 // Avoids a Supabase round-trip when the same price is requested again within
@@ -17,13 +25,158 @@ const _priceStaleCache = new Map();
 // In-flight promise cache: if two callers request the same symbol concurrently,
 // the second one waits on the same Promise instead of firing a duplicate query.
 const _priceInflight = new Map();
+// Options analysis is rendered in both the standalone screen and the embedded
+// technical-analysis card. Keep their underlying quote identical for a short
+// window; otherwise two force-refresh requests can produce different GEX
+// values while the user is looking at the same option chain.
+const _latestQuoteSnapshotCache = new Map();
+const _latestQuoteSnapshotInflight = new Map();
+const LATEST_QUOTE_SNAPSHOT_TTL = 30 * 1000;
 
 // ── TW stock list cache (Fix 2) ───────────────────────────────────────────
-// The full TaiwanStockInfo list is ~10 kB and changes at most daily.
-// Caching it for 1 hour avoids re-fetching on every search keystroke.
+// Keep a short in-memory cache for typing and a longer on-device cache so a
+// temporary provider outage doesn't make the Taiwan search directory vanish.
 let _twStockCache = null;
 let _twStockCacheTime = 0;
+let _twStockCacheWarning = null;
+let _twStockLoadPromise = null;
 const TW_STOCK_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+const TW_STOCK_CACHE_MAX_AGE = 14 * 24 * 60 * 60 * 1000;
+const TW_STOCK_CACHE_KEY = 'wealthtracker:tw-stock-directory:v1';
+const TWSE_STOCK_DIRECTORY_URL = 'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL';
+
+const TW_STOCK_SEARCH_FALLBACK = [
+  ['0050', '元大台灣50'], ['0056', '元大高股息'], ['006208', '富邦台50'],
+  ['00878', '國泰永續高股息'], ['00919', '群益台灣精選高息'], ['00929', '復華台灣科技優息'],
+  ['00940', '元大台灣價值高息'], ['00923', '群益台ESG低碳50'], ['00935', '野村台灣新科技50'],
+  ['00939', '統一台灣高息動能'], ['2330', '台積電'], ['2317', '鴻海'],
+  ['2454', '聯發科'], ['2308', '台達電'], ['2382', '廣達'], ['2303', '聯電'],
+  ['2412', '中華電'], ['2881', '富邦金'], ['2882', '國泰金'], ['2891', '中信金'],
+  ['2886', '兆豐金'], ['2884', '玉山金'], ['2603', '長榮'], ['2618', '長榮航'],
+  ['2002', '中鋼'], ['1301', '台塑'], ['3008', '大立光'], ['3711', '日月光投控'],
+  ['5274', '信驊'], ['6488', '環球晶'], ['6510', '精測'], ['3529', '力旺'],
+  ['4966', '譜瑞-KY'], ['8299', '群聯'], ['5347', '世界先進'], ['6485', '點序'],
+];
+
+const normalizeTWStockInfo = rows => {
+  const seen = new Set();
+  return (Array.isArray(rows) ? rows : []).flatMap(row => {
+    const stock_id = String(row?.stock_id ?? row?.Code ?? '').trim().toUpperCase();
+    const stock_name = String(row?.stock_name ?? row?.Name ?? '').trim();
+    if (!stock_id || !stock_name || seen.has(stock_id)) return [];
+    seen.add(stock_id);
+    return [{ stock_id, stock_name }];
+  });
+};
+
+const readPersistedTWStockInfo = async () => {
+  try {
+    const raw = await AsyncStorage.getItem(TW_STOCK_CACHE_KEY);
+    if (!raw) return null;
+    const cached = JSON.parse(raw);
+    const cachedAt = Number(cached?.cachedAt);
+    const stocks = normalizeTWStockInfo(cached?.stocks);
+    const age = Date.now() - cachedAt;
+    if (!stocks.length || !Number.isFinite(age) || age < 0 || age > TW_STOCK_CACHE_MAX_AGE) return null;
+    return { stocks, cachedAt, source: cached.source || 'cache' };
+  } catch {
+    return null;
+  }
+};
+
+const persistTWStockInfo = async (stocks, source) => {
+  try {
+    await AsyncStorage.setItem(TW_STOCK_CACHE_KEY, JSON.stringify({ stocks, source, cachedAt: Date.now() }));
+  } catch { /* search still works with the in-memory copy */ }
+};
+
+const loadTWStockInfoDetailed = async () => {
+  if (_twStockCache && Date.now() - _twStockCacheTime < TW_STOCK_CACHE_TTL) {
+    return { stocks: _twStockCache, warning: _twStockCacheWarning };
+  }
+  if (_twStockLoadPromise) return _twStockLoadPromise;
+
+  _twStockLoadPromise = (async () => {
+    let persisted = _twStockCache?.length
+      ? { stocks: _twStockCache, cachedAt: _twStockCacheTime, source: 'memory' }
+      : await readPersistedTWStockInfo();
+
+    try {
+      const response = await fetch(`${FINMIND_BASE_URL}/data?dataset=TaiwanStockInfo`);
+      if (response.ok === false) throw new Error(`FinMind HTTP ${response.status}`);
+      const payload = await response.json();
+      if (payload.status !== 200 || !Array.isArray(payload.data)) {
+        throw new Error(payload.msg || `FinMind status ${payload.status ?? 'unknown'}`);
+      }
+      const stocks = normalizeTWStockInfo(payload.data);
+      if (!stocks.length) throw new Error('FinMind returned an empty Taiwan stock directory');
+      _twStockCache = stocks;
+      _twStockCacheTime = Date.now();
+      _twStockCacheWarning = null;
+      await persistTWStockInfo(stocks, 'finmind');
+      return { stocks, warning: null };
+    } catch (finmindError) {
+      console.warn('Taiwan stock search primary source unavailable:', finmindError?.message || finmindError);
+    }
+
+    try {
+      const response = await fetch(TWSE_STOCK_DIRECTORY_URL);
+      if (response.ok === false) throw new Error(`TWSE HTTP ${response.status}`);
+      const officialStocks = normalizeTWStockInfo(await response.json());
+      const stocks = normalizeTWStockInfo([...officialStocks, ...(persisted?.stocks || [])]);
+      if (!stocks.length) throw new Error('TWSE returned an empty Taiwan stock directory');
+      const warning = '台股清單暫由證交所備援資料提供；上櫃股票可能未完整。';
+      _twStockCache = stocks;
+      _twStockCacheTime = Date.now();
+      _twStockCacheWarning = warning;
+      await persistTWStockInfo(stocks, 'twse');
+      return { stocks, warning };
+    } catch (twseError) {
+      console.warn('Taiwan stock search fallback unavailable:', twseError?.message || twseError);
+    }
+
+    if (persisted?.stocks?.length) {
+      const warning = '台股清單來源暫時受限，顯示裝置內快取資料。';
+      _twStockCache = persisted.stocks;
+      _twStockCacheTime = Date.now();
+      _twStockCacheWarning = warning;
+      return { stocks: persisted.stocks, warning };
+    }
+
+    const stocks = normalizeTWStockInfo(TW_STOCK_SEARCH_FALLBACK.map(([stock_id, stock_name]) => ({ stock_id, stock_name })));
+    const warning = '台股清單來源暫時受限，目前僅顯示常用標的。';
+    _twStockCache = stocks;
+    _twStockCacheTime = Date.now();
+    _twStockCacheWarning = warning;
+    return { stocks, warning };
+  })();
+
+  try {
+    return await _twStockLoadPromise;
+  } finally {
+    _twStockLoadPromise = null;
+  }
+};
+
+const loadTWStockInfo = async () => (await loadTWStockInfoDetailed()).stocks;
+
+/** Resolve Taiwan symbols to their official Chinese names with one cached request. */
+export const resolveTWStockNames = async symbols => {
+  const wanted = new Set((symbols || []).map(symbol => String(symbol).trim()).filter(Boolean));
+  if (!wanted.size) return {};
+  try {
+    const stocks = await loadTWStockInfo();
+    const names = {};
+    for (const stock of stocks) {
+      const symbol = String(stock.stock_id || '').trim();
+      if (wanted.has(symbol) && stock.stock_name) names[symbol] = String(stock.stock_name).trim();
+    }
+    return names;
+  } catch (error) {
+    console.warn('resolveTWStockNames error:', error);
+    return {};
+  }
+};
 
 const BINANCE_BASE_URL = 'https://api.binance.com/api/v3';
 const STABLECOINS = new Set(['USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'FDUSD']);
@@ -46,6 +199,68 @@ const normalizeQuoteMetadata = priceData => {
   };
 };
 
+const marketPulseCacheEntryKey = (symbol, marketType) => `${String(marketType || '').toUpperCase()}:${String(symbol || '').toUpperCase()}`;
+
+const queueMarketPulseCacheWrite = quotes => {
+  const validQuotes = (Array.isArray(quotes) ? quotes : []).filter(quote => {
+    const symbol = String(quote?.symbol || '').toUpperCase();
+    const market = String(quote?.market_type || quote?.market || '').toUpperCase();
+    return MARKET_PULSE_CACHE_SYMBOLS.has(marketPulseCacheEntryKey(symbol, market))
+      && Number.isFinite(Number(quote?.price))
+      && Number(quote.price) > 0
+      && !quote?.is_stale;
+  });
+  if (!validQuotes.length) return _marketPulseCacheWriteQueue;
+
+  _marketPulseCacheWriteQueue = _marketPulseCacheWriteQueue.then(async () => {
+    let entries = {};
+    try {
+      entries = JSON.parse(await AsyncStorage.getItem(MARKET_PULSE_CACHE_KEY) || '{}');
+      if (!entries || typeof entries !== 'object' || Array.isArray(entries)) entries = {};
+    } catch { entries = {}; }
+
+    const now = Date.now();
+    for (const quote of validQuotes) {
+      const market = String(quote.market_type || quote.market || '').toUpperCase();
+      const normalized = normalizeQuoteMetadata({ ...quote, market_type: market });
+      entries[marketPulseCacheEntryKey(normalized.symbol, market)] = { quote: normalized, cachedAt: now };
+    }
+    for (const [key, entry] of Object.entries(entries)) {
+      const age = now - Number(entry?.cachedAt);
+      if (!MARKET_PULSE_CACHE_SYMBOLS.has(key) || !Number.isFinite(age) || age < 0 || age > MARKET_PULSE_CACHE_MAX_AGE) delete entries[key];
+    }
+    await AsyncStorage.setItem(MARKET_PULSE_CACHE_KEY, JSON.stringify(entries));
+  }).catch(error => {
+    console.warn('Could not persist market pulse quote cache:', error?.message || error);
+  });
+  return _marketPulseCacheWriteQueue;
+};
+
+export const readMarketPulseQuoteCache = async () => {
+  try {
+    await _marketPulseCacheWriteQueue;
+    const entries = JSON.parse(await AsyncStorage.getItem(MARKET_PULSE_CACHE_KEY) || '{}');
+    const result = { TW: {}, US: {} };
+    const now = Date.now();
+    for (const [key, entry] of Object.entries(entries || {})) {
+      const age = now - Number(entry?.cachedAt);
+      const quote = entry?.quote;
+      if (!MARKET_PULSE_CACHE_SYMBOLS.has(key) || !Number.isFinite(age) || age < 0 || age > MARKET_PULSE_CACHE_MAX_AGE || !(Number(quote?.price) > 0)) continue;
+      const market = String(quote.market_type || '').toUpperCase();
+      const symbol = String(quote.symbol || '').toUpperCase();
+      if (!result[market]) result[market] = {};
+      result[market][symbol] = { ...quote, is_stale: true, quote_status: 'stale' };
+    }
+    return result;
+  } catch {
+    return { TW: {}, US: {} };
+  }
+};
+
+export const persistMarketPulseQuoteCache = async quotes => {
+  await queueMarketPulseCacheWrite(quotes);
+};
+
 const normalizeServerQuote = quote => normalizeQuoteMetadata({
   symbol: String(quote.symbol || '').toUpperCase(),
   price: Number(quote.price),
@@ -57,6 +272,12 @@ const normalizeServerQuote = quote => normalizeQuoteMetadata({
   fetched_at: quote.fetchedAt,
   quote_status: quote.quoteStatus,
   is_stale: quote.isStale,
+  delay_seconds: Number.isFinite(Number(quote.delaySeconds)) ? Number(quote.delaySeconds) : null,
+  open: Number(quote.open || 0),
+  high: Number(quote.high || 0),
+  low: Number(quote.low || 0),
+  previous_close: Number(quote.previousClose || 0),
+  candle_date: quote.candleDate || '',
 });
 
 const rememberQuote = priceData => {
@@ -64,12 +285,13 @@ const rememberQuote = priceData => {
   _priceMemCache.set(memKey, { data: priceData, timestamp: Date.now() });
   if (priceData.is_stale) _priceStaleCache.set(memKey, priceData);
   else _priceStaleCache.delete(memKey);
+  void queueMarketPulseCacheWrite([priceData]);
 };
 
 // Primary quote gateway. Providers are called from the Edge Function so mobile
 // clients are not dependent on third-party CORS behavior or device networking.
 // Existing direct provider calls remain below as a resilient fallback.
-const fetchServerQuotes = async targets => {
+const fetchServerQuotes = async (targets, forceRefresh = false) => {
   const symbols = targets
     .filter(target => target?.symbol)
     .map(target => ({
@@ -78,7 +300,7 @@ const fetchServerQuotes = async targets => {
     }));
   if (!symbols.length) return {};
   const { data, error } = await supabase.functions.invoke('market-data', {
-    body: { symbols },
+    body: { symbols, forceRefresh },
   });
   if (error) throw error;
   const result = {};
@@ -89,6 +311,38 @@ const fetchServerQuotes = async targets => {
     result[normalized.symbol] = normalized;
   }
   return result;
+};
+
+// Lightweight quote request used by visible market screens. A short shared
+// snapshot window keeps separate screens consistent while still allowing the
+// technical-analysis refresh loop to obtain a new quote every 30 seconds.
+export const fetchLatestMarketQuote = async (symbol, marketType = 'TW', options = {}) => {
+  const normalizedSymbol = String(symbol || '').trim().toUpperCase();
+  const normalizedMarket = String(marketType || (/^\d+$/.test(normalizedSymbol) ? 'TW' : 'US')).toUpperCase();
+  if (!normalizedSymbol) throw new Error('缺少標的代碼');
+  const forceRefresh = Boolean(options?.forceRefresh);
+  const cacheTtl = Number.isFinite(Number(options?.cacheTtl))
+    ? Math.max(0, Number(options.cacheTtl))
+    : LATEST_QUOTE_SNAPSHOT_TTL;
+  const snapshotKey = String(options?.snapshotKey || 'default');
+  const key = `${normalizedSymbol}::${normalizedMarket}::${snapshotKey}`;
+  const cached = _latestQuoteSnapshotCache.get(key);
+  if (!forceRefresh && cached && Date.now() - cached.timestamp < cacheTtl) return cached.data;
+  if (_latestQuoteSnapshotInflight.has(key)) return _latestQuoteSnapshotInflight.get(key);
+
+  const request = (async () => {
+    const quotes = await fetchServerQuotes([{ symbol: normalizedSymbol, market: normalizedMarket }], true);
+    const quote = quotes[normalizedSymbol];
+    if (!quote?.price) throw new Error(`無法取得 ${normalizedSymbol} 最新報價`);
+    _latestQuoteSnapshotCache.set(key, { data: quote, timestamp: Date.now() });
+    return quote;
+  })();
+  _latestQuoteSnapshotInflight.set(key, request);
+  try {
+    return await request;
+  } finally {
+    _latestQuoteSnapshotInflight.delete(key);
+  }
 };
 
 export const US_POPULAR_STOCKS = [
@@ -119,15 +373,17 @@ export const US_POPULAR_STOCKS = [
  * Primary: TWSE MIS real-time API (免費，盤中即時)
  * Fallback: FinMind historical (收盤價)
  */
-export const fetchTWStockPrice = async (symbol) => {
+export const fetchTWStockPrice = async (symbol, options = {}) => {
   try {
     const cached = await getCachedPrice(symbol, 'TW');
     if (cached) return cached;
 
-    try {
-      const serverQuotes = await fetchServerQuotes([{ symbol, market: 'TW' }]);
-      if (serverQuotes[String(symbol).toUpperCase()]) return serverQuotes[String(symbol).toUpperCase()];
-    } catch { /* fall through to direct providers */ }
+    if (!options.skipServer) {
+      try {
+        const serverQuotes = await fetchServerQuotes([{ symbol, market: 'TW' }]);
+        if (serverQuotes[String(symbol).toUpperCase()]) return serverQuotes[String(symbol).toUpperCase()];
+      } catch { /* fall through to direct providers */ }
+    }
 
     // Layer 1: TWSE MIS 盤中即時（交易時間內最準確）
     for (const prefix of ['tse', 'otc']) {
@@ -268,15 +524,17 @@ export const fetchTWStockPrice = async (symbol) => {
  * Primary: v7/quote (更即時的當前報價)
  * Fallback: v8/chart
  */
-export const fetchUSStockPrice = async (symbol) => {
+export const fetchUSStockPrice = async (symbol, options = {}) => {
   try {
     const cached = await getCachedPrice(symbol, 'US');
     if (cached) return cached;
 
-    try {
-      const serverQuotes = await fetchServerQuotes([{ symbol, market: 'US' }]);
-      if (serverQuotes[String(symbol).toUpperCase()]) return serverQuotes[String(symbol).toUpperCase()];
-    } catch { /* fall through to direct providers */ }
+    if (!options.skipServer) {
+      try {
+        const serverQuotes = await fetchServerQuotes([{ symbol, market: 'US' }]);
+        if (serverQuotes[String(symbol).toUpperCase()]) return serverQuotes[String(symbol).toUpperCase()];
+      } catch { /* fall through to direct providers */ }
+    }
 
     // Primary: Yahoo Finance v7/quote (supports batch, more current)
     try {
@@ -462,14 +720,14 @@ export const fetchCryptoPrice = async (symbol) => {
  * Batch fetch TW stock prices via parallel individual calls.
  * Returns a map: { [symbol]: priceData | null }
  */
-export const fetchTWStockPriceBatch = async (symbols) => {
+export const fetchTWStockPriceBatch = async (symbols, options = {}) => {
   if (!symbols || symbols.length === 0) return {};
   let result = {};
   try {
-    result = await fetchServerQuotes(symbols.map(symbol => ({ symbol, market: 'TW' })));
+    result = await fetchServerQuotes(symbols.map(symbol => ({ symbol, market: 'TW' })), Boolean(options.forceRefresh));
   } catch { /* use individual fallbacks below */ }
   const missing = symbols.filter(symbol => !result[String(symbol).toUpperCase()]);
-  const fallbacks = await Promise.allSettled(missing.map(symbol => fetchTWStockPrice(symbol)));
+  const fallbacks = await Promise.allSettled(missing.map(symbol => fetchTWStockPrice(symbol, { skipServer: true })));
   missing.forEach((symbol, index) => {
     result[symbol] = fallbacks[index].status === 'fulfilled' ? fallbacks[index].value : null;
   });
@@ -481,21 +739,25 @@ export const fetchTWStockPriceBatch = async (symbols) => {
  * Returns a map: { [symbol]: priceData }
  * Falls back to individual calls for any symbol not found in batch result.
  */
-export const fetchUSStockPriceBatch = async (symbols) => {
+export const fetchUSStockPriceBatch = async (symbols, options = {}) => {
   if (!symbols || symbols.length === 0) return {};
+  const forceRefresh = Boolean(options.forceRefresh);
 
   // Check cache first; only fetch uncached symbols
   const result = {};
   const toFetch = [];
-  for (const sym of symbols) {
-    const cached = await getCachedPrice(sym, 'US');
-    if (cached) result[sym] = cached;
-    else toFetch.push(sym);
+  const cachedQuotes = await Promise.all(symbols.map(async sym => [sym, await getCachedPrice(sym, 'US')]));
+  for (const [sym, cached] of cachedQuotes) {
+    if (cached && !forceRefresh) result[sym] = cached;
+    else {
+      if (cached) _priceStaleCache.set(`${sym}::US`, { ...cached, is_stale: true, quote_status: 'stale' });
+      toFetch.push(sym);
+    }
   }
   if (toFetch.length === 0) return result;
 
   try {
-    const serverQuotes = await fetchServerQuotes(toFetch.map(symbol => ({ symbol, market: 'US' })));
+    const serverQuotes = await fetchServerQuotes(toFetch.map(symbol => ({ symbol, market: 'US' })), forceRefresh);
     Object.assign(result, serverQuotes);
   } catch { /* use direct Yahoo fallback below */ }
 
@@ -540,11 +802,17 @@ export const fetchUSStockPriceBatch = async (symbols) => {
       .filter(sym => !result[sym])
       .map(async (sym) => {
         try {
-          const priceData = await fetchUSStockPrice(sym);
+          const priceData = await fetchUSStockPrice(sym, { skipServer: true });
           if (priceData) result[sym] = priceData;
         } catch {}
       })
   );
+
+  for (const sym of toFetch) {
+    if (result[sym]) continue;
+    const stale = getStaleCachedPrice(sym, 'US');
+    if (stale?.price > 0) result[sym] = { ...stale, is_stale: true, quote_status: 'stale' };
+  }
 
   return result;
 };
@@ -841,77 +1109,72 @@ export const fetchExchangeRate = async (fromCurrency, toCurrency) => {
 /**
  * Search stocks and crypto
  */
-export const searchAssets = async (query, marketType = 'all') => {
+export const searchAssetsDetailed = async (query, marketType = 'all') => {
   const results = [];
+  const warnings = [];
 
-  try {
-    if (marketType === 'all' || marketType === 'TW') {
-      const twStocks = await searchTWStocks(query);
-      results.push(...twStocks);
-    }
-
-    if (marketType === 'all' || marketType === 'US') {
-      const usStocks = await searchUSStocks(query);
-      results.push(...usStocks);
-    }
-
-    if (marketType === 'all' || marketType === 'Crypto') {
-      const cryptos = await searchCrypto(query);
-      results.push(...cryptos);
-    }
-
-    return results;
-  } catch (error) {
-    console.error('Error searching assets:', error);
-    return [];
+  if (marketType === 'all' || marketType === 'TW') {
+    const { assets, warning } = await searchTWStocksDetailed(query);
+    results.push(...assets);
+    if (warning) warnings.push(warning);
   }
+
+  if (marketType === 'all' || marketType === 'US') {
+    results.push(...await searchUSStocks(query));
+  }
+
+  if (marketType === 'all' || marketType === 'Crypto') {
+    results.push(...await searchCrypto(query));
+  }
+
+  return { assets: results, warnings };
 };
 
-/**
- * Search Taiwan stocks via FinMind.
- * Fix 2: The full stock list is cached in memory for 1 hour so repeated searches
- * don't re-download the entire TaiwanStockInfo dataset.
- */
-const searchTWStocks = async (query) => {
-  try {
-    // Populate or refresh the module-level cache
-    if (!_twStockCache || Date.now() - _twStockCacheTime >= TW_STOCK_CACHE_TTL) {
-      const response = await fetch(`${FINMIND_BASE_URL}/data?dataset=TaiwanStockInfo`);
-      const data = await response.json();
-      if (data.status === 200 && data.data) {
-        _twStockCache = data.data;
-        _twStockCacheTime = Date.now();
-      }
-    }
+export const searchAssets = async (query, marketType = 'all') => {
+  const { assets } = await searchAssetsDetailed(query, marketType);
+  return assets;
+};
 
-    if (!_twStockCache) return [];
-
-    const seen = new Set();
-    return _twStockCache
-      .filter(stock =>
-        stock.stock_id.includes(query) ||
-        stock.stock_name.includes(query)
-      )
-      .filter(stock => {
-        if (seen.has(stock.stock_id)) return false;
-        seen.add(stock.stock_id);
-        return true;
-      })
-      .slice(0, 20)
-      .map(stock => ({
-        symbol: stock.stock_id,
-        name: stock.stock_name,
-        market_type: 'TW',
-      }));
-  } catch (error) {
-    console.error('Error searching TW stocks:', error);
-    return [];
-  }
+/** Search Taiwan stocks by their official symbol or display name. */
+const searchTWStocksDetailed = async query => {
+  const { stocks, warning } = await loadTWStockInfoDetailed();
+  const normalizedQuery = String(query || '').trim().toLocaleLowerCase();
+  const seen = new Set();
+  const assets = stocks
+    .filter(stock => stock.stock_id.toLocaleLowerCase().includes(normalizedQuery)
+      || stock.stock_name.toLocaleLowerCase().includes(normalizedQuery))
+    .sort((a, b) => {
+      const score = stock => stock.stock_id.toLocaleLowerCase() === normalizedQuery ? 0
+        : stock.stock_id.toLocaleLowerCase().startsWith(normalizedQuery) ? 1 : 2;
+      return score(a) - score(b);
+    })
+    .filter(stock => {
+      if (seen.has(stock.stock_id)) return false;
+      seen.add(stock.stock_id);
+      return true;
+    })
+    .slice(0, 20)
+    .map(stock => ({ symbol: stock.stock_id, name: stock.stock_name, market_type: 'TW' }));
+  return { assets, warning };
 };
 
 /**
  * Search US stocks via Yahoo Finance API
  */
+const US_YAHOO_QUOTE_TYPES = new Set(['EQUITY', 'ETF', 'MUTUALFUND', 'ETN']);
+// Yahoo's search endpoint also returns foreign listings for the same keyword
+// (for example DRAM.TO and DRAM.DE).  Keep only exchanges that are traded in
+// the US so the UI's "美股" filter does not relabel foreign tickers.
+const US_YAHOO_EXCHANGES = new Set([
+  'ASE', 'BATS', 'BTT', 'BTS', 'MKT', 'NAS', 'NCM', 'NGM', 'NMS',
+  'NYQ', 'NYS', 'OQB', 'OQX', 'OTC', 'PCX', 'PNK',
+]);
+
+const isUSYahooQuote = quote => (
+  US_YAHOO_QUOTE_TYPES.has(String(quote?.quoteType || '').toUpperCase())
+  && US_YAHOO_EXCHANGES.has(String(quote?.exchange || '').toUpperCase())
+);
+
 const searchUSStocks = async (query) => {
   try {
     const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=15&newsCount=0`;
@@ -919,11 +1182,13 @@ const searchUSStocks = async (query) => {
     const json = await res.json();
     const quotes = json?.quotes || [];
     return quotes
-      .filter(q => q.quoteType === 'EQUITY')
+      .filter(isUSYahooQuote)
       .map(q => ({
         symbol: q.symbol,
         name: q.shortname || q.longname || q.symbol,
         market_type: 'US',
+        exchange: q.exchange,
+        quote_type: q.quoteType,
       }))
       .slice(0, 15);
   } catch (e) {
@@ -968,8 +1233,9 @@ export const TW_INDICES = [
 
 export const US_INDICES = [
   { symbol: '^GSPC', name: 'S&P 500',     market_type: 'US', isIndex: true },
-  { symbol: '^IXIC', name: 'NASDAQ',       market_type: 'US', isIndex: true },
   { symbol: '^DJI',  name: '道瓊工業指數', market_type: 'US', isIndex: true },
+  { symbol: '^NDX',  name: 'NASDAQ-100', market_type: 'US', isIndex: true },
+  { symbol: '^IXIC', name: 'NASDAQ',       market_type: 'US', isIndex: true },
   { symbol: '^RUT',  name: '羅素 2000',    market_type: 'US', isIndex: true },
   { symbol: '^SOX',  name: '費城半導體指數', market_type: 'US', isIndex: true },
   { symbol: '^VIX',  name: 'VIX 恐慌指數', market_type: 'US', isIndex: true },
@@ -1560,6 +1826,7 @@ const cachePrice = async (priceData) => {
     const memKey = `${normalized.symbol}::${normalized.market_type}`;
     _priceMemCache.set(memKey, { data: normalized, timestamp: Date.now() });
     _priceStaleCache.delete(memKey);
+    void queueMarketPulseCacheWrite([normalized]);
 
     await supabase
       .from('price_cache')

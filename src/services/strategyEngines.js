@@ -1,0 +1,2983 @@
+import { STRATEGY_LIBRARY } from './strategyLibrary.js';
+
+export const MA_SWING_PERIODS = [5, 10, 20, 40, 60];
+export const MA_SWING_PERIOD_OPTIONS = [null, ...MA_SWING_PERIODS];
+export function normalizeMaSwingSettings(value = {}) {
+  const source = value || {};
+  const normalizePeriod = (value, fallback) => {
+    const numeric = Number(value);
+    if (MA_SWING_PERIODS.includes(numeric)) return numeric;
+    if (Number.isFinite(numeric) && numeric > MA_SWING_PERIODS.at(-1)) return MA_SWING_PERIODS.at(-1);
+    return fallback;
+  };
+  const normalizeFilterPeriod = (key, legacyKey, fallback) => {
+    if (source[key] === null) return null;
+    if (source[key] != null) return normalizePeriod(source[key], fallback);
+    if (source[legacyKey] === false) return null;
+    return fallback;
+  };
+  const normalized = {
+    ...Object.fromEntries(Object.entries({ entry: 20, shortExit: 10, longExit: 60 }).map(([key, fallback]) => [
+      key, source[key] === null ? null : normalizePeriod(source[key], fallback),
+    ])),
+    abovePeriod: normalizeFilterPeriod('abovePeriod', 'requireAboveMa60', 60),
+    risingPeriod: normalizeFilterPeriod('risingPeriod', 'requireRisingMa60', 60),
+  };
+  if (normalized.shortExit != null && normalized.longExit != null && normalized.shortExit > normalized.longExit) {
+    [normalized.shortExit, normalized.longExit] = [normalized.longExit, normalized.shortExit];
+  }
+  return normalized;
+}
+
+function evaluateMaSwing(def, visibleRows, context = {}, options = {}) {
+  const rows = options.fullHistoryRows || visibleRows;
+  const visibleStart = visibleRows[0]?.time;
+  const settings = normalizeMaSwingSettings(context.strategySettings?.[def.key]);
+  const periods = [...new Set(['entry', 'shortExit', 'longExit', 'abovePeriod', 'risingPeriod']
+    .map(key => settings[key])
+    .filter(period => period != null && Number.isFinite(Number(period))) )];
+  // Compute from closes, including periods not supplied by the standard indicators.
+  const averages = Object.fromEntries(periods.map(period => [period, rows.map((row, index) => {
+    if (index < period - 1) return null;
+    const window = rows.slice(index - period + 1, index + 1);
+    return window.every(item => present(item.close) && Number(item.close) > 0)
+      ? average(window.map(item => item.close)) : null;
+  })]));
+  const last = rows.length - 1;
+  const start = Math.max(1, ...periods.map(period => period + (period === settings.risingPeriod ? 5 : 0)));
+  if (last < start || periods.some(period => !present(averages[period][last]))) {
+    return makeResult(def, 'unavailable', 'neutral', `此設定至少需要 ${start + 1} 根有效日 K；資料不足時不產生訊號。`, { settings });
+  }
+  let shortHeld = false;
+  let longHeld = false;
+  let entryWasReady = false;
+  const events = [];
+  let pending = null;
+  for (let i = start; i <= last; i += 1) {
+    const row = rows[i];
+    const previous = rows[i - 1];
+    if (!present(row.close) || !present(previous.close) || periods.some(period => !present(averages[period][i]) || !present(averages[period][i - 1]))) continue;
+    const above = period => period != null && row.close > averages[period][i];
+    const down = period => period != null && previous.close >= averages[period][i - 1] && row.close < averages[period][i];
+    const aboveFilterPassed = settings.abovePeriod == null || above(settings.abovePeriod);
+    const risingFilterPassed = settings.risingPeriod == null
+      || (present(averages[settings.risingPeriod][i - 5]) && averages[settings.risingPeriod][i] > averages[settings.risingPeriod][i - 5]);
+    const trend = aboveFilterPassed && risingFilterPassed;
+    // Treat the first bar where every entry condition is simultaneously true
+    // as the entry signal. The price does not need to cross the entry MA on
+    // that same bar; it may already be above it while the trend filters catch
+    // up. `entryWasReady` prevents a signal on every subsequent bar.
+    const entryReady = settings.entry != null && trend && above(settings.entry);
+    const enter = entryReady && !entryWasReady;
+    let action = null;
+    let text = '';
+    if (longHeld && down(settings.longExit)) {
+      action = 'longExit'; text = `全部出場 MA${settings.longExit}`;
+    } else if (shortHeld && down(settings.shortExit)) {
+      action = 'shortExit'; text = `第一段出場 MA${settings.shortExit}`;
+    } else if (enter && (!shortHeld || !longHeld)) {
+      action = 'entry'; text = `進場 MA${settings.entry}`;
+    }
+    entryWasReady = entryReady;
+    if (!action) continue;
+    const intraday = i === last && (context.isIntraday || context.quoteStatus === 'intraday');
+    const event = makeEvent(rows, i, action === 'entry' ? 'bullish' : 'bearish', intraday ? 'watch' : 'confirmed',
+      `${text}${intraday ? '（待收盤）' : ''}`, {}, { action, plotMarker: true, settings });
+    if (intraday) { pending = event; continue; }
+    if (action === 'entry') { shortHeld = true; longHeld = true; }
+    if (action === 'shortExit') shortHeld = false;
+    if (action === 'longExit') { shortHeld = false; longHeld = false; }
+    events.push(event);
+  }
+  const current = pending || (events.at(-1)?.time === rows[last].time ? events.at(-1) : null);
+  const summary = current?.text || (longHeld ? (shortHeld ? '策略模擬：兩段部位持有中' : '策略模擬：第一段已出場，剩餘部位續抱') : '等待進場條件');
+  const periodLabel = period => period == null ? '無' : `MA${period}`;
+  const entryRule = settings.entry == null ? '進場線未啟用，不產生進場訊號' : `收盤站上 ${periodLabel(settings.entry)}，所有進場條件首次同時成立時進場`;
+  const shortExitRule = settings.shortExit == null ? '第一段出場未啟用' : `第一段出場：跌破 ${periodLabel(settings.shortExit)}，賣出 50%`;
+  const longExitRule = settings.longExit == null ? '全部出場未啟用' : `全部出場：跌破 ${periodLabel(settings.longExit)}，賣出剩餘部位`;
+  const maFilters = [
+    settings.abovePeriod == null ? '不限制收盤與均線' : `收盤站上 ${periodLabel(settings.abovePeriod)}`,
+    settings.risingPeriod == null ? '不限制均線斜率' : `${periodLabel(settings.risingPeriod)} 近 5 日上揚`,
+  ];
+  const result = makeResult(def, current?.status || (longHeld ? 'watch' : 'none'), current?.type || (longHeld ? 'bullish' : 'neutral'),
+    `${summary}。${entryRule}；${maFilters.join('；')}；${shortExitRule}；${longExitRule}。出場均線只用於出場，不會限制進場。僅收盤確認，出場不代表放空；此為訊號模擬，不是實際庫存。`, {
+      settings, shortHeld, longHeld, signal: current, latestEvent: current,
+      events: (pending ? [...events, pending] : events).filter(event => event.time >= visibleStart),
+      overlay: { priceLines: [], regions: [], series: [
+        ['entry', '進場', 'warning'], ['shortExit', '第一段出場', 'positive'], ['longExit', '全部出場', 'negative'],
+      ].map(([key, label, color]) => settings[key] == null ? null : overlaySeries(`${label} ${periodLabel(settings[key])}`,
+        rows.map((row, index) => ({ time: row.time, value: averages[settings[key]][index] })).filter(point => point.time >= visibleStart), color, 0, 2)).filter(Boolean) },
+    });
+  return result;
+}
+
+export const TTM_SQUEEZE_PRESETS = Object.freeze({
+  aggressive: Object.freeze({
+    key: 'aggressive',
+    label: '積極',
+    kcMultiplier: 2,
+    minSqueezeBars: 3,
+    breakoutLookback: 10,
+    breakoutMargin: 0.001,
+    minVolumeRatio: 1,
+    momentumBars: 20,
+    confirmWindow: 3,
+  }),
+  standard: Object.freeze({
+    key: 'standard',
+    label: '標準',
+    kcMultiplier: 1.5,
+    minSqueezeBars: 5,
+    breakoutLookback: 20,
+    breakoutMargin: 0.003,
+    minVolumeRatio: 1.2,
+    momentumBars: 20,
+    confirmWindow: 3,
+  }),
+  conservative: Object.freeze({
+    key: 'conservative',
+    label: '保守',
+    kcMultiplier: 1.25,
+    minSqueezeBars: 8,
+    breakoutLookback: 20,
+    breakoutMargin: 0.005,
+    minVolumeRatio: 1.5,
+    momentumBars: 20,
+    confirmWindow: 3,
+  }),
+});
+
+export const normalizeTtmSqueezePreset = value => {
+  const key = typeof value === 'string' ? value : value?.preset;
+  return Object.prototype.hasOwnProperty.call(TTM_SQUEEZE_PRESETS, key) ? key : 'standard';
+};
+
+export const TTM_SQUEEZE_PRESET_OPTIONS = Object.values(TTM_SQUEEZE_PRESETS).map(({ key, label }) => ({ key, label }));
+
+const finite = value => Number.isFinite(Number(value));
+const present = value => value !== null && value !== undefined && finite(value);
+const average = values => values.length ? values.reduce((sum, value) => sum + Number(value || 0), 0) / values.length : 0;
+
+function standardDeviation(values) {
+  if (values.length < 2) return 0;
+  const mean = average(values);
+  return Math.sqrt(average(values.map(value => (Number(value) - mean) ** 2)));
+}
+
+function covariance(left, right) {
+  const count = Math.min(left.length, right.length);
+  if (count < 2) return 0;
+  const x = left.slice(-count).map(Number);
+  const y = right.slice(-count).map(Number);
+  const xMean = average(x);
+  const yMean = average(y);
+  return average(x.map((value, index) => (value - xMean) * (y[index] - yMean)));
+}
+
+function correlation(left, right) {
+  const count = Math.min(left.length, right.length);
+  if (count < 3) return 0;
+  const x = left.slice(-count).map(Number);
+  const y = right.slice(-count).map(Number);
+  const denominator = standardDeviation(x) * standardDeviation(y);
+  return denominator ? covariance(x, y) / denominator : 0;
+}
+
+function linearFit(xValues, yValues) {
+  const count = Math.min(xValues.length, yValues.length);
+  if (count < 3) return null;
+  const x = xValues.slice(-count).map(Number);
+  const y = yValues.slice(-count).map(Number);
+  const variance = standardDeviation(x) ** 2;
+  if (!variance) return null;
+  const beta = covariance(x, y) / variance;
+  const alpha = average(y) - beta * average(x);
+  return { alpha, beta };
+}
+
+function pivotIndexes(values, kind = 'low', strength = 3) {
+  const result = [];
+  for (let index = strength; index < values.length - strength; index += 1) {
+    const value = Number(values[index]);
+    if (!Number.isFinite(value)) continue;
+    const window = values.slice(index - strength, index + strength + 1).map(Number).filter(Number.isFinite);
+    if (window.length !== strength * 2 + 1) continue;
+    const extreme = kind === 'low' ? Math.min(...window) : Math.max(...window);
+    if (value === extreme && window.filter(item => item === extreme).length === 1) result.push(index);
+  }
+  return result;
+}
+
+function alternatingStructurePivots(rows, strength = 3) {
+  const highs = new Set(pivotIndexes(rows.map(row => row.high), 'high', strength));
+  const lows = new Set(pivotIndexes(rows.map(row => row.low), 'low', strength));
+  const raw = [];
+
+  for (let index = strength; index < rows.length - strength; index += 1) {
+    const isHigh = highs.has(index);
+    const isLow = lows.has(index);
+    // An outside candle can technically be both a local high and low. Its
+    // internal swing order is unknown on daily data, so do not invent one.
+    if (isHigh === isLow) continue;
+    raw.push({
+      index,
+      kind: isHigh ? 'high' : 'low',
+      value: Number(rows[index][isHigh ? 'high' : 'low']),
+      time: rows[index].time,
+    });
+  }
+
+  return raw.reduce((sequence, pivot) => {
+    const previous = sequence.at(-1);
+    if (!previous || previous.kind !== pivot.kind) {
+      sequence.push(pivot);
+      return sequence;
+    }
+
+    // Consecutive highs/lows do not form a completed swing. Keep only the
+    // more extreme point until an opposite pivot confirms the turn.
+    const isMoreExtreme = pivot.kind === 'high'
+      ? pivot.value > previous.value
+      : pivot.value < previous.value;
+    if (isMoreExtreme) sequence[sequence.length - 1] = pivot;
+    return sequence;
+  }, []);
+}
+
+function trueRange(rows, index) {
+  const row = rows[index];
+  if (!row) return 0;
+  const previous = rows[index - 1];
+  return previous
+    ? Math.max(row.high - row.low, Math.abs(row.high - previous.close), Math.abs(row.low - previous.close))
+    : row.high - row.low;
+}
+
+function atrAt(rows, index = rows.length - 1, period = 14) {
+  const start = Math.max(0, index - period + 1);
+  const values = [];
+  for (let cursor = start; cursor <= index; cursor += 1) values.push(trueRange(rows, cursor));
+  return average(values);
+}
+
+function rollingStats(rows, index, period = 20) {
+  const window = rows.slice(Math.max(0, index - period + 1), index + 1).map(row => Number(row.close)).filter(Number.isFinite);
+  const mean = average(window);
+  const deviation = standardDeviation(window);
+  return { mean, deviation, upper: mean + deviation * 2, lower: mean - deviation * 2 };
+}
+
+function bollingerSeries(rows, period = 20, multiplier = 2) {
+  return rows.map((_, index) => {
+    const stats = rollingStats(rows, index, period);
+    if (index < period - 1 || !stats.deviation) return { time: rows[index].time, mean: null, upper: null, lower: null, width: null };
+    return {
+      time: rows[index].time,
+      mean: stats.mean,
+      upper: stats.mean + stats.deviation * multiplier,
+      lower: stats.mean - stats.deviation * multiplier,
+      width: stats.mean ? (stats.deviation * multiplier * 2) / stats.mean : null,
+    };
+  });
+}
+
+function emaSeries(rows, period = 20) {
+  const multiplier = 2 / (period + 1);
+  let previous = null;
+  return rows.map((row, index) => {
+    const close = Number(row?.close);
+    if (!Number.isFinite(close)) return null;
+    previous = previous == null ? close : close * multiplier + previous * (1 - multiplier);
+    return index >= period - 1 ? previous : null;
+  });
+}
+
+function atrSeries(rows, period = 20) {
+  return rows.map((_, index) => index >= period - 1 ? atrAt(rows, index, period) : null);
+}
+
+function keltnerSeries(rows, period = 20, multiplier = 1.5) {
+  const middleValues = emaSeries(rows, period);
+  const atrValues = atrSeries(rows, period);
+  return rows.map((row, index) => {
+    const middle = middleValues[index];
+    const atr = atrValues[index];
+    if (!present(middle) || !present(atr)) return { time: row.time, middle: null, upper: null, lower: null, atr: null };
+    return {
+      time: row.time,
+      middle,
+      upper: middle + atr * multiplier,
+      lower: middle - atr * multiplier,
+      atr,
+    };
+  });
+}
+
+function linearRegressionEnd(values) {
+  const clean = values.map(Number).filter(Number.isFinite);
+  const count = clean.length;
+  if (count < 2) return null;
+  const xMean = (count - 1) / 2;
+  const yMean = average(clean);
+  let numerator = 0;
+  let denominator = 0;
+  clean.forEach((value, index) => {
+    const x = index - xMean;
+    numerator += x * (value - yMean);
+    denominator += x * x;
+  });
+  if (!denominator) return yMean;
+  const slope = numerator / denominator;
+  return yMean + slope * ((count - 1) - xMean);
+}
+
+function ttmMomentumSeries(rows, period = 20) {
+  const momentumAt = index => {
+    if (index < period - 1) return null;
+    const values = [];
+    for (let cursor = index - period + 1; cursor <= index; cursor += 1) {
+      const window = rows.slice(Math.max(0, cursor - period + 1), cursor + 1);
+      const close = Number(rows[cursor]?.close);
+      if (!window.length || !Number.isFinite(close)) continue;
+      const highValues = window.map(item => Number(item.high)).filter(Number.isFinite);
+      const lowValues = window.map(item => Number(item.low)).filter(Number.isFinite);
+      const closeValues = window.map(item => Number(item.close)).filter(Number.isFinite);
+      const high = highValues.length ? Math.max(...highValues) : null;
+      const low = lowValues.length ? Math.min(...lowValues) : null;
+      const mean = average(closeValues);
+      if (![high, low, mean].every(Number.isFinite)) continue;
+      const baseline = ((high + low) / 2 + mean) / 2;
+      values.push(close - baseline);
+    }
+    return values.length >= period ? linearRegressionEnd(values) : null;
+  };
+  return rows.map((row, index) => {
+    const value = momentumAt(index);
+    const previous = momentumAt(index - 1);
+    return { time: row.time, value, slope: present(value) && present(previous) ? value - previous : null };
+  });
+}
+
+function ttmSqueezeSeries(rows, settings) {
+  const bollinger = bollingerSeries(rows, 20, 2);
+  const keltner = keltnerSeries(rows, 20, settings.kcMultiplier);
+  const momentum = ttmMomentumSeries(rows, settings.momentumBars);
+  return rows.map((row, index) => {
+    const boll = bollinger[index];
+    const kc = keltner[index];
+    const momentumPoint = momentum[index];
+    const squeezeOn = [boll?.upper, boll?.lower, kc?.upper, kc?.lower].every(present)
+      && boll.upper < kc.upper
+      && boll.lower > kc.lower;
+    return {
+      time: row.time,
+      bollUpper: boll?.upper ?? null,
+      bollMiddle: boll?.mean ?? null,
+      bollLower: boll?.lower ?? null,
+      bollWidth: boll?.width ?? null,
+      kcUpper: kc?.upper ?? null,
+      kcMiddle: kc?.middle ?? null,
+      kcLower: kc?.lower ?? null,
+      atr: kc?.atr ?? null,
+      squeezeOn,
+      momentum: momentumPoint?.value ?? null,
+      momentumSlope: momentumPoint?.slope ?? null,
+    };
+  });
+}
+
+function ttmSqueezeSettings(context = {}, options = {}) {
+  const strategySettings = context?.strategySettings || options?.strategySettings || {};
+  const configured = strategySettings?.['indicator-bollinger-squeeze']
+    || strategySettings?.bollingerSqueeze
+    || strategySettings?.ttmSqueeze;
+  const presetKey = normalizeTtmSqueezePreset(configured);
+  return TTM_SQUEEZE_PRESETS[presetKey];
+}
+
+function rollingVwapSeries(rows, period = 20) {
+  return rows.map((_, index) => {
+    const window = rows.slice(Math.max(0, index - period + 1), index + 1);
+    const volume = window.reduce((sum, row) => sum + Number(row.volume || 0), 0);
+    const weighted = window.reduce((sum, row) => sum + ((Number(row.high) + Number(row.low) + Number(row.close)) / 3) * Number(row.volume || 0), 0);
+    return { time: rows[index].time, value: volume > 0 ? weighted / volume : rows[index].close };
+  });
+}
+
+function ichimokuSeries(rows) {
+  const midpoint = (start, end) => {
+    const window = rows.slice(Math.max(0, start), end + 1);
+    if (!window.length) return null;
+    return (Math.max(...window.map(row => row.high)) + Math.min(...window.map(row => row.low))) / 2;
+  };
+  return rows.map((row, index) => {
+    const conversion = midpoint(index - 8, index);
+    const base = midpoint(index - 25, index);
+    const spanB = midpoint(index - 51, index);
+    return { time: row.time, conversion, base, spanA: conversion != null && base != null ? (conversion + base) / 2 : null, spanB };
+  });
+}
+
+function wilderAtrSeries(rows, period = 14) {
+  const result = new Array(rows.length).fill(null);
+  if (rows.length < period) return result;
+  const ranges = rows.map((_, index) => trueRange(rows, index));
+  result[period - 1] = average(ranges.slice(0, period));
+  for (let index = period; index < rows.length; index += 1) {
+    result[index] = ((result[index - 1] * (period - 1)) + ranges[index]) / period;
+  }
+  return result;
+}
+
+function supertrendSeries(rows, period = 10, multiplier = 3) {
+  const atrValues = wilderAtrSeries(rows, period);
+  const result = new Array(rows.length).fill(null);
+  let previousFinalUpper = null;
+  let previousFinalLower = null;
+  let previousSupertrend = null;
+  rows.forEach((row, index) => {
+    const atr = atrValues[index];
+    if (!present(atr)) return;
+    const midpoint = (Number(row.high) + Number(row.low)) / 2;
+    const basicUpper = midpoint + multiplier * atr;
+    const basicLower = midpoint - multiplier * atr;
+    const previousClose = Number(rows[index - 1]?.close);
+    const finalUpper = previousFinalUpper == null || basicUpper < previousFinalUpper || previousClose > previousFinalUpper
+      ? basicUpper
+      : previousFinalUpper;
+    const finalLower = previousFinalLower == null || basicLower > previousFinalLower || previousClose < previousFinalLower
+      ? basicLower
+      : previousFinalLower;
+    let value;
+    if (previousSupertrend == null) value = Number(row.close) >= finalLower ? finalLower : finalUpper;
+    else if (previousSupertrend === previousFinalUpper) value = Number(row.close) <= finalUpper ? finalUpper : finalLower;
+    else value = Number(row.close) >= finalLower ? finalLower : finalUpper;
+    const direction = Number(row.close) >= value ? 1 : -1;
+    result[index] = { time: row.time, value, direction, upper: finalUpper, lower: finalLower, atr };
+    previousFinalUpper = finalUpper;
+    previousFinalLower = finalLower;
+    previousSupertrend = value;
+  });
+  return result;
+}
+
+function volumeRatioAt(rows, index) {
+  const baseline = average(rows.slice(Math.max(0, index - 20), index).map(row => Number(row.volume || 0)));
+  return baseline > 0 ? Number(rows[index]?.volume || 0) / baseline : 0;
+}
+
+function crossed(rows, fastKey, slowKey, index = rows.length - 1) {
+  const current = rows[index];
+  const previous = rows[index - 1];
+  if (!current || !previous || !present(current[fastKey]) || !present(current[slowKey]) || !present(previous[fastKey]) || !present(previous[slowKey])) return null;
+  if (previous[fastKey] <= previous[slowKey] && current[fastKey] > current[slowKey]) return 'bullish';
+  if (previous[fastKey] >= previous[slowKey] && current[fastKey] < current[slowKey]) return 'bearish';
+  return null;
+}
+
+function latestCross(rows, fastKey, slowKey, lookback = 8) {
+  for (let index = rows.length - 1; index >= Math.max(1, rows.length - lookback); index -= 1) {
+    const type = crossed(rows, fastKey, slowKey, index);
+    if (type) return { index, type };
+  }
+  return null;
+}
+
+function latestDirectionalCross(rows, lookback = 8) {
+  for (let index = rows.length - 1; index >= Math.max(1, rows.length - lookback); index -= 1) {
+    const current = directionalMovement(rows, index);
+    const previous = directionalMovement(rows, index - 1);
+    if (current.plus > current.minus && previous.plus <= previous.minus) return { index, type: 'bullish' };
+    if (current.minus > current.plus && previous.minus <= previous.plus) return { index, type: 'bearish' };
+  }
+  return null;
+}
+
+function seriesPoints(rows, key, from = Math.max(0, rows.length - 180)) {
+  return rows.slice(from).map(row => ({ time: row.time, value: Number(row[key]) })).filter(point => present(point.value));
+}
+
+function inferredOverlayRole(title) {
+  const value = String(title || '').toUpperCase();
+  if (value.includes('頸線') || value.includes('突破線') || value.includes('確認線')) return 'neckline';
+  if (value.includes('目標') || value.includes('測幅') || value.includes('TP') || value.includes('回收') || value.includes('位移')) return 'target';
+  if (value.includes('停損') || value.includes('失效') || value.includes('防守') || value.includes('風險') || value === 'SL') return 'stop';
+  return null;
+}
+
+function overlayLine(price, title, colorKey = 'accent', lineStyle = 2, lineWidth = 2, role = null) {
+  return present(price) ? { price: Number(price), title, colorKey, lineStyle, lineWidth, role: role || inferredOverlayRole(title) } : null;
+}
+
+function overlaySeries(name, points, colorKey = 'accent', lineStyle = 1, lineWidth = 2, metadata = {}) {
+  const cleaned = (points || []).filter(point => point?.time && present(point.value));
+  return cleaned.length >= 2 ? { name, points: cleaned, colorKey, lineStyle, lineWidth, ...metadata } : null;
+}
+
+function overlayRegion(name, points, colorKey = 'accent', fillOpacity = 0.08, lineStyle = 2, lineWidth = 1, label = name) {
+  const cleaned = (points || [])
+    .filter(point => point?.time && present(point.value))
+    .map(point => ({ time: point.time, value: Number(point.value) }));
+  return cleaned.length >= 3
+    ? { name, label, points: cleaned, colorKey, fillOpacity, lineStyle, lineWidth }
+    : null;
+}
+
+function makeEvent(rows, index, type, status, text, levels = {}, extra = {}) {
+  const row = rows[index] || rows.at(-1);
+  return {
+    time: row?.time,
+    type,
+    status,
+    price: Number(row?.close || 0),
+    text,
+    ...levels,
+    ...extra,
+  };
+}
+
+function firstLevelCrossIndex(rows, startIndex, level, type, buffer = 0) {
+  for (let index = Math.max(1, startIndex + 1); index < rows.length; index += 1) {
+    const previous = Number(rows[index - 1]?.close);
+    const current = Number(rows[index]?.close);
+    if (!Number.isFinite(previous) || !Number.isFinite(current)) continue;
+    if (type === 'bullish' && previous <= level + buffer && current > level + buffer) return index;
+    if (type === 'bearish' && previous >= level - buffer && current < level - buffer) return index;
+  }
+  return null;
+}
+
+function confirmationStillHeld(rows, confirmationIndex, level, type, buffer = 0) {
+  if (confirmationIndex == null) return false;
+  const latestClose = Number(rows.at(-1)?.close);
+  if (!Number.isFinite(latestClose)) return false;
+  return type === 'bullish'
+    ? latestClose >= level - buffer
+    : latestClose <= level + buffer;
+}
+
+function shouldPlotStrategyEvent(key, event) {
+  if (!event?.time || !['confirmed', 'watch'].includes(event.status)) return false;
+  if (typeof event.plotMarker === 'boolean') return event.plotMarker;
+  if (['pattern-double-top-bottom', 'pattern-head-shoulders', 'volume-obv-divergence', 'volume-mfi-divergence', 'volume-cmf-divergence'].includes(key)) return true;
+  if (['trend-ma-cross', 'trend-month-quarter-ma', 'trend-adx', 'indicator-macd-cross', 'indicator-kd-cross'].includes(key)) return Boolean(event.crossTime);
+  if (key === 'price-sr-flip') return Boolean(event.breakout || event.retest);
+  if (['price-order-block', 'price-fvg-retest'].includes(key)) return Boolean(event.touched);
+  if (key === 'price-candlestick') return Boolean(event.pattern);
+  if (['volume-breakout', 'stats-atr-breakout'].includes(key)) return Boolean(event.priceBreakout);
+  if (key === 'stats-momentum-ranking') return false;
+  return event.status === 'confirmed';
+}
+
+function makeResult(def, status, direction, reason, details = {}) {
+  return {
+    key: def.key,
+    label: def.label,
+    category: def.category,
+    computed: true,
+    status,
+    direction,
+    reason,
+    events: [],
+    overlay: { priceLines: [], series: [], regions: [] },
+    ...details,
+  };
+}
+
+function resultFromEvent(def, event, overlay = {}, reason = event?.text || '尚未形成訊號。') {
+  const plottedEvent = event ? { ...event, plotMarker: shouldPlotStrategyEvent(def.key, event) } : null;
+  const priceLines = (overlay.priceLines || []).filter(Boolean);
+  const samePrice = value => priceLines.some(line => Math.abs(Number(line.price) - Number(value)) <= Math.max(1e-8, Math.abs(Number(value)) * 1e-8));
+  const confirmedStyle = plottedEvent?.status === 'confirmed' ? 0 : 2;
+  const direction = plottedEvent?.type === 'bullish' || plottedEvent?.type === 'bearish' ? plottedEvent.type : null;
+  const fallbackLines = direction ? [
+    present(plottedEvent?.stop) && !samePrice(plottedEvent.stop)
+      ? overlayLine(plottedEvent.stop, '策略停損／失效', 'negative', confirmedStyle, 1, 'stop')
+      : null,
+    present(plottedEvent?.target) && !samePrice(plottedEvent.target)
+      ? overlayLine(plottedEvent.target, '策略目標', direction === 'bullish' ? 'positive' : 'negative', confirmedStyle, 1, 'target')
+      : null,
+  ].filter(Boolean) : [];
+  return makeResult(def, plottedEvent?.status || 'none', plottedEvent?.type || 'neutral', reason, {
+    signal: plottedEvent || null,
+    latestEvent: plottedEvent || null,
+    events: plottedEvent ? [plottedEvent] : [],
+    overlay: {
+      priceLines: [...priceLines, ...fallbackLines],
+      series: (overlay.series || []).filter(Boolean),
+      regions: (overlay.regions || []).filter(Boolean),
+    },
+  });
+}
+
+function directionRisk(rows, type, entry, structuralStop, targetDistance = 2) {
+  const atr = Math.max(atrAt(rows), Number(entry || 0) * 0.005);
+  const stop = type === 'bullish'
+    ? Math.min(Number(structuralStop || entry - atr), entry - atr * 0.15)
+    : Math.max(Number(structuralStop || entry + atr), entry + atr * 0.15);
+  const risk = type === 'bullish' ? entry - stop : stop - entry;
+  const target = type === 'bullish' ? entry + risk * targetDistance : entry - risk * targetDistance;
+  return { stop, target, atr, risk };
+}
+
+function nearestStructure(rows, reference) {
+  const lows = pivotIndexes(rows.map(row => row.low), 'low', 3).map(index => ({ index, price: rows[index].low })).filter(item => item.price < reference);
+  const highs = pivotIndexes(rows.map(row => row.high), 'high', 3).map(index => ({ index, price: rows[index].high })).filter(item => item.price > reference);
+  return { support: lows.at(-1) || null, resistance: highs.at(-1) || null };
+}
+
+function rangeLevels(rows, lookback = 40) {
+  if (rows.length < lookback + 5) return null;
+  const history = rows.slice(-lookback - 1, -1);
+  const high = Math.max(...history.map(row => row.high));
+  const low = Math.min(...history.map(row => row.low));
+  if (!(high > low)) return null;
+  return { high, low, midpoint: (high + low) / 2, height: high - low, startTime: history[0].time, endTime: history.at(-1).time };
+}
+
+function cloneExisting(def, source, overlay = null) {
+  if (!source) return makeResult(def, 'unavailable', 'neutral', '需要先取得對應的結構或量價資料。');
+  return {
+    ...source,
+    key: def.key,
+    label: def.label,
+    category: def.category,
+    computed: true,
+    sourceStrategy: source.key,
+    overlay: overlay || source.overlay || { priceLines: [], series: [], regions: [] },
+  };
+}
+
+const DOUBLE_PATTERN_MIN_SEPARATION = 5;
+const DOUBLE_PATTERN_MAX_SEPARATION = 70;
+const DOUBLE_PATTERN_PIVOT_STRENGTH = 2;
+const DOUBLE_PATTERN_MAX_LEVEL_DEVIATION = 0.05;
+const DOUBLE_PATTERN_MIN_LEVEL_DEVIATION = 0.025;
+const DOUBLE_PATTERN_MIN_DEPTH = 0.03;
+const HEAD_SHOULDERS_MIN_SEPARATION = 12;
+const HEAD_SHOULDERS_MIN_LEG_SEPARATION = 4;
+const HEAD_SHOULDERS_PIVOT_STRENGTH = 2;
+const HEAD_SHOULDERS_MAX_SHOULDER_DEVIATION = 0.08;
+const HEAD_SHOULDERS_MIN_SHOULDER_DEVIATION = 0.03;
+const HEAD_SHOULDERS_MAX_NECKLINE_DEVIATION = 0.05;
+const HEAD_SHOULDERS_MIN_NECKLINE_DEVIATION = 0.02;
+const HEAD_SHOULDERS_MIN_HEAD_DEPTH = 0.03;
+
+// 型態可以用較長歷史辨識，但「目前訊號」不能永久有效。
+// watch 僅保留近期等待確認的結構；confirmed 則提供一段合理的突破追蹤期。
+export const PATTERN_WATCH_MAX_AGE_BARS = 8;
+export const PATTERN_CONFIRMED_MAX_AGE_BARS = 12;
+
+const emptyStrategyOverlay = () => ({ priceLines: [], series: [], regions: [] });
+
+const findEventRowIndex = (rows, event) => {
+  if (!event?.time) return -1;
+  const eventTime = String(event.time);
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    if (String(rows[index]?.time) === eventTime) return index;
+  }
+  return -1;
+};
+
+const expirePatternResult = (def, result, reason, lifecycle = {}) => makeResult(def, 'none', 'neutral', reason, {
+  signal: null,
+  latestEvent: null,
+  events: [],
+  overlay: emptyStrategyOverlay(),
+  patternExpired: true,
+  lifecycle,
+});
+
+/**
+ * Apply one freshness/invalidation policy to every item in the pattern library.
+ * Long structures may still be detected, but only recent watch/confirmation
+ * events are allowed to remain actionable or visible on the latest chart.
+ */
+export function applyPatternLifecycle(def, result, rows) {
+  if (def?.category !== '形態策略' || !['watch', 'confirmed'].includes(result?.status)) return result;
+  const event = result.latestEvent || result.signal;
+  const eventIndex = findEventRowIndex(rows, event);
+  if (eventIndex < 0) {
+    return expirePatternResult(def, result, `${def.label}缺少可對應的形成／確認日期，已取消目前訊號。`, {
+      state: 'missing-date',
+    });
+  }
+
+  const latestIndex = rows.length - 1;
+  const barsSinceSignal = latestIndex - eventIndex;
+  const maxAgeBars = result.status === 'confirmed'
+    ? PATTERN_CONFIRMED_MAX_AGE_BARS
+    : PATTERN_WATCH_MAX_AGE_BARS;
+  const direction = event?.type || result.direction;
+  const hasStop = present(event?.stop);
+  const hasTarget = present(event?.target);
+  const stop = hasStop ? Number(event.stop) : null;
+  const target = hasTarget ? Number(event.target) : null;
+  const subsequentRows = rows.slice(eventIndex + 1);
+  const invalidationOffset = hasStop
+    ? subsequentRows.findIndex(row => direction === 'bullish'
+      ? Number(row.close) <= stop
+      : direction === 'bearish' && Number(row.close) >= stop)
+    : -1;
+  if (invalidationOffset >= 0) {
+    const invalidationIndex = eventIndex + 1 + invalidationOffset;
+    return expirePatternResult(def, result, `${def.label}已於 ${rows[invalidationIndex]?.time} 收盤穿越結構失效價，舊型態不再顯示。`, {
+      state: 'invalidated',
+      eventTime: event.time,
+      invalidationTime: rows[invalidationIndex]?.time,
+      barsSinceSignal,
+      maxAgeBars,
+    });
+  }
+
+  const targetOffset = result.status === 'confirmed' && hasTarget
+    ? subsequentRows.findIndex(row => direction === 'bullish'
+      ? Number(row.high) >= target
+      : direction === 'bearish' && Number(row.low) <= target)
+    : -1;
+  if (targetOffset >= 0 && eventIndex + 1 + targetOffset < latestIndex) {
+    const targetIndex = eventIndex + 1 + targetOffset;
+    return expirePatternResult(def, result, `${def.label}已於 ${rows[targetIndex]?.time} 達到測幅目標，已結束舊型態追蹤。`, {
+      state: 'completed',
+      eventTime: event.time,
+      completionTime: rows[targetIndex]?.time,
+      barsSinceSignal,
+      maxAgeBars,
+    });
+  }
+
+  if (barsSinceSignal > maxAgeBars) {
+    const statusLabel = result.status === 'confirmed' ? '確認' : '觀察';
+    return expirePatternResult(def, result, `${def.label}${statusLabel}訊號距今 ${barsSinceSignal} 根 K 線，超過 ${maxAgeBars} 根有效期限，已停止顯示。`, {
+      state: 'expired',
+      eventTime: event.time,
+      barsSinceSignal,
+      maxAgeBars,
+    });
+  }
+
+  const lifecycle = {
+    state: 'active',
+    eventTime: event.time,
+    barsSinceSignal,
+    maxAgeBars,
+    remainingBars: Math.max(0, maxAgeBars - barsSinceSignal),
+  };
+  const withLifecycle = currentEvent => currentEvent ? { ...currentEvent, lifecycle } : currentEvent;
+  return {
+    ...result,
+    signal: withLifecycle(result.signal),
+    latestEvent: withLifecycle(result.latestEvent),
+    events: Array.isArray(result.events) ? result.events.map(withLifecycle) : [],
+    lifecycle,
+    reason: `${result.reason} 訊號距今 ${barsSinceSignal} 根 K 線，尚在 ${maxAgeBars} 根有效期限內。`,
+  };
+}
+
+function doublePatternNeckline(rows, type, leftIndex, rightIndex) {
+  const field = type === 'bullish' ? 'high' : 'low';
+  const pivots = new Set(pivotIndexes(
+    rows.map(row => Number(row[field])),
+    field === 'high' ? 'high' : 'low',
+    DOUBLE_PATTERN_PIVOT_STRENGTH,
+  ));
+  let extremeIndex = leftIndex + 1;
+  for (let index = leftIndex + 2; index < rightIndex; index += 1) {
+    const candidate = Number(rows[index][field]);
+    const current = Number(rows[extremeIndex][field]);
+    if ((type === 'bullish' && candidate > current) || (type === 'bearish' && candidate < current)) extremeIndex = index;
+  }
+  if (!pivots.has(extremeIndex)) return null;
+  return { index: extremeIndex, price: Number(rows[extremeIndex][field]) };
+}
+
+function headShouldersReaction(rows, type, startIndex, endIndex) {
+  const field = type === 'bullish' ? 'high' : 'low';
+  const pivots = new Set(pivotIndexes(
+    rows.map(row => Number(row[field])),
+    field === 'high' ? 'high' : 'low',
+    HEAD_SHOULDERS_PIVOT_STRENGTH,
+  ));
+  if (endIndex - startIndex <= HEAD_SHOULDERS_MIN_LEG_SEPARATION) return null;
+
+  let extremeIndex = startIndex + 1;
+  for (let index = startIndex + 2; index < endIndex; index += 1) {
+    const candidate = Number(rows[index][field]);
+    const current = Number(rows[extremeIndex][field]);
+    if ((type === 'bullish' && candidate > current) || (type === 'bearish' && candidate < current)) extremeIndex = index;
+  }
+  if (!pivots.has(extremeIndex)) return null;
+  return { index: extremeIndex, price: Number(rows[extremeIndex][field]) };
+}
+
+function evaluateDoublePattern(def, rows) {
+  const lows = pivotIndexes(rows.map(row => row.low), 'low', 3).filter(index => index >= Math.max(0, rows.length - 150));
+  const highs = pivotIndexes(rows.map(row => row.high), 'high', 3).filter(index => index >= Math.max(0, rows.length - 150));
+  const find = (type, indexes) => {
+    for (let cursor = indexes.length - 1; cursor > 0; cursor -= 1) {
+      const leftIndex = indexes[cursor - 1];
+      const rightIndex = indexes[cursor];
+      if (rightIndex - leftIndex < DOUBLE_PATTERN_MIN_SEPARATION || rightIndex - leftIndex > DOUBLE_PATTERN_MAX_SEPARATION) continue;
+      const left = rows[leftIndex];
+      const right = rows[rightIndex];
+      const leftPrice = type === 'bullish' ? left.low : left.high;
+      const rightPrice = type === 'bullish' ? right.low : right.high;
+      const necklinePoint = doublePatternNeckline(rows, type, leftIndex, rightIndex);
+      if (!necklinePoint) continue;
+      const neckline = necklinePoint.price;
+      const current = rows.at(-1);
+      if (!current || !present(current.close)) continue;
+      const patternAtr = average([
+        atrAt(rows, leftIndex),
+        atrAt(rows, necklinePoint.index),
+        atrAt(rows, rightIndex),
+      ]);
+      const level = (Number(leftPrice) + Number(rightPrice)) / 2;
+      const levelDifference = Math.abs(Number(rightPrice) - Number(leftPrice));
+      const levelTolerance = Math.min(
+        level * DOUBLE_PATTERN_MAX_LEVEL_DEVIATION,
+        Math.max(level * DOUBLE_PATTERN_MIN_LEVEL_DEVIATION, patternAtr * 1.25),
+      );
+      if (levelDifference > levelTolerance) continue;
+
+      const shallowerLevel = type === 'bullish'
+        ? Math.max(Number(leftPrice), Number(rightPrice))
+        : Math.min(Number(leftPrice), Number(rightPrice));
+      const depth = type === 'bullish' ? neckline - shallowerLevel : shallowerLevel - neckline;
+      const minimumDepth = Math.max(level * DOUBLE_PATTERN_MIN_DEPTH, patternAtr);
+      if (!(depth >= minimumDepth)) continue;
+
+      const atr = Math.max(atrAt(rows), Number(current.close) * 0.005);
+      const target = type === 'bullish' ? neckline + (neckline - Math.min(leftPrice, rightPrice)) : neckline - (Math.max(leftPrice, rightPrice) - neckline);
+      const stop = type === 'bullish' ? Math.min(leftPrice, rightPrice) - atr * 0.15 : Math.max(leftPrice, rightPrice) + atr * 0.15;
+      const confirmationIndex = firstLevelCrossIndex(rows, rightIndex, neckline, type, neckline * 0.001);
+      const confirmed = confirmationIndex != null;
+      const nearNeckline = type === 'bullish' ? current.close >= neckline * 0.97 : current.close <= neckline * 1.03;
+      const status = confirmed ? 'confirmed' : nearNeckline || Math.abs(current.close - rightPrice) <= atr * 1.5 ? 'watch' : 'none';
+      const patternName = type === 'bullish' ? 'W底' : 'M頭';
+      const confirmationText = type === 'bullish' ? '頸線突破確認' : '頸線跌破確認';
+      const observationText = type === 'bullish' ? 'W底成形觀察，等待突破頸線' : 'M頭成形觀察，等待跌破頸線';
+      const event = makeEvent(rows, confirmationIndex ?? rightIndex, type, status, confirmed ? confirmationText : observationText, { entryLower: neckline, entryUpper: neckline, stop, target }, {
+        leftTime: left.time,
+        rightTime: right.time,
+        neckline,
+        patternHeight: Math.abs(target - neckline),
+        levelDifferenceRatio: level ? levelDifference / level : 0,
+        depthRatio: level ? depth / level : 0,
+      });
+      const confirmationPoint = confirmationIndex == null ? [] : [{ time: rows[confirmationIndex].time, value: rows[confirmationIndex].close }];
+      const shapePoints = type === 'bullish'
+        ? [
+          { time: left.time, value: left.low },
+          { time: rows[necklinePoint.index]?.time, value: neckline },
+          { time: right.time, value: right.low },
+          ...confirmationPoint,
+        ]
+        : [
+          { time: left.time, value: left.high },
+          { time: rows[necklinePoint.index]?.time, value: neckline },
+          { time: right.time, value: right.high },
+          ...confirmationPoint,
+        ];
+      const patternLineStyle = confirmed ? 0 : 2;
+      const regionPadding = Math.max(patternAtr * 0.35, level * 0.005);
+      const regionLow = Math.min(Number(leftPrice), Number(rightPrice)) - regionPadding;
+      const regionHigh = Math.max(Number(leftPrice), Number(rightPrice)) + regionPadding;
+      const structureRegion = type === 'bullish'
+        ? overlayRegion(`${patternName}結構區`, [
+          { time: left.time, value: neckline },
+          { time: right.time, value: neckline },
+          { time: right.time, value: regionLow },
+          { time: left.time, value: regionLow },
+        ], 'positive', 0.06, patternLineStyle, 1, `${patternName}結構區`)
+        : overlayRegion(`${patternName}結構區`, [
+          { time: left.time, value: regionHigh },
+          { time: right.time, value: regionHigh },
+          { time: right.time, value: neckline },
+          { time: left.time, value: neckline },
+        ], 'negative', 0.06, patternLineStyle, 1, `${patternName}結構區`);
+      return resultFromEvent(def, event, {
+        priceLines: [
+          overlayLine(neckline, '頸線（關鍵分水嶺）', 'accent', patternLineStyle, 3, 'neckline'),
+          overlayLine(target, confirmed ? '1:1 測幅目標區' : '候選測幅目標（待確認）', type === 'bullish' ? 'positive' : 'negative', patternLineStyle, 3, 'target'),
+          overlayLine(stop, type === 'bullish' ? '結構低點防守線' : '結構高點防守線', type === 'bullish' ? 'negative' : 'positive', patternLineStyle, 3, 'stop'),
+        ],
+        series: [overlaySeries(`${patternName}結構`, shapePoints, 'structure', patternLineStyle, 3)],
+        regions: [structureRegion],
+      }, confirmed
+        ? `${patternName}${type === 'bullish' ? '突破' : '跌破'}頸線，${type === 'bullish' ? '多方' : '空方'}測幅目標已計算。`
+        : `${patternName}已找到左右轉折，等待${type === 'bullish' ? '突破' : '跌破'}頸線確認。`);
+    }
+    return null;
+  };
+  const bullish = find('bullish', lows);
+  const bearish = find('bearish', highs);
+  if (!bullish && !bearish) return makeResult(def, 'none', 'neutral', '最近資料尚未形成可辨識的雙底／雙頂結構。');
+  if (bullish?.status === 'confirmed' || (!bearish && bullish?.status === 'watch')) return bullish;
+  if (bearish?.status === 'confirmed' || !bullish) return bearish;
+  return bullish;
+}
+
+function evaluateHeadShoulders(def, rows) {
+  const find = (type, indexes) => {
+    for (let cursor = indexes.length - 1; cursor >= 2; cursor -= 1) {
+      const leftIndex = indexes[cursor - 2];
+      const headIndex = indexes[cursor - 1];
+      const rightIndex = indexes[cursor];
+      if (rightIndex - leftIndex < HEAD_SHOULDERS_MIN_SEPARATION || rightIndex - leftIndex > 120) continue;
+      if (headIndex - leftIndex < HEAD_SHOULDERS_MIN_LEG_SEPARATION || rightIndex - headIndex < HEAD_SHOULDERS_MIN_LEG_SEPARATION) continue;
+      const left = rows[leftIndex];
+      const head = rows[headIndex];
+      const right = rows[rightIndex];
+      const leftPrice = type === 'bearish' ? left.high : left.low;
+      const headPrice = type === 'bearish' ? head.high : head.low;
+      const rightPrice = type === 'bearish' ? right.high : right.low;
+      const current = rows.at(-1);
+      if (!current || !present(current.close)) continue;
+      const patternAtr = average([
+        atrAt(rows, leftIndex),
+        atrAt(rows, headIndex),
+        atrAt(rows, rightIndex),
+      ]);
+      const shoulderLevel = (Number(leftPrice) + Number(rightPrice)) / 2;
+      const shoulderDifference = Math.abs(Number(leftPrice) - Number(rightPrice));
+      const shoulderTolerance = Math.min(
+        shoulderLevel * HEAD_SHOULDERS_MAX_SHOULDER_DEVIATION,
+        Math.max(shoulderLevel * HEAD_SHOULDERS_MIN_SHOULDER_DEVIATION, patternAtr * 1.5),
+      );
+      const shouldersClose = shoulderDifference <= shoulderTolerance;
+      const headExtreme = type === 'bearish' ? headPrice > leftPrice && headPrice > rightPrice : headPrice < leftPrice && headPrice < rightPrice;
+      if (!shouldersClose || !headExtreme) continue;
+
+      const firstNeckline = headShouldersReaction(rows, type, leftIndex, headIndex);
+      const secondNeckline = headShouldersReaction(rows, type, headIndex, rightIndex);
+      if (!firstNeckline || !secondNeckline) continue;
+      const neckline = (firstNeckline.price + secondNeckline.price) / 2;
+      const necklineLevel = neckline;
+      const necklineDifference = Math.abs(firstNeckline.price - secondNeckline.price);
+      const necklineAtr = average([atrAt(rows, firstNeckline.index), atrAt(rows, secondNeckline.index)]);
+      const necklineTolerance = Math.min(
+        necklineLevel * HEAD_SHOULDERS_MAX_NECKLINE_DEVIATION,
+        Math.max(necklineLevel * HEAD_SHOULDERS_MIN_NECKLINE_DEVIATION, necklineAtr * 1.25),
+      );
+      if (necklineDifference > necklineTolerance) continue;
+
+      const headDepth = type === 'bullish'
+        ? Math.max(leftPrice, rightPrice) - headPrice
+        : headPrice - Math.min(leftPrice, rightPrice);
+      const minimumHeadDepth = Math.max(shoulderLevel * HEAD_SHOULDERS_MIN_HEAD_DEPTH, patternAtr * 0.75);
+      if (headDepth < minimumHeadDepth) continue;
+
+      const atr = Math.max(atrAt(rows), Number(current.close) * 0.005);
+      const confirmationBuffer = Math.max(neckline * 0.001, atr * 0.1);
+      const confirmationIndex = firstLevelCrossIndex(rows, rightIndex, neckline, type, confirmationBuffer);
+      const confirmed = confirmationIndex != null;
+      const near = type === 'bearish' ? current.close <= neckline * 1.03 : current.close >= neckline * 0.97;
+      const status = confirmed ? 'confirmed' : near ? 'watch' : 'none';
+      const target = type === 'bearish' ? neckline - Math.abs(headPrice - neckline) : neckline + Math.abs(neckline - headPrice);
+      const stop = type === 'bearish' ? rightPrice + atr * 0.15 : rightPrice - atr * 0.15;
+      const targetReached = type === 'bullish' ? current.close >= target : current.close <= target;
+      const confirmationText = type === 'bullish' ? '頸線突破確認' : '頸線跌破確認';
+      const observationText = type === 'bullish' ? '頭肩底成形觀察，等待突破頸線' : '頭肩頂成形觀察，等待跌破頸線';
+      const eventText = confirmed && targetReached ? `${confirmationText}，1:1目標已達` : confirmed ? confirmationText : observationText;
+      const event = makeEvent(rows, confirmationIndex ?? rightIndex, type, status, eventText, { entryLower: neckline, entryUpper: neckline, stop, target }, {
+        neckline,
+        leftTime: left.time,
+        headTime: head.time,
+        rightTime: right.time,
+        firstNecklineTime: rows[firstNeckline.index]?.time,
+        secondNecklineTime: rows[secondNeckline.index]?.time,
+        targetReached,
+        shoulderDifferenceRatio: shoulderLevel ? shoulderDifference / shoulderLevel : 0,
+        necklineDifferenceRatio: necklineLevel ? necklineDifference / necklineLevel : 0,
+        headDepthRatio: shoulderLevel ? headDepth / shoulderLevel : 0,
+      });
+      const confirmationPoint = confirmationIndex == null ? [] : [{ time: rows[confirmationIndex].time, value: rows[confirmationIndex].close }];
+      const points = type === 'bearish'
+        ? [
+          { time: left.time, value: left.high },
+          { time: rows[firstNeckline.index]?.time, value: firstNeckline.price },
+          { time: head.time, value: head.high },
+          { time: rows[secondNeckline.index]?.time, value: secondNeckline.price },
+          { time: right.time, value: right.high },
+          ...confirmationPoint,
+        ]
+        : [
+          { time: left.time, value: left.low },
+          { time: rows[firstNeckline.index]?.time, value: firstNeckline.price },
+          { time: head.time, value: head.low },
+          { time: rows[secondNeckline.index]?.time, value: secondNeckline.price },
+          { time: right.time, value: right.low },
+          ...confirmationPoint,
+        ];
+      const patternLineStyle = confirmed ? 0 : 2;
+      const structureHigh = type === 'bullish'
+        ? neckline + patternAtr * 0.25
+        : Number(headPrice) + patternAtr * 0.25;
+      const structureLow = type === 'bullish'
+        ? Number(headPrice) - patternAtr * 0.25
+        : neckline - patternAtr * 0.25;
+      const structureRegion = overlayRegion(
+        type === 'bearish' ? '頭肩頂結構區' : '頭肩底結構區',
+        [
+          { time: left.time, value: structureHigh },
+          { time: right.time, value: structureHigh },
+          { time: right.time, value: structureLow },
+          { time: left.time, value: structureLow },
+        ],
+        type === 'bearish' ? 'negative' : 'positive',
+        0.06,
+        patternLineStyle,
+        1,
+        type === 'bearish' ? '頭肩頂結構區' : '頭肩底結構區',
+      );
+      return resultFromEvent(def, event, {
+        priceLines: [
+          overlayLine(neckline, '頸線（關鍵分水嶺）', 'accent', patternLineStyle, 3, 'neckline'),
+          overlayLine(target, targetReached ? '1:1 測幅目標（已達）' : confirmed ? '1:1 測幅目標區' : '候選測幅目標（待確認）', type === 'bullish' ? 'positive' : 'negative', patternLineStyle, 3, 'target'),
+          overlayLine(stop, '右肩結構防守線', type === 'bullish' ? 'negative' : 'positive', patternLineStyle, 3, 'stop'),
+        ],
+        series: [overlaySeries(type === 'bearish' ? '頭肩頂結構' : '頭肩底結構', points, 'structure', patternLineStyle, 3)],
+        regions: [structureRegion],
+      }, confirmed
+        ? `${type === 'bearish' ? '頭肩頂已跌破頸線' : '頭肩底已突破頸線'}${targetReached ? '，1:1 測幅目標已達成。' : '。'}`
+        : `${type === 'bearish' ? '頭肩頂' : '頭肩底'}已找到肩部、頭部與頸線，等待${type === 'bullish' ? '突破' : '跌破'}確認。`);
+    }
+    return null;
+  };
+  const bearish = find('bearish', pivotIndexes(rows.map(row => row.high), 'high', 3));
+  const bullish = find('bullish', pivotIndexes(rows.map(row => row.low), 'low', 3));
+  if (!bullish && !bearish) return makeResult(def, 'none', 'neutral', '最近資料尚未形成左右肩與頭部結構。');
+  if (bullish?.status === 'confirmed' || (!bearish && bullish?.status === 'watch')) return bullish;
+  return bearish;
+}
+
+function evaluateRangePattern(def, rows) {
+  const range = rangeLevels(rows, 40);
+  if (!range) return makeResult(def, 'unavailable', 'neutral', '至少需要 45 根日 K 才能建立區間。');
+  const history = rows.slice(-41, -1);
+  const latest = rows.at(-1);
+  const previous = rows.at(-2);
+  const atr = Math.max(atrAt(rows), latest.close * 0.005);
+  const touchTolerance = Math.max(atr * 0.5, range.height * 0.06);
+  const upperTouchIndexes = history.map((row, index) => row.high >= range.high - touchTolerance ? index : -1).filter(index => index >= 0);
+  const lowerTouchIndexes = history.map((row, index) => row.low <= range.low + touchTolerance ? index : -1).filter(index => index >= 0);
+  const minimumTouchSpan = Math.max(8, Math.floor(history.length * 0.25));
+  const touchesBothSides = indexes => indexes.length >= 2
+    && indexes.at(-1) - indexes[0] >= minimumTouchSpan
+    && indexes.some(index => index >= history.length - 16);
+  const xMean = (history.length - 1) / 2;
+  const closeMean = average(history.map(row => row.close));
+  const slopeNumerator = history.reduce((sum, row, index) => sum + (index - xMean) * (Number(row.close) - closeMean), 0);
+  const slopeDenominator = history.reduce((sum, _, index) => sum + (index - xMean) ** 2, 0);
+  const closeSlope = slopeDenominator ? slopeNumerator / slopeDenominator : 0;
+  const driftRatio = Math.abs(closeSlope) * (history.length - 1) / range.height;
+  const rangeIsHorizontal = driftRatio <= 0.35;
+  if (!touchesBothSides(upperTouchIndexes) || !touchesBothSides(lowerTouchIndexes) || !rangeIsHorizontal) {
+    return makeResult(def, 'none', 'neutral', '最近 40 根雖有高低價格區間，但缺少上下緣反覆測試或水平整理，暫不視為矩形區間。');
+  }
+  const ratio = volumeRatioAt(rows, rows.length - 1);
+  const breakoutMargin = 0.005;
+  const bullishPriceBreakout = latest.close > range.high * (1 + breakoutMargin);
+  const bearishPriceBreakout = latest.close < range.low * (1 - breakoutMargin);
+  const bullish = bullishPriceBreakout && latest.close > latest.open && ratio > 1;
+  const bearish = bearishPriceBreakout && latest.close < latest.open && ratio > 1;
+  const breakoutAttempt = bullishPriceBreakout || bearishPriceBreakout;
+  const nearUpper = latest.close >= range.high * 0.98;
+  const nearLower = latest.close <= range.low * 1.02;
+  const type = bullish ? 'bullish' : bearish ? 'bearish' : bullishPriceBreakout ? 'bullish' : bearishPriceBreakout ? 'bearish' : nearUpper ? 'bullish' : nearLower ? 'bearish' : 'neutral';
+  const status = bullish || bearish ? 'confirmed' : breakoutAttempt || type !== 'neutral' ? 'watch' : 'none';
+  // 觀察邊界時仍要用邊界當作條件進場價；不能把 null 傳進
+  // directionRisk，否則尚未突破的 watch 狀態會算出接近 0 的停損／目標。
+  const entry = bullish ? range.high : bearish ? range.low : type === 'bullish' ? range.high : type === 'bearish' ? range.low : null;
+  const risk = type === 'neutral'
+    ? { stop: null, target: null }
+    : directionRisk(rows, type, entry, type === 'bearish' ? range.high + atrAt(rows) * 0.2 : range.low - atrAt(rows) * 0.2);
+  const target = type === 'bearish' ? range.low - range.height : type === 'bullish' ? range.high + range.height : null;
+  const eventText = bullish || bearish
+    ? `區間${ratio >= 1.2 ? '放量' : ''}突破`
+    : breakoutAttempt
+      ? '價格已越過區間，等待 K 棒與量能確認'
+      : '區間邊界觀察';
+  const event = makeEvent(rows, rows.length - 1, type, status, eventText, { entryLower: entry, entryUpper: entry, stop: risk.stop, target }, { upper: range.high, lower: range.low, volumeRatio: ratio, breakoutMargin, rangeDriftRatio: driftRatio, upperTouchCount: upperTouchIndexes.length, lowerTouchCount: lowerTouchIndexes.length, retest: Boolean(previous && ((previous.low <= range.high && latest.close > range.high) || (previous.high >= range.low && latest.close < range.low))) });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(range.high, '區間上緣', 'negative', 2, 2), overlayLine(range.low, '區間下緣', 'positive', 2, 2), overlayLine(range.midpoint, '區間中軸', 'warning', 3, 1), overlayLine(target, '區間測幅', type === 'bearish' ? 'negative' : 'positive', 2, 1)],
+    regions: [overlayRegion('矩形區間', [
+      { time: range.startTime, value: range.high },
+      { time: range.endTime, value: range.high },
+      { time: range.endTime, value: range.low },
+      { time: range.startTime, value: range.low },
+    ], 'structure', 0.05, 2, 1, '矩形區間')],
+  }, `${bullish || bearish ? '區間突破已確認' : breakoutAttempt ? '價格已越界但尚未通過 K 棒與量能確認' : '價格仍在有效矩形區間內'}；上緣 ${range.high.toFixed(2)}、下緣 ${range.low.toFixed(2)}，近 40 根上下緣各至少反覆測試且漂移率 ${(driftRatio * 100).toFixed(1)}%。`);
+}
+
+function evaluateContraction(def, rows) {
+  const lookback = 30;
+  if (rows.length < lookback + 10) return makeResult(def, 'unavailable', 'neutral', '歷史 K 線不足，無法估算收斂通道。');
+  const history = rows.slice(-lookback - 1, -1);
+  const highs = history.map(row => row.high);
+  const lows = history.map(row => row.low);
+  const latest = rows.at(-1);
+  const atr = Math.max(atrAt(rows), latest.close * 0.005);
+  const triangle = def.key === 'pattern-triangle-flag';
+  const wedge = def.key === 'pattern-wedge';
+  const flagImpulse = Math.abs(rows.at(-lookback - 1).close - rows.at(-lookback - 12).close) / Math.max(1, rows.at(-lookback - 12).close) > 0.08;
+  const pivotStrength = 2;
+  const minimumPivotSeparation = 4;
+  const minimumShapeBars = triangle || wedge ? 12 : 10;
+  const pivotPairs = (values, kind) => {
+    const indexes = pivotIndexes(values, kind, pivotStrength);
+    const pairs = [];
+    for (let first = 0; first < indexes.length - 1; first += 1) {
+      for (let second = first + 1; second < indexes.length; second += 1) {
+        const firstIndex = indexes[first];
+        const secondIndex = indexes[second];
+        if (secondIndex - firstIndex < minimumPivotSeparation) continue;
+        const firstValue = Number(values[firstIndex]);
+        const secondValue = Number(values[secondIndex]);
+        if (![firstValue, secondValue].every(Number.isFinite)) continue;
+        pairs.push({ firstIndex, secondIndex, firstValue, secondValue, slope: (secondValue - firstValue) / (secondIndex - firstIndex) });
+      }
+    }
+    return pairs;
+  };
+  const upperPairs = pivotPairs(highs, 'high');
+  const lowerPairs = pivotPairs(lows, 'low');
+  const lineValueAt = (line, index) => line.firstValue + line.slope * (index - line.firstIndex);
+  const choosePivotShape = predicate => {
+    let best = null;
+    upperPairs.forEach(upper => lowerPairs.forEach(lower => {
+      if (!predicate(upper, lower)) return;
+      const commonStartIndex = Math.max(upper.firstIndex, lower.firstIndex);
+      const shapeBars = lookback - commonStartIndex;
+      if (shapeBars < minimumShapeBars) return;
+      const startUpper = lineValueAt(upper, commonStartIndex);
+      const startLower = lineValueAt(lower, commonStartIndex);
+      const projectedUpper = lineValueAt(upper, lookback);
+      const projectedLower = lineValueAt(lower, lookback);
+      const startWidth = startUpper - startLower;
+      const endWidth = projectedUpper - projectedLower;
+      if (!(startWidth > 0 && endWidth > 0 && endWidth < startWidth * 0.82)) return;
+      const tolerance = Math.max(atr * 0.25, latest.close * 0.0025);
+      const shapeRows = history.slice(commonStartIndex);
+      const upperContainedRatio = shapeRows.filter((row, offset) => row.high <= lineValueAt(upper, commonStartIndex + offset) + tolerance).length / shapeRows.length;
+      const lowerContainedRatio = shapeRows.filter((row, offset) => row.low >= lineValueAt(lower, commonStartIndex + offset) - tolerance).length / shapeRows.length;
+      if (upperContainedRatio < 0.7 || lowerContainedRatio < 0.7) return;
+      const recency = Math.max(upper.secondIndex, lower.secondIndex);
+      const score = endWidth / startWidth + (lookback - recency) * 0.003 - Math.min(shapeBars, 24) * 0.002;
+      if (!best || score < best.score) best = { upper, lower, commonStartIndex, startUpper, startLower, projectedUpper, projectedLower, startWidth, endWidth, shapeBars, upperContainedRatio, lowerContainedRatio, score };
+    }));
+    return best;
+  };
+  const triangleShape = choosePivotShape((upper, lower) => upper.slope < 0 && lower.slope > 0 && upper.secondValue < upper.firstValue && lower.secondValue > lower.firstValue);
+  const wedgeShape = choosePivotShape((upper, lower) => Math.sign(upper.slope) === Math.sign(lower.slope) && Math.abs(upper.slope - lower.slope) > 0);
+  const flagShape = flagImpulse
+    ? choosePivotShape((upper, lower) => Math.abs(upper.slope) < atr * 0.12 && Math.abs(lower.slope) < atr * 0.12)
+    : null;
+  const selectedShape = triangle ? triangleShape || flagShape : wedge ? wedgeShape : flagShape;
+  if (!selectedShape) return makeResult(def, 'none', 'neutral', '目前尚未找到至少兩個波段高點與兩個波段低點，無法建立收斂邊界。');
+  const { upper, lower, commonStartIndex, startUpper, startLower, projectedUpper, projectedLower, startWidth, endWidth } = selectedShape;
+  const shapeIsTriangle = Boolean(triangleShape);
+  const shapeIsFlag = Boolean(flagShape && !triangleShape);
+  const shapeIsWedge = Boolean(wedgeShape && wedge);
+  const shapeLabel = shapeIsTriangle ? '三角收斂區' : shapeIsWedge ? '楔型區' : '旗型區';
+  const breakoutMargin = 0.005;
+  const priorVolumes = rows.slice(-21, -1).map(row => Number(row.volume)).filter(Number.isFinite);
+  const averageVolume20 = priorVolumes.length ? average(priorVolumes) : 0;
+  const volumeConfirmed = averageVolume20 > 0 && Number(latest.volume) > averageVolume20;
+  const bullishPriceBreakout = latest.close > projectedUpper * (1 + breakoutMargin);
+  const bearishPriceBreakout = latest.close < projectedLower * (1 - breakoutMargin);
+  const bullish = bullishPriceBreakout && latest.close > latest.open && volumeConfirmed;
+  const bearish = bearishPriceBreakout && latest.close < latest.open && volumeConfirmed;
+  const breakoutAttempt = bullishPriceBreakout || bearishPriceBreakout;
+  const near = breakoutAttempt || latest.close >= projectedUpper - atr || latest.close <= projectedLower + atr;
+  const type = bullish ? 'bullish' : bearish ? 'bearish' : latest.close >= (projectedUpper + projectedLower) / 2 ? 'bullish' : 'bearish';
+  const status = bullish || bearish ? 'confirmed' : near ? 'watch' : 'none';
+  const entry = bullish ? projectedUpper : bearish ? projectedLower : type === 'bullish' ? projectedUpper : projectedLower;
+  const risk = directionRisk(rows, type, entry, type === 'bullish' ? projectedLower : projectedUpper);
+  const measuredHeight = shapeIsTriangle || shapeIsWedge || shapeIsFlag ? startWidth : Math.abs(rows.at(-lookback - 1).close - rows.at(-lookback - 12).close);
+  const target = type === 'bullish' ? entry + measuredHeight : entry - measuredHeight;
+  const lineStyle = status === 'confirmed' ? 0 : 2;
+  const sameLevel = (first, second) => Number.isFinite(Number(first)) && Number.isFinite(Number(second))
+    && Math.abs(Number(first) - Number(second)) <= Math.max(0.01, Math.abs(Number(second)) * 0.0005);
+  const lowerBoundaryIsStop = sameLevel(risk.stop, projectedLower);
+  const contractionPriceLines = [
+    overlayLine(projectedUpper, '收斂上緣', 'negative', lineStyle, 1),
+    overlayLine(projectedLower, lowerBoundaryIsStop ? '收斂下緣／失效' : '收斂下緣', 'positive', lineStyle, 1),
+    overlayLine(target, '測幅目標', type === 'bullish' ? 'positive' : 'negative', lineStyle, 1),
+    lowerBoundaryIsStop ? null : overlayLine(risk.stop, '收斂失效', 'negative', lineStyle, 1),
+  ].filter(Boolean);
+  const eventText = bullish || bearish
+    ? '收斂邊界突破'
+    : breakoutAttempt
+      ? '收斂邊界已越過，等待實體與量能確認'
+      : '收斂通道觀察';
+  const event = makeEvent(rows, rows.length - 1, type, status, eventText, { entryLower: entry, entryUpper: entry, stop: risk.stop, target }, { upper: projectedUpper, lower: projectedLower, breakoutMargin, averageVolume20, volumeConfirmed });
+  return resultFromEvent(def, event, {
+    priceLines: contractionPriceLines,
+    series: [overlaySeries('收斂上緣', [{ time: history[commonStartIndex].time, value: startUpper }, { time: latest.time, value: projectedUpper }], 'white', lineStyle, 4), overlaySeries('收斂下緣', [{ time: history[commonStartIndex].time, value: startLower }, { time: latest.time, value: projectedLower }], 'white', lineStyle, 4)],
+    regions: [overlayRegion(shapeLabel, [
+      { time: history[commonStartIndex].time, value: startUpper },
+      { time: latest.time, value: projectedUpper },
+      { time: latest.time, value: projectedLower },
+      { time: history[commonStartIndex].time, value: startLower },
+    ], 'accent', 0.12, lineStyle, 1, shapeLabel)],
+  }, `${bullish || bearish ? '收斂突破已確認' : breakoutAttempt ? '價格已越過邊界，但仍需實體與成交量確認' : '收斂通道仍在等待方向'}；${shapeLabel}以波段高低點連線，起始寬度 ${startWidth.toFixed(2)}、目前寬度 ${endWidth.toFixed(2)}；突破需超過 ${(breakoutMargin * 100).toFixed(1)}%，且成交量高於 20 日均量${averageVolume20 > 0 ? `（目前 ${Number(latest.volume || 0).toFixed(0)}／均量 ${averageVolume20.toFixed(0)}）` : ''}。`);
+}
+
+function evaluateCupHandle(def, rows) {
+  if (rows.length < 100) return makeResult(def, 'unavailable', 'neutral', '杯柄型至少需要 100 根 K 線建立波段杯體。');
+  const from = Math.max(0, rows.length - 180);
+  const highs = pivotIndexes(rows.map(row => row.high), 'high', 3).filter(index => index >= from && index <= rows.length - 5);
+  const lows = pivotIndexes(rows.map(row => row.low), 'low', 3).filter(index => index >= from);
+  let candidate = null;
+  for (let rightCursor = highs.length - 1; rightCursor > 0 && !candidate; rightCursor -= 1) {
+    const rightHighIndex = highs[rightCursor];
+    const handleBars = rows.length - 1 - rightHighIndex;
+    if (handleBars < 3 || handleBars > 30) continue;
+    for (let leftCursor = rightCursor - 1; leftCursor >= 0; leftCursor -= 1) {
+      const leftHighIndex = highs[leftCursor];
+      const cupBars = rightHighIndex - leftHighIndex;
+      if (cupBars < 30 || cupBars > 150) continue;
+      const cupLows = lows.filter(index => index > leftHighIndex && index < rightHighIndex);
+      if (!cupLows.length) continue;
+      const bottomIndex = cupLows.reduce((best, index) => rows[index].low < rows[best].low ? index : best, cupLows[0]);
+      const leftHigh = Number(rows[leftHighIndex].high);
+      const rightHigh = Number(rows[rightHighIndex].high);
+      const rim = (leftHigh + rightHigh) / 2;
+      const bottom = Number(rows[bottomIndex].low);
+      const depth = rim - bottom;
+      const bottomPosition = (bottomIndex - leftHighIndex) / cupBars;
+      if (Math.abs(leftHigh - rightHigh) / rim > 0.08 || depth / rim < 0.12 || depth / rim > 0.5 || bottomPosition < 0.25 || bottomPosition > 0.75) continue;
+      const handleRows = rows.slice(rightHighIndex + 1);
+      const handleLowOffset = handleRows.reduce((best, row, index) => row.low < handleRows[best].low ? index : best, 0);
+      const handleLowIndex = rightHighIndex + 1 + handleLowOffset;
+      const handleLow = Number(rows[handleLowIndex].low);
+      const handleDepth = rim - handleLow;
+      const handleVolume = average(handleRows.map(row => Number(row.volume || 0)));
+      const cupVolume = average(rows.slice(leftHighIndex, rightHighIndex + 1).map(row => Number(row.volume || 0)));
+      const handleValid = handleLow > bottom && handleDepth > 0 && handleDepth <= depth * 0.5 && handleDepth / rim <= 0.15;
+      const volumeContracted = !cupVolume || handleVolume <= cupVolume * 1.1;
+      if (!handleValid || !volumeContracted) continue;
+      candidate = { leftHighIndex, bottomIndex, rightHighIndex, handleLowIndex, leftHigh, bottom, rightHigh, rim, handleLow, depth, handleDepth, volumeContracted };
+      break;
+    }
+  }
+  if (!candidate) return makeResult(def, 'none', 'neutral', '目前尚未形成符合波段、杯深、杯口對稱與柄部深度限制的杯柄結構。');
+  const { leftHighIndex, bottomIndex, rightHighIndex, handleLowIndex, leftHigh, bottom, rightHigh, rim, handleLow } = candidate;
+  const latest = rows.at(-1);
+  const patternAtr = Math.max(atrAt(rows, bottomIndex), atrAt(rows));
+  const confirmationIndex = firstLevelCrossIndex(rows, handleLowIndex, rim, 'bullish', rim * 0.001);
+  const confirmed = confirmationIndex != null && volumeRatioAt(rows, confirmationIndex) >= 1.2;
+  const watch = latest.close >= rim * 0.97;
+  const status = confirmed ? 'confirmed' : watch ? 'watch' : 'none';
+  const risk = directionRisk(rows, 'bullish', rim, handleLow);
+  const target = rim + (rim - bottom);
+  const event = makeEvent(rows, confirmationIndex ?? handleLowIndex, 'bullish', status, confirmed ? '杯柄放量突破確認' : confirmationIndex != null ? '杯柄已突破但量能不足' : '杯柄頸線觀察', { entryLower: rim, entryUpper: rim, stop: risk.stop, target }, { rim, bottom, handleLow, handleDepth: candidate.handleDepth, breakoutVolumeRatio: confirmationIndex == null ? null : volumeRatioAt(rows, confirmationIndex) });
+  const patternLineStyle = confirmed ? 0 : 2;
+  const shapePoints = [
+    { time: rows[leftHighIndex].time, value: leftHigh },
+    { time: rows[bottomIndex].time, value: bottom },
+    { time: rows[rightHighIndex].time, value: rightHigh },
+    { time: rows[handleLowIndex].time, value: handleLow },
+    ...(confirmationIndex == null ? [] : [{ time: rows[confirmationIndex].time, value: rows[confirmationIndex].close }]),
+  ];
+  return resultFromEvent(def, event, {
+    priceLines: [
+      overlayLine(rim, '頸線（杯口）', 'accent', patternLineStyle, 3, 'neckline'),
+      overlayLine(target, '1:1 測幅目標區', 'positive', patternLineStyle, 3, 'target'),
+      overlayLine(risk.stop, '柄部結構防守線', 'negative', patternLineStyle, 3, 'stop'),
+      overlayLine(handleLow, '柄部支撐', 'positive', patternLineStyle, 1),
+    ],
+    series: [overlaySeries('杯柄結構', shapePoints, 'structure', patternLineStyle, 3)],
+    regions: [
+      overlayRegion('杯體', [
+        { time: rows[leftHighIndex].time, value: rim + patternAtr * 0.15 },
+        { time: rows[rightHighIndex].time, value: rim + patternAtr * 0.15 },
+        { time: rows[rightHighIndex].time, value: bottom },
+        { time: rows[leftHighIndex].time, value: bottom },
+      ], 'structure', 0.045, patternLineStyle, 1, '杯體'),
+      overlayRegion('柄部區間', [
+        { time: rows[handleLowIndex].time, value: rim },
+        { time: latest.time, value: rim },
+        { time: latest.time, value: handleLow },
+        { time: rows[handleLowIndex].time, value: handleLow },
+      ], 'warning', 0.05, patternLineStyle, 1, '柄部區間'),
+    ],
+  }, `${confirmed ? '杯柄型已放量突破' : confirmationIndex != null ? '杯柄型已突破但量能未達 1.2 倍' : '杯柄型已形成，等待放量突破'}；頸線 ${rim.toFixed(2)}、柄深占杯深 ${(candidate.handleDepth / candidate.depth * 100).toFixed(0)}%。`);
+}
+
+function directionalMovement(rows, index = rows.length - 1, period = 14) {
+  if (index < period) return { plus: 0, minus: 0, adx: Number(rows[index]?.adx14 || 0) };
+  let smoothedPlus = 0;
+  let smoothedMinus = 0;
+  let smoothedRange = 0;
+  for (let cursor = 1; cursor <= period; cursor += 1) {
+    const current = rows[cursor];
+    const previous = rows[cursor - 1];
+    const up = current.high - previous.high;
+    const down = previous.low - current.low;
+    smoothedPlus += up > down && up > 0 ? up : 0;
+    smoothedMinus += down > up && down > 0 ? down : 0;
+    smoothedRange += trueRange(rows, cursor);
+  }
+  for (let cursor = period + 1; cursor <= index; cursor += 1) {
+    const current = rows[cursor];
+    const previous = rows[cursor - 1];
+    const up = current.high - previous.high;
+    const down = previous.low - current.low;
+    const plus = up > down && up > 0 ? up : 0;
+    const minus = down > up && down > 0 ? down : 0;
+    smoothedPlus = smoothedPlus - smoothedPlus / period + plus;
+    smoothedMinus = smoothedMinus - smoothedMinus / period + minus;
+    smoothedRange = smoothedRange - smoothedRange / period + trueRange(rows, cursor);
+  }
+  if (!smoothedRange) return { plus: 0, minus: 0, adx: Number(rows[index]?.adx14 || 0) };
+  const plusDi = smoothedPlus / smoothedRange * 100;
+  const minusDi = smoothedMinus / smoothedRange * 100;
+  return { plus: plusDi, minus: minusDi, adx: Number(rows[index]?.adx14 || 0) };
+}
+
+function mfiAt(rows, index = rows.length - 1, period = 14) {
+  const start = Math.max(1, index - period + 1);
+  let positive = 0;
+  let negative = 0;
+  for (let cursor = start; cursor <= index; cursor += 1) {
+    const current = rows[cursor];
+    const previous = rows[cursor - 1];
+    const typical = (current.high + current.low + current.close) / 3;
+    const previousTypical = (previous.high + previous.low + previous.close) / 3;
+    const flow = typical * Number(current.volume || 0);
+    if (typical >= previousTypical) positive += flow;
+    else negative += flow;
+  }
+  if (!negative) return positive ? 100 : 50;
+  return 100 - (100 / (1 + positive / negative));
+}
+
+function candleStats(row) {
+  if (!row) return { body: 0, range: 0, upperWick: 0, lowerWick: 0, bullish: false, bearish: false };
+  const body = Math.abs(row.close - row.open);
+  return {
+    body,
+    range: row.high - row.low,
+    upperWick: row.high - Math.max(row.open, row.close),
+    lowerWick: Math.min(row.open, row.close) - row.low,
+    bullish: row.close > row.open,
+    bearish: row.close < row.open,
+  };
+}
+
+function latestStructureBreak(rows) {
+  const latest = rows.at(-1);
+  const previous = rows.at(-2);
+  const highs = pivotIndexes(rows.map(row => row.high), 'high', 3);
+  const lows = pivotIndexes(rows.map(row => row.low), 'low', 3);
+  const highIndex = highs.at(-1);
+  const lowIndex = lows.at(-1);
+  const high = highIndex == null ? null : rows[highIndex];
+  const low = lowIndex == null ? null : rows[lowIndex];
+  if (!latest || !previous || !high || !low) return null;
+  const priorHighIndex = highs.at(-2);
+  const priorLowIndex = lows.at(-2);
+  const priorHigh = priorHighIndex == null ? null : rows[priorHighIndex];
+  const priorLow = priorLowIndex == null ? null : rows[priorLowIndex];
+  const trend = priorHigh && priorLow
+    ? high.high > priorHigh.high && low.low > priorLow.low
+      ? 'bullish'
+      : high.high < priorHigh.high && low.low < priorLow.low
+        ? 'bearish'
+        : 'neutral'
+    : 'neutral';
+  const bullish = previous.close <= high.high * 1.001 && latest.close > high.high * 1.001;
+  const bearish = previous.close >= low.low * 0.999 && latest.close < low.low * 0.999;
+  return { bullish, bearish, high, low, highIndex, lowIndex, priorHigh, priorLow, priorHighIndex, priorLowIndex, trend };
+}
+
+function evaluateMovingAverage(def, rows) {
+  const latest = rows.at(-1);
+  const previous = rows.at(-2);
+  if (!latest || !present(latest.ema20) || !present(latest.ema50)) return makeResult(def, 'unavailable', 'neutral', 'EMA20／EMA50 資料不足。');
+  const cross = latestCross(rows, 'ema20', 'ema50');
+  const bullish = latest.ema20 > latest.ema50 && latest.close > latest.ema50;
+  const bearish = latest.ema20 < latest.ema50 && latest.close < latest.ema50;
+  const type = bullish ? 'bullish' : bearish ? 'bearish' : 'neutral';
+  const eventType = cross?.type || type;
+  const eventIndex = cross?.index ?? rows.length - 1;
+  const crossRow = cross ? rows[cross.index] : null;
+  const status = cross?.index === rows.length - 1 ? 'confirmed' : type !== 'neutral' ? 'watch' : 'none';
+  const entry = type === 'bearish' ? latest.ema50 : type === 'bullish' ? latest.ema20 : null;
+  const risk = type === 'neutral'
+    ? { stop: null, target: null }
+    : directionRisk(rows, type, entry, type === 'bearish' ? latest.ema50 + atrAt(rows) : latest.ema50 - atrAt(rows));
+  const eventText = cross
+    ? `${cross.type === 'bullish' ? '黃金' : '死亡'}交叉${cross.index === rows.length - 1 ? '確認' : '後續觀察'}`
+    : '均線多空排列觀察';
+  const event = makeEvent(rows, eventIndex, eventType, status, eventText, { entryLower: entry, entryUpper: entry, stop: risk.stop, target: risk.target }, {
+    cross: cross?.type || null,
+    crossIndex: cross?.index ?? null,
+    crossTime: crossRow?.time || null,
+    crossType: cross?.type || null,
+    previousClose: previous?.close,
+  });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(latest.ema20, 'EMA20', 'accent', 1, 2), overlayLine(latest.ema50, 'EMA50', 'warning', 1, 2), overlayLine(risk.stop, '均線失效', 'negative', 2, 1), overlayLine(risk.target, '趨勢目標', type === 'bearish' ? 'negative' : 'positive', 2, 1)],
+    series: [],
+  }, `${cross ? `最近一次${cross.type === 'bullish' ? '黃金' : '死亡'}交叉於 ${crossRow?.time || '—'}；` : ''}${bullish || bearish ? '均線已形成同向排列' : '均線尚未形成明確方向'}；EMA20 ${latest.ema20.toFixed(2)}、EMA50 ${latest.ema50.toFixed(2)}。`);
+}
+
+const MONTH_QUARTER_SLOPE_LOOKBACK = 5;
+const MONTH_QUARTER_MIN_SLOPE_RATIO = 0.0005;
+const MONTH_QUARTER_MIN_SPREAD_RATIO = 0.001;
+
+function evaluateMonthQuarterTrend(def, rows) {
+  const latest = rows.at(-1);
+  const slopeBase = rows.at(-(MONTH_QUARTER_SLOPE_LOOKBACK + 1));
+  if (!latest || !slopeBase || !present(latest.ma20) || !present(latest.ma60) || !present(slopeBase.ma20) || !present(slopeBase.ma60)) {
+    return makeResult(def, 'unavailable', 'neutral', '月線／季線趨勢至少需要 60 根日 K，且 MA20／MA60 必須完整。');
+  }
+
+  const ma20 = Number(latest.ma20);
+  const ma60 = Number(latest.ma60);
+  const close = Number(latest.close);
+  const ma20SlopeRatio = ma20 / Number(slopeBase.ma20) - 1;
+  const ma60SlopeRatio = ma60 / Number(slopeBase.ma60) - 1;
+  const spreadRatio = ma60 ? (ma20 - ma60) / ma60 : 0;
+  const ma20Direction = ma20SlopeRatio > MONTH_QUARTER_MIN_SLOPE_RATIO
+    ? 'up'
+    : ma20SlopeRatio < -MONTH_QUARTER_MIN_SLOPE_RATIO
+      ? 'down'
+      : 'flat';
+  const ma60Direction = ma60SlopeRatio > MONTH_QUARTER_MIN_SLOPE_RATIO
+    ? 'up'
+    : ma60SlopeRatio < -MONTH_QUARTER_MIN_SLOPE_RATIO
+      ? 'down'
+      : 'flat';
+  const bullishStack = spreadRatio > MONTH_QUARTER_MIN_SPREAD_RATIO;
+  const bearishStack = spreadRatio < -MONTH_QUARTER_MIN_SPREAD_RATIO;
+  const bullish = bullishStack && ma20Direction === 'up' && ma60Direction === 'up' && close > ma20;
+  const bearish = bearishStack && ma20Direction === 'down' && ma60Direction === 'down' && close < ma20;
+  const type = bullish || bullishStack
+    ? 'bullish'
+    : bearish || bearishStack
+      ? 'bearish'
+      : 'neutral';
+  const status = bullish || bearish ? 'confirmed' : type !== 'neutral' ? 'watch' : 'none';
+  const cross = latestCross(rows, 'ma20', 'ma60', 10);
+  const crossRow = cross ? rows[cross.index] : null;
+  const arrangementText = bullishStack
+    ? '月線在季線上方'
+    : bearishStack
+      ? '月線在季線下方'
+      : '月線與季線距離過近';
+  const slopeText = value => value === 'up' ? '上揚' : value === 'down' ? '下彎' : '走平';
+  const crossText = cross
+    ? `最近 10 個交易日於 ${crossRow?.time || '—'} 出現${cross.type === 'bullish' ? '黃金交叉' : '死亡交叉'}`
+    : '最近 10 個交易日沒有新交叉';
+  const conclusion = bullish
+    ? '排列、斜率與收盤位置同向，多頭趨勢確認'
+    : bearish
+      ? '排列、斜率與收盤位置同向，空頭趨勢確認'
+      : type === 'bullish'
+        ? '雖為多頭排列，但兩線斜率或收盤位置尚未全部確認，暫列偏多觀察'
+        : type === 'bearish'
+          ? '雖為空頭排列，但兩線斜率或收盤位置尚未全部確認，暫列偏空觀察'
+          : '兩線尚未形成具辨識度的多空排列';
+  const eventIndex = cross?.index ?? rows.length - 1;
+  const event = makeEvent(rows, eventIndex, type, status, cross
+    ? `${cross.type === 'bullish' ? '月季線黃金交叉' : '月季線死亡交叉'}${status === 'confirmed' ? '，趨勢確認' : '，等待斜率與價格確認'}`
+    : conclusion, {
+    entryLower: null,
+    entryUpper: null,
+    stop: null,
+    target: null,
+  }, {
+    ma20,
+    ma60,
+    ma20SlopeRatio,
+    ma60SlopeRatio,
+    ma20Direction,
+    ma60Direction,
+    spreadRatio,
+    cross: cross?.type || null,
+    crossIndex: cross?.index ?? null,
+    crossTime: crossRow?.time || null,
+    crossType: cross?.type || null,
+    slopeLookback: MONTH_QUARTER_SLOPE_LOOKBACK,
+    slopeThreshold: MONTH_QUARTER_MIN_SLOPE_RATIO,
+  });
+  return resultFromEvent(def, event, {
+    series: [
+      overlaySeries('月線 MA20', seriesPoints(rows, 'ma20'), 'warning', 0, 2),
+      overlaySeries('季線 MA60', seriesPoints(rows, 'ma60'), 'positive', 0, 2),
+    ],
+  }, `月線 MA20 ${ma20.toFixed(2)}（近 5 日 ${(ma20SlopeRatio * 100).toFixed(2)}%，${slopeText(ma20Direction)}）、季線 MA60 ${ma60.toFixed(2)}（近 5 日 ${(ma60SlopeRatio * 100).toFixed(2)}%，${slopeText(ma60Direction)}）；${arrangementText}，收盤 ${close.toFixed(2)}。${conclusion}；${crossText}。`);
+}
+
+function evaluateMarketStructure(def, rows) {
+  const pivotStrength = 3;
+  if (rows.length < 20) return makeResult(def, 'unavailable', 'neutral', '市場結構至少需要 20 根 K 線。');
+
+  const pivots = alternatingStructurePivots(rows, pivotStrength);
+  if (pivots.length < 4) {
+    return makeResult(def, 'unavailable', 'neutral', '至少需要四個依時間交錯的已確認高低轉折，才能判斷完整市場結構。');
+  }
+
+  const structurePivots = pivots.slice(-4);
+  const highPivots = structurePivots.filter(pivot => pivot.kind === 'high');
+  const lowPivots = structurePivots.filter(pivot => pivot.kind === 'low');
+  if (highPivots.length !== 2 || lowPivots.length !== 2) {
+    return makeResult(def, 'unavailable', 'neutral', '最近四個轉折無法組成高低交錯波段，等待下一個反向轉折確認。');
+  }
+
+  const [previousHighPivot, latestHighPivot] = highPivots;
+  const [previousLowPivot, latestLowPivot] = lowPivots;
+  const previousHighIndex = previousHighPivot.index;
+  const latestHighIndex = latestHighPivot.index;
+  const previousLowIndex = previousLowPivot.index;
+  const latestLowIndex = latestLowPivot.index;
+  const previousHigh = previousHighPivot.value;
+  const latestHigh = latestHighPivot.value;
+  const previousLow = previousLowPivot.value;
+  const latestLow = latestLowPivot.value;
+  const latest = rows.at(-1);
+  const tolerance = Math.max(atrAt(rows) * 0.1, Math.abs(Number(latest.close)) * 0.001);
+
+  const highState = latestHigh > previousHigh + tolerance
+    ? 'HH'
+    : latestHigh < previousHigh - tolerance ? 'LH' : 'EH';
+  const lowState = latestLow > previousLow + tolerance
+    ? 'HL'
+    : latestLow < previousLow - tolerance ? 'LL' : 'EL';
+  const highDisplayState = highState === 'EH' ? '待確認' : highState;
+  const lowDisplayState = lowState === 'EL' ? '待確認' : lowState;
+  const bullishStructure = highState === 'HH' && lowState === 'HL';
+  const bearishStructure = highState === 'LH' && lowState === 'LL';
+  const bullishBroken = bullishStructure && Number(latest.close) < latestLow - tolerance;
+  const bearishBroken = bearishStructure && Number(latest.close) > latestHigh + tolerance;
+  const structureBroken = bullishBroken || bearishBroken;
+
+  const bullishBias = (highState === 'HH' && lowState !== 'LL') || (lowState === 'HL' && highState !== 'LH');
+  const bearishBias = (highState === 'LH' && lowState !== 'HL') || (lowState === 'LL' && highState !== 'HH');
+  let type = bullishStructure || bullishBias ? 'bullish' : bearishStructure || bearishBias ? 'bearish' : 'neutral';
+  let status = bullishStructure || bearishStructure ? 'confirmed' : 'watch';
+  let text = bullishStructure
+    ? '頭頭高、底底高（HH／HL）'
+    : bearishStructure
+      ? '頭頭低、底底低（LH／LL）'
+      : highState === 'HH' && lowState !== 'HL'
+        ? '頭頭高，等待底底高'
+        : lowState === 'HL' && highState !== 'HH'
+          ? '底底高，等待頭頭高'
+          : highState === 'LH' && lowState !== 'LL'
+            ? '頭頭低，等待底底低'
+            : lowState === 'LL' && highState !== 'LH'
+              ? '底底低，等待頭頭低'
+              : '高低點結構分歧';
+
+  if (structureBroken) {
+    status = 'watch';
+    text = bullishBroken
+      ? '多頭結構已跌破，等待 LL 確認'
+      : '空頭結構已突破，等待 HH 確認';
+  } else if (!bullishStructure && !bearishStructure && ['EH', 'EL'].includes(highState) && ['EH', 'EL'].includes(lowState)) {
+    status = 'none';
+  }
+
+  const lastConfirmedPivot = structurePivots.at(-1);
+  const eventIndex = structureBroken ? rows.length - 1 : lastConfirmedPivot.index;
+  const actionable = status === 'confirmed' && !structureBroken && type !== 'neutral';
+  const entry = actionable ? Number(latest.close) : null;
+  const structuralStop = type === 'bullish' ? latestLow : type === 'bearish' ? latestHigh : null;
+  const risk = !actionable
+    ? { stop: null, target: null }
+    : directionRisk(rows, type, entry, structuralStop);
+  const markerText = structureBroken
+    ? `${bullishBroken ? 'HH／HL 跌破' : 'LH／LL 突破'}`
+    : bullishStructure ? 'HH／HL 確認' : bearishStructure ? 'LH／LL 確認' : `${highState}／${lowState} 觀察`;
+  const event = makeEvent(rows, eventIndex, type, status, markerText, {
+    entryLower: entry,
+    entryUpper: entry,
+    stop: risk.stop,
+    target: risk.target,
+  }, {
+    plotMarker: status === 'confirmed' && type !== 'neutral',
+    highState,
+    lowState,
+    structureLabel: `${highDisplayState}／${lowDisplayState}`,
+    structureBroken,
+    previousHigh,
+    latestHigh,
+    previousLow,
+    latestLow,
+    previousHighTime: rows[previousHighIndex].time,
+    latestHighTime: rows[latestHighIndex].time,
+    previousLowTime: rows[previousLowIndex].time,
+    latestLowTime: rows[latestLowIndex].time,
+    pivotStrength,
+    pivotSequence: structurePivots.map(pivot => ({
+      kind: pivot.kind,
+      time: pivot.time,
+      value: pivot.value,
+      state: pivot === latestHighPivot ? highState : pivot === latestLowPivot ? lowState : null,
+    })),
+  });
+
+  // Only the final `pivotStrength` candles can still become a pivot solely by
+  // waiting for right-side confirmation. Older non-pivots are not candidates.
+  const trailingStart = Math.max(lastConfirmedPivot.index + 1, rows.length - pivotStrength);
+  const expectedKind = lastConfirmedPivot.kind === 'high' ? 'low' : 'high';
+  let candidatePivot = null;
+  for (let index = trailingStart; index < rows.length; index += 1) {
+    const value = Number(rows[index]?.[expectedKind]);
+    if (!Number.isFinite(value)) continue;
+    if (!candidatePivot || (expectedKind === 'low' ? value <= candidatePivot.value : value >= candidatePivot.value)) {
+      candidatePivot = { index, kind: expectedKind, value, time: rows[index].time };
+    }
+  }
+  if (candidatePivot) {
+    const rightBars = rows.length - 1 - candidatePivot.index;
+    event.candidatePivotKind = candidatePivot.kind;
+    event.candidatePivotValue = candidatePivot.value;
+    event.candidatePivotTime = candidatePivot.time;
+    event.candidateRightBars = rightBars;
+    event.candidateBarsRemaining = Math.max(0, pivotStrength - rightBars);
+  }
+
+  const highDescription = `${highState === 'EH' ? '高點持平、待確認' : highState}：${previousHigh.toFixed(2)} → ${latestHigh.toFixed(2)}`;
+  const lowDescription = `${lowState === 'EL' ? '低點持平、待確認' : lowState}：${previousLow.toFixed(2)} → ${latestLow.toFixed(2)}`;
+  const reason = structureBroken
+    ? `${text}；${highDescription}、${lowDescription}，最新收盤 ${Number(latest.close).toFixed(2)}。`
+    : `${text}；${highDescription}、${lowDescription}。四個轉折已按時間交錯；波段轉折採左右各 ${pivotStrength} 根 K 線確認。`;
+
+  const structureColor = bullishStructure ? 'positive' : bearishStructure ? 'negative' : 'warning';
+  const confirmedPath = overlaySeries('已確認市場結構', structurePivots.map(pivot => ({
+    time: pivot.time,
+    value: pivot.value,
+  })), structureColor, 0, 3, {
+    role: 'marketStructureConfirmed',
+    markers: structurePivots.map(pivot => ({
+      time: pivot.time,
+      position: pivot.kind === 'high' ? 'aboveBar' : 'belowBar',
+      colorKey: structureColor,
+      shape: 'circle',
+      text: pivot === latestHighPivot ? highState : pivot === latestLowPivot ? lowState : '',
+    })),
+  });
+  const candidatePath = candidatePivot ? overlaySeries('尚未確認轉折', [
+    { time: lastConfirmedPivot.time, value: lastConfirmedPivot.value },
+    { time: candidatePivot.time, value: candidatePivot.value },
+  ], 'textMuted', 2, 2, {
+    role: 'marketStructureCandidate',
+    markers: [{
+      time: candidatePivot.time,
+      position: candidatePivot.kind === 'high' ? 'aboveBar' : 'belowBar',
+      colorKey: 'textMuted',
+      shape: 'circle',
+      text: `候選${candidatePivot.kind === 'high' ? '高點' : '低點'} · 待 ${Math.max(0, pivotStrength - (rows.length - 1 - candidatePivot.index))} 根`,
+    }],
+  }) : null;
+
+  return resultFromEvent(def, event, {
+    priceLines: [
+      overlayLine(latestHigh, highState === 'EH' ? '高點待確認' : `${highState} 高點`, highState === 'HH' ? 'positive' : highState === 'LH' ? 'negative' : 'warning', 2, 1),
+      overlayLine(latestLow, lowState === 'EL' ? '低點待確認' : `${lowState} 低點`, lowState === 'HL' ? 'positive' : lowState === 'LL' ? 'negative' : 'warning', 2, 1),
+    ],
+    series: [confirmedPath, candidatePath],
+  }, reason);
+}
+
+function evaluateDonchian(def, rows) {
+  const lookback = 20;
+  if (rows.length < lookback + 2) return makeResult(def, 'unavailable', 'neutral', 'Donchian 通道至少需要 22 根 K 線。');
+  const history = rows.slice(-lookback - 1, -1);
+  const upper = Math.max(...history.map(row => row.high));
+  const lower = Math.min(...history.map(row => row.low));
+  const height = upper - lower;
+  const latest = rows.at(-1);
+  const previous = rows.at(-2);
+  const bullish = latest.close > upper * 1.001;
+  const bearish = latest.close < lower * 0.999;
+  const near = latest.close >= upper * 0.98 || latest.close <= lower * 1.02;
+  const type = bullish ? 'bullish' : bearish ? 'bearish' : latest.close >= (upper + lower) / 2 ? 'bullish' : 'bearish';
+  const status = bullish || bearish ? 'confirmed' : near ? 'watch' : 'none';
+  const entry = bullish ? upper : bearish ? lower : type === 'bullish' ? upper : lower;
+  const risk = directionRisk(rows, type, entry, type === 'bullish' ? lower : upper);
+  const target = type === 'bullish' ? upper + height : lower - height;
+  const event = makeEvent(rows, rows.length - 1, type, status, bullish || bearish ? 'Donchian 通道突破' : '等待 Donchian 邊界突破', { entryLower: entry, entryUpper: entry, stop: risk.stop, target }, { upper, lower, previousClose: previous?.close });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(upper, 'Donchian 上緣', 'negative', 2, 2), overlayLine(lower, 'Donchian 下緣', 'positive', 2, 2), overlayLine(target, '通道測幅', type === 'bearish' ? 'negative' : 'positive', 2, 1)],
+  }, `${bullish || bearish ? 'Donchian 突破已出現' : '價格仍在 Donchian 通道內'}；上緣 ${upper.toFixed(2)}、下緣 ${lower.toFixed(2)}。`);
+}
+
+function evaluateAdx(def, rows) {
+  const latest = rows.at(-1);
+  const previous = rows.at(-2);
+  if (!latest || !present(latest.adx14)) return makeResult(def, 'unavailable', 'neutral', 'ADX14 資料不足。');
+  const now = directionalMovement(rows);
+  const bullish = now.plus > now.minus && latest.close >= latest.ma20;
+  const bearish = now.minus > now.plus && latest.close <= latest.ma20;
+  const cross = latestDirectionalCross(rows);
+  const type = bullish ? 'bullish' : bearish ? 'bearish' : 'neutral';
+  const eventType = cross?.type || type;
+  const eventIndex = cross?.index ?? rows.length - 1;
+  const crossRow = cross ? rows[cross.index] : null;
+  const status = cross?.index === rows.length - 1 && latest.adx14 >= 20 ? 'confirmed' : latest.adx14 >= 20 && type !== 'neutral' ? 'watch' : 'none';
+  const risk = type === 'neutral'
+    ? { stop: null, target: null }
+    : directionRisk(rows, type, latest.close, type === 'bearish' ? latest.ma20 + atrAt(rows) : latest.ma20 - atrAt(rows));
+  const event = makeEvent(rows, eventIndex, eventType, status, cross ? `DI 方向交叉${cross.index === rows.length - 1 ? '，ADX 趨勢濾網啟動' : '後續觀察'}` : 'ADX 趨勢強度觀察', { entryLower: latest.close, entryUpper: latest.close, stop: risk.stop, target: risk.target }, {
+    adx: latest.adx14,
+    plusDi: now.plus,
+    minusDi: now.minus,
+    crossIndex: cross?.index ?? null,
+    crossTime: crossRow?.time || null,
+    crossType: cross?.type || null,
+    previousClose: previous?.close,
+  });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(latest.ma20, 'MA20 趨勢線', 'accent', 1, 2), overlayLine(risk.stop, '趨勢失效', 'negative', 2, 1), overlayLine(risk.target, '趨勢目標', type === 'bearish' ? 'negative' : 'positive', 2, 1)],
+  }, `${cross ? `最近一次 DI ${cross.type === 'bullish' ? '上穿' : '下穿'}於 ${crossRow?.time || '—'}；` : ''}ADX14 ${latest.adx14.toFixed(1)}；+DI ${now.plus.toFixed(1)}、-DI ${now.minus.toFixed(1)}，${status === 'confirmed' ? '方向交叉已確認' : type === 'neutral' ? '暫無明確方向' : '保留趨勢觀察'}。`);
+}
+
+function evaluateIchimoku(def, rows) {
+  if (rows.length < 78) return makeResult(def, 'unavailable', 'neutral', '一目均衡表至少需要 78 根 K 線建立完整前移雲層。');
+  const values = ichimokuSeries(rows);
+  const latest = values.at(-1);
+  const cloudIndex = rows.length - 27;
+  const currentCloud = values[cloudIndex];
+  const previousCloud = values[cloudIndex - 1];
+  if (!latest || !currentCloud || currentCloud.spanB == null || currentCloud.spanA == null || latest.conversion == null || latest.base == null) return makeResult(def, 'unavailable', 'neutral', '目前雲層組件尚未完整。');
+  const cloudUpper = Math.max(currentCloud.spanA, currentCloud.spanB);
+  const cloudLower = Math.min(currentCloud.spanA, currentCloud.spanB);
+  const laggingReference = Number(rows.at(-27)?.close);
+  const bullishCloud = currentCloud.spanA > currentCloud.spanB;
+  const bearishCloud = currentCloud.spanA < currentCloud.spanB;
+  const bullishLagging = !present(laggingReference) || rows.at(-1).close > laggingReference;
+  const bearishLagging = !present(laggingReference) || rows.at(-1).close < laggingReference;
+  const bullish = rows.at(-1).close > cloudUpper && latest.conversion > latest.base && bullishCloud && bullishLagging;
+  const bearish = rows.at(-1).close < cloudLower && latest.conversion < latest.base && bearishCloud && bearishLagging;
+  const cross = bullish && previousCloud && (rows.at(-2).close <= Math.max(previousCloud.spanA, previousCloud.spanB))
+    ? 'bullish'
+    : bearish && previousCloud && (rows.at(-2).close >= Math.min(previousCloud.spanA, previousCloud.spanB)) ? 'bearish' : null;
+  const type = cross || (bullish ? 'bullish' : bearish ? 'bearish' : 'neutral');
+  const status = cross ? 'confirmed' : type !== 'neutral' ? 'watch' : 'none';
+  const risk = type === 'neutral'
+    ? { stop: null, target: null }
+    : directionRisk(rows, type, rows.at(-1).close, type === 'bearish' ? cloudUpper : cloudLower);
+  const event = makeEvent(rows, rows.length - 1, type, status, cross ? '價格突破雲層確認' : '雲層方向觀察', { entryLower: rows.at(-1).close, entryUpper: rows.at(-1).close, stop: risk.stop, target: risk.target }, { cloudUpper, cloudLower, conversion: latest.conversion, base: latest.base, bullishCloud, bearishCloud, laggingReference });
+  const from = Math.max(0, rows.length - 180);
+  const cloudFrom = Math.min(from, Math.max(0, cloudIndex - 179));
+  const cloudPoints = key => values.slice(cloudFrom, cloudIndex + 1).map((item, offset) => ({ time: rows[cloudFrom + offset + 26]?.time, value: item[key] }));
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(cloudUpper, '雲層上緣', 'negative', 2, 1), overlayLine(cloudLower, '雲層下緣', 'positive', 2, 1), overlayLine(latest.conversion, '轉換線', 'accent', 1, 1), overlayLine(latest.base, '基準線', 'warning', 1, 1), overlayLine(risk.stop, '雲層失效', 'negative', 2, 1)],
+    series: [
+      overlaySeries('轉換線', values.slice(from).map(item => ({ time: item.time, value: item.conversion })), 'accent', 1, 1),
+      overlaySeries('基準線', values.slice(from).map(item => ({ time: item.time, value: item.base })), 'warning', 1, 1),
+      overlaySeries('先行跨度A（前移26）', cloudPoints('spanA'), 'positive', 2, 1),
+      overlaySeries('先行跨度B（前移26）', cloudPoints('spanB'), 'negative', 2, 1),
+    ],
+  }, `${cross ? `${cross === 'bullish' ? '多方' : '空方'}雲層突破` : bullish || bearish ? '價格、轉換／基準線、雲層方向與遲行條件同向' : '價格、線序、未來雲或遲行條件尚未同向'}；雲層 ${cloudLower.toFixed(2)}–${cloudUpper.toFixed(2)}。`);
+}
+
+function evaluateSupertrend(def, rows) {
+  const values = supertrendSeries(rows);
+  const latest = values.at(-1);
+  const previous = values.at(-2);
+  const close = rows.at(-1)?.close;
+  if (!latest || !present(latest.value)) return makeResult(def, 'unavailable', 'neutral', 'Supertrend 資料不足。');
+  const type = latest.direction > 0 ? 'bullish' : 'bearish';
+  const flipped = previous && previous.direction !== latest.direction;
+  const status = flipped ? 'confirmed' : 'watch';
+  const target = type === 'bullish' ? close + Math.max(atrAt(rows), close * 0.01) * 2 : close - Math.max(atrAt(rows), close * 0.01) * 2;
+  const event = makeEvent(rows, rows.length - 1, type, status, flipped ? 'Supertrend 翻轉確認' : 'Supertrend 趨勢跟隨中', { entryLower: close, entryUpper: close, stop: latest.value, target }, { line: latest.value, flipped });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(latest.value, 'Supertrend', type === 'bullish' ? 'positive' : 'negative', 2, 2, 'stop'), overlayLine(target, '趨勢目標', type === 'bullish' ? 'positive' : 'negative', 2, 1)],
+    series: [overlaySeries('Supertrend', values.slice(-180), type === 'bullish' ? 'positive' : 'negative', 1, 2)],
+  }, `${flipped ? 'Supertrend 方向翻轉' : 'Supertrend 維持'}${type === 'bullish' ? '偏多' : '偏空'}；目前線 ${latest.value.toFixed(2)}。`);
+}
+
+function evaluateMacdCross(def, rows) {
+  const latest = rows.at(-1);
+  const cross = latestCross(rows, 'macd', 'macdSignal');
+  if (!latest || !present(latest.macd) || !present(latest.macdSignal)) return makeResult(def, 'unavailable', 'neutral', 'MACD 資料不足。');
+  const type = latest.macd > latest.macdSignal ? 'bullish' : latest.macd < latest.macdSignal ? 'bearish' : 'neutral';
+  const structureAligned = type === 'bullish'
+    ? latest.macd >= 0 && (!present(latest.ma20) || latest.close >= latest.ma20)
+    : type === 'bearish'
+      ? latest.macd <= 0 && (!present(latest.ma20) || latest.close <= latest.ma20)
+      : false;
+  const status = cross?.index === rows.length - 1 && structureAligned ? 'confirmed' : cross || type !== 'neutral' ? 'watch' : 'none';
+  const risk = type === 'neutral'
+    ? { stop: null, target: null }
+    : directionRisk(rows, type, latest.close, type === 'bearish' ? latest.close + atrAt(rows) : latest.close - atrAt(rows));
+  const crossRow = cross ? rows[cross.index] : null;
+  const crossLabel = cross?.type === 'bullish' ? '黃金交叉' : '死亡交叉';
+  const eventIndex = cross?.index ?? rows.length - 1;
+  const eventType = cross?.type || type;
+  const eventText = cross
+    ? `${crossLabel}${cross.index === rows.length - 1 && structureAligned ? '確認' : '待零軸與 MA20 同向'}`
+    : 'MACD 方向觀察';
+  const event = makeEvent(rows, eventIndex, eventType, status, eventText, { entryLower: latest.close, entryUpper: latest.close, stop: risk.stop, target: risk.target }, {
+    macd: latest.macd,
+    signal: latest.macdSignal,
+    histogram: latest.macdHistogram,
+    structureAligned,
+    crossIndex: cross?.index ?? null,
+    crossTime: crossRow?.time || null,
+    crossType: cross?.type || null,
+  });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(risk.stop, 'MACD 失效價', 'negative', 2, 1), overlayLine(risk.target, '動能目標價', type === 'bullish' ? 'positive' : 'negative', 2, 1)],
+  }, cross
+    ? `最近一次${crossLabel}於 ${crossRow?.time || '—'}；目前 DIF ${latest.macd.toFixed(3)}、Signal ${latest.macdSignal.toFixed(3)}，${cross.index === rows.length - 1 && structureAligned ? '零軸與 MA20 同向，訊號已確認' : '零軸或價格結構尚未同向，仍屬觀察'}。`
+    : `近 8 根 K 線尚未出現 MACD 交叉；目前 DIF ${latest.macd.toFixed(3)}、Signal ${latest.macdSignal.toFixed(3)}。`);
+}
+
+function evaluateKDCross(def, rows) {
+  const latest = rows.at(-1);
+  const cross = latestCross(rows, 'k', 'd');
+  if (!latest || !present(latest.k) || !present(latest.d)) return makeResult(def, 'unavailable', 'neutral', 'KD 資料不足。');
+  const type = latest.k > latest.d ? 'bullish' : latest.k < latest.d ? 'bearish' : 'neutral';
+  const lowZone = latest.k <= 35 || latest.d <= 35;
+  const highZone = latest.k >= 65 || latest.d >= 65;
+  const crossRow = cross ? rows[cross.index] : null;
+  const crossK = Number(crossRow?.k);
+  const crossD = Number(crossRow?.d);
+  const crossLowZone = Number.isFinite(crossK) && Number.isFinite(crossD) && (crossK <= 35 || crossD <= 35);
+  const crossHighZone = Number.isFinite(crossK) && Number.isFinite(crossD) && (crossK >= 65 || crossD >= 65);
+  const qualified = Boolean(cross) && ((cross.type === 'bullish' && crossLowZone) || (cross.type === 'bearish' && crossHighZone));
+  const eventType = cross?.type || type;
+  const eventIndex = cross?.index ?? rows.length - 1;
+  const status = qualified && cross?.index === rows.length - 1 ? 'confirmed' : (crossLowZone || crossHighZone || lowZone || highZone) ? 'watch' : 'none';
+  const levels = nearestStructure(rows, latest.close);
+  const structural = type === 'bearish' ? levels.resistance?.price : levels.support?.price;
+  const risk = type === 'neutral'
+    ? { stop: null, target: null }
+    : directionRisk(rows, type, latest.close, structural || (type === 'bearish' ? latest.close + atrAt(rows) : latest.close - atrAt(rows)));
+  const crossLabel = cross
+    ? cross.type === 'bullish'
+      ? (crossLowZone ? '低檔黃金交叉' : '一般黃金交叉')
+      : (crossHighZone ? '高檔死亡交叉' : '一般死亡交叉')
+    : null;
+  const thresholdText = cross?.type === 'bullish'
+    ? (crossLowZone ? '符合低檔門檻（K 或 D ≤ 35）' : '未符合低檔門檻（K、D 均 > 35）')
+    : cross?.type === 'bearish'
+      ? (crossHighZone ? '符合高檔門檻（K 或 D ≥ 65）' : '未符合高檔門檻（K、D 均 < 65）')
+      : '尚未形成交叉';
+  const eventText = qualified
+    ? `${crossLabel}${cross.index === rows.length - 1 ? '確認' : '後續觀察'}`
+    : crossLabel
+      ? `${crossLabel}，${thresholdText}`
+      : 'KD 高低檔觀察';
+  const event = makeEvent(rows, eventIndex, eventType, status, eventText, { entryLower: latest.close, entryUpper: latest.close, stop: risk.stop, target: risk.target }, {
+    k: latest.k,
+    d: latest.d,
+    crossIndex: cross?.index ?? null,
+    crossTime: crossRow?.time || null,
+    crossType: cross?.type || null,
+  });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(risk.stop, 'KD 失效', 'negative', 2, 1), overlayLine(risk.target, 'KD 目標', type === 'bullish' ? 'positive' : 'negative', 2, 1)],
+  }, cross
+    ? `最近一次${crossLabel}於 ${crossRow?.time || '—'}；交叉當下 K ${crossK.toFixed(1)}、D ${crossD.toFixed(1)}；${qualified ? `${thresholdText}，${cross.index === rows.length - 1 ? '目前已確認' : '目前列為後續觀察'}` : `${thresholdText}，因此不列為低檔黃金／高檔死亡確認訊號`}。`
+    : `近期尚未出現符合條件的 KD 交叉；目前 K ${latest.k.toFixed(1)}、D ${latest.d.toFixed(1)}。判斷門檻：低檔黃金交叉需 K 上穿 D 且 K 或 D ≤ 35；高檔死亡交叉需 K 下穿 D 且 K 或 D ≥ 65。`);
+}
+
+function evaluateBollingerSqueeze(def, rows, context = {}, options = {}) {
+  const settings = ttmSqueezeSettings(context, options);
+  const values = ttmSqueezeSeries(rows, settings);
+  const latest = values.at(-1);
+  const latestRow = rows.at(-1);
+  const latestIndex = rows.length - 1;
+  if (!latest || !latestRow || !present(latest.bollUpper) || !present(latest.kcUpper) || !present(latest.momentum)) {
+    return makeResult(def, 'unavailable', 'neutral', 'TTM Squeeze 需要至少 20 根完整 K 線及成交量資料。');
+  }
+
+  const squeezeRuns = [];
+  let runStart = -1;
+  for (let index = 0; index <= latestIndex; index += 1) {
+    if (values[index].squeezeOn) {
+      if (runStart < 0) runStart = index;
+      continue;
+    }
+    if (runStart >= 0) {
+      const bars = index - runStart;
+      if (bars >= settings.minSqueezeBars) squeezeRuns.push({ start: runStart, end: index - 1, release: index, bars });
+      runStart = -1;
+    }
+  }
+  const activeRun = runStart >= 0
+    ? { start: runStart, end: latestIndex, release: null, bars: latestIndex - runStart + 1 }
+    : null;
+  const latestRelease = squeezeRuns.at(-1) || null;
+  const releaseAge = latestRelease ? latestIndex - latestRelease.release : null;
+  const recentRelease = !activeRun && latestRelease && releaseAge >= 0 && releaseAge <= settings.confirmWindow ? latestRelease : null;
+  const rangeStart = Math.max(0, latestIndex - settings.breakoutLookback);
+  const priorRows = rows.slice(rangeStart, latestIndex);
+  const rangeHigh = priorRows.length ? Math.max(...priorRows.map(row => Number(row.high)).filter(Number.isFinite)) : null;
+  const rangeLow = priorRows.length ? Math.min(...priorRows.map(row => Number(row.low)).filter(Number.isFinite)) : null;
+  const bullishBreakout = present(rangeHigh) && latestRow.close > rangeHigh * (1 + settings.breakoutMargin);
+  const bearishBreakout = present(rangeLow) && latestRow.close < rangeLow * (1 - settings.breakoutMargin);
+  const volumeRatio = volumeRatioAt(rows, latestIndex);
+  const volumePassed = volumeRatio >= settings.minVolumeRatio;
+  const momentumBullish = Number(latest.momentum) > 0 && Number(latest.momentumSlope || 0) >= 0;
+  const momentumBearish = Number(latest.momentum) < 0 && Number(latest.momentumSlope || 0) <= 0;
+  const momentumStrengthened = settings.key !== 'conservative'
+    ? true
+    : (momentumBullish && Number(latest.momentumSlope || 0) > 0) || (momentumBearish && Number(latest.momentumSlope || 0) < 0);
+  const type = bullishBreakout || momentumBullish ? 'bullish' : bearishBreakout || momentumBearish ? 'bearish' : 'neutral';
+  const breakoutPassed = type === 'bullish' ? bullishBreakout : type === 'bearish' ? bearishBreakout : false;
+  const momentumPassed = type === 'bullish' ? momentumBullish : type === 'bearish' ? momentumBearish : false;
+  const confirmed = Boolean(recentRelease && breakoutPassed && volumePassed && momentumPassed && momentumStrengthened);
+  const hasCandidate = Boolean(activeRun || recentRelease);
+  const status = confirmed ? 'confirmed' : hasCandidate ? 'watch' : 'none';
+  const entryLevel = type === 'bullish' ? rangeHigh : type === 'bearish' ? rangeLow : null;
+  const structuralStop = type === 'bullish' ? rangeLow : type === 'bearish' ? rangeHigh : null;
+  const risk = type === 'neutral' || !present(entryLevel)
+    ? { stop: null, target: null, atr: latest.atr, risk: null }
+    : directionRisk(rows, type, latestRow.close, structuralStop);
+  const eventIndex = confirmed && recentRelease ? latestIndex : recentRelease?.release ?? activeRun?.start ?? latestIndex;
+  const eventText = confirmed
+    ? `TTM Squeeze 釋放後${type === 'bullish' ? '向上' : '向下'}突破確認`
+    : activeRun
+      ? `Squeeze ON，已壓縮 ${activeRun.bars} 根，等待釋放與${type === 'bullish' ? '上方' : type === 'bearish' ? '下方' : '方向'}突破`
+      : recentRelease
+        ? `Squeeze 已釋放，等待${type === 'bullish' ? '多方' : type === 'bearish' ? '空方' : '方向'}突破、量能與動能確認`
+        : '尚未形成符合條件的 TTM Squeeze。';
+  const squeezeRegion = activeRun && activeRun.bars >= settings.minSqueezeBars
+    ? overlayRegion('Squeeze ON 區間', [
+      ...values.slice(activeRun.start, activeRun.end + 1).map(item => ({ time: item.time, value: item.kcUpper })),
+      ...values.slice(activeRun.start, activeRun.end + 1).reverse().map(item => ({ time: item.time, value: item.kcLower })),
+    ], 'warning', 0.05, 2, 1, 'Squeeze ON')
+    : null;
+  const priceLines = [
+    overlayLine(latest.bollUpper, 'BOLL 上軌', 'negative', 2, 1),
+    overlayLine(latest.bollMiddle, 'BOLL 中軌', 'warning', 1, 1),
+    overlayLine(latest.bollLower, 'BOLL 下軌', 'positive', 2, 1),
+    overlayLine(latest.kcUpper, 'KC 上軌', 'accent', 2, 1),
+    overlayLine(latest.kcMiddle, 'KC 中線', 'accent', 1, 1),
+    overlayLine(latest.kcLower, 'KC 下軌', 'accent', 2, 1),
+    overlayLine(entryLevel, type === 'bullish' ? '突破上緣' : type === 'bearish' ? '跌破下緣' : '區間門檻', type === 'bearish' ? 'negative' : 'positive', 2, 2, 'neckline'),
+    overlayLine(risk.stop, 'TTM 失效／停損', 'negative', confirmed ? 0 : 2, 1, 'stop'),
+    overlayLine(risk.target, 'TTM 2R 目標', type === 'bearish' ? 'negative' : 'positive', confirmed ? 0 : 2, 1, 'target'),
+  ];
+  const event = makeEvent(rows, eventIndex, type, status, eventText, {
+    entryLower: entryLevel || latestRow.close,
+    entryUpper: entryLevel || latestRow.close,
+    stop: risk.stop,
+    target: risk.target,
+  }, {
+    preset: settings.key,
+    presetLabel: settings.label,
+    squeezeOn: Boolean(activeRun),
+    squeezeBars: activeRun?.bars || latestRelease?.bars || 0,
+    releaseTime: latestRelease?.release != null ? rows[latestRelease.release]?.time : null,
+    releaseAge,
+    breakoutLevel: entryLevel,
+    rangeHigh,
+    rangeLow,
+    bullishBreakout,
+    bearishBreakout,
+    breakoutPassed,
+    volumeRatio,
+    volumeThreshold: settings.minVolumeRatio,
+    volumePassed,
+    momentum: latest.momentum,
+    momentumSlope: latest.momentumSlope,
+    momentumPassed,
+    momentumStrengthened,
+    confirmationWindow: settings.confirmWindow,
+    kcMultiplier: settings.kcMultiplier,
+    minSqueezeBars: settings.minSqueezeBars,
+  });
+  return resultFromEvent(def, event, {
+    priceLines,
+    series: [
+      overlaySeries('BOLL 上軌', values.slice(-180).map(item => ({ time: item.time, value: item.bollUpper })), 'negative', 1, 1),
+      overlaySeries('BOLL 中軌', values.slice(-180).map(item => ({ time: item.time, value: item.bollMiddle })), 'warning', 1, 1),
+      overlaySeries('BOLL 下軌', values.slice(-180).map(item => ({ time: item.time, value: item.bollLower })), 'positive', 1, 1),
+      overlaySeries('KC 上軌', values.slice(-180).map(item => ({ time: item.time, value: item.kcUpper })), 'accent', 1, 1),
+      overlaySeries('KC 中線', values.slice(-180).map(item => ({ time: item.time, value: item.kcMiddle })), 'accent', 2, 1),
+      overlaySeries('KC 下軌', values.slice(-180).map(item => ({ time: item.time, value: item.kcLower })), 'accent', 1, 1),
+    ],
+    regions: [squeezeRegion],
+  }, `TTM Squeeze【${settings.label}】；${activeRun ? `目前 Squeeze ON ${activeRun.bars} 根` : recentRelease ? `最近於 ${rows[latestRelease.release]?.time || '—'} 釋放` : '近期沒有完整擠壓'}；突破 ${breakoutPassed ? '通過' : '未通過'}、量能 ${volumeRatio.toFixed(2)} 倍／門檻 ${settings.minVolumeRatio.toFixed(2)} ${volumePassed ? '通過' : '不足'}、動能 ${momentumPassed && momentumStrengthened ? '同向' : '未確認'}。`);
+}
+
+function evaluateBollingerReversion(def, rows) {
+  const values = bollingerSeries(rows);
+  const latest = values.at(-1);
+  const latestRow = rows.at(-1);
+  if (!latest || latest.mean == null) return makeResult(def, 'unavailable', 'neutral', '布林帶資料不足。');
+
+  // 均值回歸必須有完整的方向流程：先觸及外軌，再收回通道；
+  // 單純穿越中軌不構成均值回歸訊號。只保留最近一段時間的設定，
+  // 避免把很久以前的外軌觸及重新解讀成當前訊號。
+  const maxActiveBars = 20;
+  const latestIndex = rows.length - 1;
+  const searchStart = Math.max(0, latestIndex - maxActiveBars + 1);
+  const hasBands = item => item && item.mean != null && item.upper != null && item.lower != null;
+  const closeAt = index => Number(rows[index]?.close);
+  const bandTouch = (index, type) => {
+    const row = rows[index];
+    const band = values[index];
+    if (!row || !hasBands(band)) return false;
+    return type === 'bullish'
+      ? Number.isFinite(Number(row.low)) && Number(row.low) <= Number(band.lower)
+      : Number.isFinite(Number(row.high)) && Number(row.high) >= Number(band.upper);
+  };
+  const reenteredChannel = (index, type) => {
+    const close = closeAt(index);
+    const band = values[index];
+    if (!Number.isFinite(close) || !hasBands(band)) return false;
+    return type === 'bullish' ? close > Number(band.lower) : close < Number(band.upper);
+  };
+  const meanCrossed = (index, type) => {
+    if (index <= 0) return false;
+    const previousBand = values[index - 1];
+    const currentBand = values[index];
+    const previousClose = closeAt(index - 1);
+    const currentClose = closeAt(index);
+    if (!hasBands(previousBand) || !hasBands(currentBand) || !Number.isFinite(previousClose) || !Number.isFinite(currentClose)) return false;
+    return type === 'bullish'
+      ? previousClose < Number(previousBand.mean) && currentClose >= Number(currentBand.mean)
+      : previousClose > Number(previousBand.mean) && currentClose <= Number(currentBand.mean);
+  };
+  const findSetup = type => {
+    for (let touchIndex = latestIndex; touchIndex >= searchStart; touchIndex -= 1) {
+      if (!bandTouch(touchIndex, type)) continue;
+
+      // 同一根 K 棒觸及外軌後收回通道，也算反轉 K；否則尋找後續收回。
+      let reentryIndex = reenteredChannel(touchIndex, type) ? touchIndex : null;
+      if (reentryIndex == null) {
+        for (let index = touchIndex + 1; index <= latestIndex; index += 1) {
+          if (reenteredChannel(index, type)) {
+            reentryIndex = index;
+            break;
+          }
+        }
+      }
+
+      const endIndex = reentryIndex ?? latestIndex;
+      const extremes = rows.slice(touchIndex, endIndex + 1)
+        .map(row => type === 'bullish' ? Number(row.low) : Number(row.high))
+        .filter(Number.isFinite);
+      const extreme = extremes.length
+        ? (type === 'bullish' ? Math.min(...extremes) : Math.max(...extremes))
+        : closeAt(touchIndex);
+      let meanCrossIndex = null;
+      if (reentryIndex != null) {
+        for (let index = reentryIndex + 1; index <= latestIndex; index += 1) {
+          if (meanCrossed(index, type)) {
+            meanCrossIndex = index;
+            break;
+          }
+        }
+      }
+
+      return {
+        type,
+        touchIndex,
+        reentryIndex,
+        meanCrossIndex,
+        extreme,
+        eventIndex: reentryIndex ?? touchIndex,
+      };
+    }
+    return null;
+  };
+
+  const setups = ['bullish', 'bearish'].map(findSetup).filter(Boolean);
+  const setup = setups.sort((left, right) => right.touchIndex - left.touchIndex)[0] || null;
+  const type = setup?.type || 'neutral';
+  const previousBand = values.at(-2);
+  const widthExpanding = present(previousBand?.width) && Number(latest.width) > Number(previousBand.width) * 1.08;
+  const strongTrend = present(latestRow.adx14) && Number(latestRow.adx14) >= 25 && widthExpanding;
+  const status = setup ? (setup.reentryIndex != null && !strongTrend ? 'confirmed' : 'watch') : 'none';
+  const target = setup ? latest.mean : null;
+  const atr = atrAt(rows);
+  const stop = setup
+    ? (type === 'bullish' ? setup.extreme - atr * 0.4 : setup.extreme + atr * 0.4)
+    : null;
+  const reentryRow = setup?.reentryIndex != null ? rows[setup.reentryIndex] : null;
+  const entry = Number.isFinite(Number(reentryRow?.close)) ? Number(reentryRow.close) : null;
+  const sideLabel = type === 'bullish' ? '下軌' : type === 'bearish' ? '上軌' : '外軌';
+  const text = setup
+    ? setup.reentryIndex == null
+      ? `${sideLabel}偏離，等待收回通道`
+      : setup.meanCrossIndex != null
+        ? `${sideLabel}收回通道，中軌目標已到達`
+        : `${sideLabel}收回通道，等待中軌目標`
+    : '尚未形成外軌觸及後的均值回歸';
+  const event = makeEvent(rows, setup?.eventIndex ?? latestIndex, type, status, text, {
+    entryLower: entry,
+    entryUpper: entry,
+    stop,
+    target,
+  }, {
+    upper: latest.upper,
+    lower: latest.lower,
+    mean: latest.mean,
+    touched: Boolean(setup),
+    reentered: Boolean(setup?.reentryIndex != null),
+    returned: Boolean(setup?.meanCrossIndex != null),
+    strongTrend,
+    widthExpanding,
+    touchTime: setup ? rows[setup.touchIndex]?.time : null,
+    reentryTime: setup?.reentryIndex != null ? rows[setup.reentryIndex]?.time : null,
+    meanCrossTime: setup?.meanCrossIndex != null ? rows[setup.meanCrossIndex]?.time : null,
+  });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(latest.upper, '布林上軌', 'negative', 2, 1), overlayLine(latest.mean, type === 'neutral' ? '布林中軌（均值）' : '均值／目標', 'accent', 2, 2, type === 'neutral' ? 'reference' : 'target'), overlayLine(latest.lower, '布林下軌', 'positive', 2, 1), overlayLine(stop, `${sideLabel}回歸失效`, 'negative', 2, 1)],
+  }, `${text}；中軌 ${latest.mean.toFixed(2)} 為目標${strongTrend ? '；ADX ≥ 25 且帶寬擴張，強趨勢濾網未通過，因此僅列觀察' : ''}；單純穿越中軌不算均值回歸。`);
+}
+
+function evaluateRsiRegime(def, rows) {
+  const latest = rows.at(-1);
+  const previous = rows.at(-2);
+  if (!latest || !present(latest.rsi)) return makeResult(def, 'unavailable', 'neutral', 'RSI14 資料不足。');
+  const bullishTrend = latest.close > latest.ma60 && latest.rsi >= 40 && latest.rsi <= 65;
+  const bearishTrend = latest.close < latest.ma60 && latest.rsi >= 35 && latest.rsi <= 60;
+  const bullishConfirm = bullishTrend && previous?.rsi < 40 && latest.rsi >= 40;
+  const bearishConfirm = bearishTrend && previous?.rsi > 60 && latest.rsi <= 60;
+  const type = bullishConfirm || bullishTrend ? 'bullish' : bearishConfirm || bearishTrend ? 'bearish' : 'neutral';
+  const status = bullishConfirm || bearishConfirm ? 'confirmed' : type !== 'neutral' ? 'watch' : 'none';
+  const risk = type === 'neutral'
+    ? { stop: null, target: null }
+    : directionRisk(rows, type, latest.close, latest.ma60);
+  const closeText = present(latest.close) ? latest.close.toFixed(2) : '—';
+  const ma60Text = present(latest.ma60) ? latest.ma60.toFixed(2) : '—';
+  const previousRsiText = present(previous?.rsi) ? previous.rsi.toFixed(1) : '—';
+  const pricePosition = present(latest.ma60)
+    ? latest.close > latest.ma60
+      ? `收盤 ${closeText} 高於 MA60 ${ma60Text}`
+      : latest.close < latest.ma60
+        ? `收盤 ${closeText} 低於 MA60 ${ma60Text}`
+        : `收盤 ${closeText} 等於 MA60 ${ma60Text}`
+    : `收盤 ${closeText}，MA60 無資料`;
+  const directionRule = '偏多：收盤高於 MA60 且 RSI14 介於 40–65；偏空：收盤低於 MA60 且 RSI14 介於 35–60。';
+  const stateText = bullishConfirm
+    ? `偏多已確認：前一根 RSI14 ${previousRsiText} < 40，本根站回 40。`
+    : bearishConfirm
+      ? `偏空已確認：前一根 RSI14 ${previousRsiText} > 60，本根跌回 ≤ 60。`
+      : bullishTrend
+        ? `偏多觀察：RSI14 ${latest.rsi.toFixed(1)} 位於 40–65；仍需前一根 RSI14 < 40 後站回 40 才確認。`
+        : bearishTrend
+          ? `偏空觀察：RSI14 ${latest.rsi.toFixed(1)} 位於 35–60；仍需前一根 RSI14 > 60 後跌回 ≤ 60 才確認。`
+          : `目前不在明確趨勢區間：RSI14 ${latest.rsi.toFixed(1)}。`;
+  const event = makeEvent(rows, rows.length - 1, type, status, bullishConfirm || bearishConfirm ? 'RSI 趨勢區間重新站回' : 'RSI 趨勢區間觀察', { entryLower: latest.close, entryUpper: latest.close, stop: risk.stop, target: risk.target }, { rsi: latest.rsi, regime: type });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(latest.ma60, 'MA60 趨勢基準', 'accent', 1, 2), overlayLine(risk.stop, 'RSI 趨勢失效', 'negative', 2, 1), overlayLine(risk.target, '趨勢目標', type === 'bullish' ? 'positive' : 'negative', 2, 1)],
+  }, `${pricePosition}；${stateText} 判斷規則：${directionRule}`);
+}
+
+function evaluateSrFlip(def, rows) {
+  if (rows.length < 30) return makeResult(def, 'unavailable', 'neutral', '支撐／阻力互換至少需要 30 根 K 線。');
+  const highPivots = pivotIndexes(rows.map(row => row.high), 'high', 3);
+  const lowPivots = pivotIndexes(rows.map(row => row.low), 'low', 3);
+  let setup = null;
+  for (let index = Math.max(4, rows.length - 15); index < rows.length; index += 1) {
+    const resistanceIndex = highPivots.filter(value => value <= index - 3).at(-1);
+    const supportIndex = lowPivots.filter(value => value <= index - 3).at(-1);
+    for (const type of ['bullish', 'bearish']) {
+      const pivotIndex = type === 'bullish' ? resistanceIndex : supportIndex;
+      if (pivotIndex == null) continue;
+      const level = Number(type === 'bullish' ? rows[pivotIndex].high : rows[pivotIndex].low);
+      const broke = type === 'bullish'
+        ? rows[index - 1].close <= level * 1.001 && rows[index].close > level * 1.001
+        : rows[index - 1].close >= level * 0.999 && rows[index].close < level * 0.999;
+      if (!broke) continue;
+      let retestIndex = null;
+      let invalidated = false;
+      for (let cursor = index + 1; cursor <= Math.min(rows.length - 1, index + 10); cursor += 1) {
+        const candidate = rows[cursor];
+        const invalid = type === 'bullish' ? candidate.close < level - atrAt(rows, cursor) * 0.25 : candidate.close > level + atrAt(rows, cursor) * 0.25;
+        if (invalid) { invalidated = true; break; }
+        const retested = type === 'bullish'
+          ? candidate.low <= level * 1.01 && candidate.close >= level
+          : candidate.high >= level * 0.99 && candidate.close <= level;
+        if (retested) { retestIndex = cursor; break; }
+      }
+      if (!invalidated) setup = { type, level, pivotIndex, breakoutIndex: index, retestIndex };
+    }
+  }
+  if (!setup) return makeResult(def, 'none', 'neutral', '近期尚未形成有效突破事件，因此不判定支撐／阻力互換。');
+  const { type, level, breakoutIndex, retestIndex } = setup;
+  const confirmed = retestIndex != null;
+  const status = confirmed ? 'confirmed' : 'watch';
+  const structuralStop = type === 'bullish' ? level - atrAt(rows) * 0.5 : level + atrAt(rows) * 0.5;
+  const risk = directionRisk(rows, type, level, structuralStop);
+  const event = makeEvent(rows, retestIndex ?? breakoutIndex, type, status, confirmed ? '突破後於後續 K 棒完成回踩互換' : '突破已成立，等待後續 K 棒回踩', { entryLower: level, entryUpper: level, stop: risk.stop, target: risk.target }, {
+    level,
+    breakout: true,
+    retest: confirmed,
+    breakoutTime: rows[breakoutIndex]?.time,
+    retestTime: retestIndex == null ? null : rows[retestIndex]?.time,
+  });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(level, type === 'bullish' ? '前壓轉支撐' : '前支撐轉壓力', 'accent', 2, 2), overlayLine(risk.stop, '互換失效', 'negative', 2, 1), overlayLine(risk.target, '結構目標', type === 'bullish' ? 'positive' : 'negative', 2, 1)],
+  }, `${confirmed ? '突破與後續回踩均已完成，支撐／阻力互換確認' : '突破已完成，尚未出現後續回踩'}；互換位 ${level.toFixed(2)}。`);
+}
+
+function evaluateStructure(def, rows) {
+  const structure = latestStructureBreak(rows);
+  if (!structure) return makeResult(def, 'unavailable', 'neutral', '有效波段高低點不足。');
+  const atr = atrAt(rows);
+  const nearHigh = rows.at(-1).close >= structure.high.high - atr;
+  const nearLow = rows.at(-1).close <= structure.low.low + atr;
+  const type = structure.bullish ? 'bullish' : structure.bearish ? 'bearish' : nearHigh && !nearLow ? 'bullish' : nearLow && !nearHigh ? 'bearish' : 'neutral';
+  const mode = structure.bullish
+    ? structure.trend === 'bearish' ? 'CHoCH' : structure.trend === 'bullish' ? 'BOS' : '結構突破候選'
+    : structure.bearish
+      ? structure.trend === 'bullish' ? 'CHoCH' : structure.trend === 'bearish' ? 'BOS' : '結構突破候選'
+      : null;
+  const level = type === 'bullish' ? structure.high.high : type === 'bearish' ? structure.low.low : null;
+  const broken = structure.bullish || structure.bearish;
+  const status = broken && structure.trend !== 'neutral' ? 'confirmed' : broken || type !== 'neutral' ? 'watch' : 'none';
+  const risk = type === 'neutral' ? { stop: null, target: null } : directionRisk(rows, type, rows.at(-1).close, type === 'bullish' ? structure.low.low : structure.high.high);
+  const event = makeEvent(rows, rows.length - 1, type, status, broken ? `${mode} ${type === 'bullish' ? '向上' : '向下'}突破` : '等待明確結構突破', { entryLower: level, entryUpper: level, stop: risk.stop, target: risk.target }, { breakLevel: level, high: structure.high.high, low: structure.low.low, mode, priorTrend: structure.trend });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(structure.high.high, '結構高點', 'negative', 2, 1), overlayLine(structure.low.low, '結構低點', 'positive', 2, 1), overlayLine(level, 'BOS／CHoCH 線', 'accent', 2, 2), overlayLine(risk.stop, '結構失效', 'negative', 2, 1)],
+  }, `${broken ? `${mode}：原趨勢為${structure.trend === 'bullish' ? '多頭 HH／HL' : structure.trend === 'bearish' ? '空頭 LH／LL' : '不明'}，最新 K 線${type === 'bullish' ? '向上' : '向下'}突破` : '目前尚未突破最近結構'}；結構高點 ${structure.high.high.toFixed(2)}、低點 ${structure.low.low.toFixed(2)}。`);
+}
+
+function evaluateLiquiditySweep(def, rows) {
+  if (rows.length < 25) return makeResult(def, 'unavailable', 'neutral', '流動性獵取至少需要 25 根 K 線。');
+  const latest = rows.at(-1);
+  const history = rows.slice(-21, -1);
+  const oldLow = Math.min(...history.map(row => row.low));
+  const oldHigh = Math.max(...history.map(row => row.high));
+  const stats = candleStats(latest);
+  const bullish = latest.low < oldLow * 0.999 && latest.close > oldLow && stats.lowerWick > Math.max(stats.body * 1.4, atrAt(rows) * 0.2);
+  const bearish = latest.high > oldHigh * 1.001 && latest.close < oldHigh && stats.upperWick > Math.max(stats.body * 1.4, atrAt(rows) * 0.2);
+  const near = latest.low <= oldLow * 1.015 || latest.high >= oldHigh * 0.985;
+  const type = bullish ? 'bullish' : bearish ? 'bearish' : near ? (latest.close < (oldLow + oldHigh) / 2 ? 'bullish' : 'bearish') : 'neutral';
+  const status = bullish || bearish ? 'confirmed' : near ? 'watch' : 'none';
+  const extreme = bullish ? latest.low : bearish ? latest.high : type === 'bullish' ? oldLow : type === 'bearish' ? oldHigh : null;
+  const target = type === 'bullish' ? oldHigh : type === 'bearish' ? oldLow : null;
+  const stop = type === 'bullish' ? extreme - atrAt(rows) * 0.1 : type === 'bearish' ? extreme + atrAt(rows) * 0.1 : null;
+  const event = makeEvent(rows, rows.length - 1, type, status, bullish || bearish ? `${type === 'bullish' ? '下方' : '上方'}流動性掃取後收回` : '等待流動性掃取', { entryLower: latest.close, entryUpper: latest.close, stop, target }, { sweepLow: oldLow, sweepHigh: oldHigh, extreme });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(oldLow, '前低流動性', 'positive', 2, 1), overlayLine(oldHigh, '前高流動性', 'negative', 2, 1), overlayLine(extreme, '掃損極值', 'negative', 2, 2), overlayLine(target, '回收目標', type === 'bullish' ? 'positive' : 'negative', 2, 1)],
+  }, `${bullish || bearish ? '流動性掃取並快速收回' : near ? '價格靠近前高／前低，等待掃取' : '目前未偵測到邊界掃取'}；區間 ${oldLow.toFixed(2)}–${oldHigh.toFixed(2)}。`);
+}
+
+function evaluateOrderBlock(def, rows) {
+  const latest = rows.at(-1);
+  const latestAtr = Math.max(atrAt(rows), latest.close * 0.005);
+  let setup = null;
+  let latestInvalidated = null;
+  for (let index = rows.length - 3; index >= Math.max(2, rows.length - 35); index -= 1) {
+    const row = rows[index];
+    const next = rows[index + 1];
+    const stats = candleStats(row);
+    const formationAtr = Math.max(atrAt(rows, index + 1), Number(next.close) * 0.005);
+    const displacement = Math.abs(next.close - row.close) > formationAtr * 1.1;
+    const zone = displacement && stats.bearish && next.close > row.high
+      ? { type: 'bullish', lower: row.low, upper: row.high, time: row.time, formationIndex: index, displacementIndex: index + 1, formationAtr }
+      : displacement && stats.bullish && next.close < row.low
+        ? { type: 'bearish', lower: row.low, upper: row.high, time: row.time, formationIndex: index, displacementIndex: index + 1, formationAtr }
+        : null;
+    if (!zone) continue;
+    const bullish = zone.type === 'bullish';
+    const stop = bullish ? zone.lower - formationAtr * 0.15 : zone.upper + formationAtr * 0.15;
+    let touchIndex = null;
+    let reactionIndex = null;
+    let invalidationIndex = null;
+    for (let cursor = zone.displacementIndex + 1; cursor < rows.length; cursor += 1) {
+      const candidate = rows[cursor];
+      const invalid = bullish ? candidate.close < stop : candidate.close > stop;
+      if (invalid) {
+        invalidationIndex = cursor;
+        break;
+      }
+      if (touchIndex == null && candidate.low <= zone.upper && candidate.high >= zone.lower) touchIndex = cursor;
+      if (touchIndex != null && reactionIndex == null) {
+        const reacted = bullish ? candidate.close > zone.upper : candidate.close < zone.lower;
+        if (reacted) reactionIndex = cursor;
+      }
+    }
+    if (invalidationIndex != null) {
+      if (!latestInvalidated) latestInvalidated = { zone, stop, touchIndex, reactionIndex, invalidationIndex };
+      continue;
+    }
+    setup = { zone, stop, touchIndex, reactionIndex };
+    break;
+  }
+  if (!setup) {
+    if (latestInvalidated) {
+      const { zone, stop, invalidationIndex } = latestInvalidated;
+      const invalidationRow = rows[invalidationIndex];
+      return makeResult(
+        def,
+        'none',
+        'neutral',
+        `最近 Order Block 已於 ${invalidationRow.time} 收盤 ${Number(invalidationRow.close).toFixed(2)} ${zone.type === 'bullish' ? '跌破' : '突破'}失效價 ${stop.toFixed(2)}，圖上不再保留有效區域。`,
+        { lifecycle: { state: 'invalidated', invalidatedAt: invalidationRow.time, invalidationPrice: Number(invalidationRow.close), stop } },
+      );
+    }
+    return makeResult(def, 'none', 'neutral', '最近資料尚未找到仍有效且未被收盤破壞的 Order Block。');
+  }
+  const { zone, stop, touchIndex, reactionIndex } = setup;
+  const touched = touchIndex != null;
+  const bullish = zone.type === 'bullish';
+  const touchRow = touchIndex == null ? null : rows[touchIndex];
+  const reacted = reactionIndex != null;
+  const type = bullish ? 'bullish' : 'bearish';
+  const touchAge = touchIndex == null ? null : rows.length - 1 - touchIndex;
+  const reactionAge = reactionIndex == null ? null : rows.length - 1 - reactionIndex;
+  const formationAge = rows.length - 1 - zone.displacementIndex;
+  const status = reacted && reactionAge <= 20
+    ? 'confirmed'
+    : touched && touchAge <= 12
+      ? 'watch'
+      : !touched && formationAge <= 12
+        ? 'watch'
+        : 'none';
+  const levels = nearestStructure(rows, latest.close);
+  const target = bullish ? levels.resistance?.price || latest.close + latestAtr * 3 : levels.support?.price || latest.close - latestAtr * 3;
+  const reason = `${reacted ? 'Order Block 回踩後已有收盤反應' : touched ? '價格已進入 Order Block，等待收盤離開區域確認' : '已找到最近 Order Block，等待回踩'}；區間 ${zone.lower.toFixed(2)}–${zone.upper.toFixed(2)}，收盤失效價 ${stop.toFixed(2)}。`;
+  if (status === 'none') {
+    return makeResult(def, 'none', 'neutral', `${reason} 此訊號已超過顯示期限，圖上不再保留區域。`, {
+      lifecycle: { state: 'expired', formationAge, touchAge, reactionAge },
+    });
+  }
+  const event = makeEvent(rows, reactionIndex ?? touchIndex ?? zone.displacementIndex, type, status, reacted ? 'OB 回踩確認' : touched ? 'OB 回踩中' : 'OB 等待回踩', { entryLower: zone.lower, entryUpper: zone.upper, stop, target }, { zone, touched, reacted, touchTime: touchRow?.time || null, reactionTime: reactionIndex == null ? null : rows[reactionIndex]?.time || null });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(zone.lower, 'OB 下緣', bullish ? 'positive' : 'negative', 2, 1), overlayLine(zone.upper, 'OB 上緣', bullish ? 'positive' : 'negative', 2, 1), overlayLine(stop, 'OB 失效', 'negative', 2, 1), overlayLine(target, 'OB 目標', bullish ? 'positive' : 'negative', 2, 1)],
+    regions: [overlayRegion('OB 區域', [
+      { time: zone.time, value: zone.upper },
+      { time: latest.time, value: zone.upper },
+      { time: latest.time, value: zone.lower },
+      { time: zone.time, value: zone.lower },
+    ], bullish ? 'positive' : 'negative', 0.06, 2, 1, 'OB 區域')],
+  }, reason);
+}
+
+function evaluateFvg(def, rows) {
+  let setup = null;
+  for (let index = rows.length - 2; index >= Math.max(2, rows.length - 45); index -= 1) {
+    const left = rows[index - 2];
+    const right = rows[index];
+    if (!left || !right) continue;
+    const zone = left.high < right.low
+      ? { type: 'bullish', lower: left.high, upper: right.low, time: right.time, startTime: left.time, formationIndex: index }
+      : left.low > right.high
+        ? { type: 'bearish', lower: right.high, upper: left.low, time: right.time, startTime: left.time, formationIndex: index }
+        : null;
+    if (!zone) continue;
+    let touchIndex = null;
+    let invalidated = false;
+    for (let cursor = index + 1; cursor < rows.length; cursor += 1) {
+      const candidate = rows[cursor];
+      const invalid = zone.type === 'bullish' ? candidate.close < zone.lower : candidate.close > zone.upper;
+      if (invalid) { invalidated = true; break; }
+      if (candidate.low <= zone.upper && candidate.high >= zone.lower) { touchIndex = cursor; break; }
+    }
+    if (!invalidated) { setup = { zone, touchIndex }; break; }
+  }
+  if (!setup) return makeResult(def, 'none', 'neutral', '最近資料尚未形成仍有效的三根 K 線失衡區。');
+  const { zone, touchIndex } = setup;
+  const latest = rows.at(-1);
+  const bullish = zone.type === 'bullish';
+  const touched = touchIndex != null;
+  const touchRow = touchIndex == null ? null : rows[touchIndex];
+  const reacted = touched && (bullish ? touchRow.close > zone.upper : touchRow.close < zone.lower);
+  const type = bullish ? 'bullish' : 'bearish';
+  const touchAge = touchIndex == null ? null : rows.length - 1 - touchIndex;
+  const status = reacted && touchAge <= 20 ? 'confirmed' : touched && touchAge <= 12 ? 'watch' : 'none';
+  const eventPrice = Number(touchRow?.close || latest.close);
+  const risk = directionRisk(rows, type, eventPrice, bullish ? zone.lower : zone.upper);
+  const event = makeEvent(rows, touchIndex ?? zone.formationIndex, type, status, reacted ? 'FVG 於後續 K 棒回補後方向確認' : touched ? '價格已回補 FVG，等待方向收盤' : '等待後續 K 棒回補 FVG', { entryLower: zone.lower, entryUpper: zone.upper, stop: risk.stop, target: risk.target }, { zone, touched, touchTime: touchRow?.time || null });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(zone.lower, 'FVG 下緣', 'accent', 2, 1), overlayLine(zone.upper, 'FVG 上緣', 'accent', 2, 1), overlayLine(risk.stop, 'FVG 失效', 'negative', 2, 1), overlayLine(risk.target, '位移目標', type === 'bullish' ? 'positive' : 'negative', 2, 1)],
+    regions: [overlayRegion('FVG 失衡區', [
+      { time: zone.startTime || zone.time, value: zone.upper },
+      { time: latest.time, value: zone.upper },
+      { time: latest.time, value: zone.lower },
+      { time: zone.startTime || zone.time, value: zone.lower },
+    ], 'accent', 0.08, 2, 1, 'FVG 失衡區')],
+  }, `${reacted ? 'FVG 已在形成後的 K 棒回補並出現方向收盤' : touched ? '後續價格已進入 FVG 區域' : '已找到 FVG，尚未發生後續回補'}；區間 ${zone.lower.toFixed(2)}–${zone.upper.toFixed(2)}。`);
+}
+
+function evaluateCandlestick(def, rows) {
+  const latest = rows.at(-1);
+  const previous = rows.at(-2);
+  const stats = candleStats(latest);
+  const previousStats = candleStats(previous);
+  const levels = nearestStructure(rows, latest.close);
+  const nearSupport = levels.support && latest.low <= levels.support.price + atrAt(rows) && latest.close >= levels.support.price;
+  const nearResistance = levels.resistance && latest.high >= levels.resistance.price - atrAt(rows) && latest.close <= levels.resistance.price;
+  const bullishEngulf = previousStats.bearish && stats.bullish && latest.open <= previous.close && latest.close >= previous.open;
+  const bearishEngulf = previousStats.bullish && stats.bearish && latest.open >= previous.close && latest.close <= previous.open;
+  const bullishPin = stats.lowerWick >= Math.max(stats.body * 2, stats.range * 0.45) && latest.close >= latest.open;
+  const bearishPin = stats.upperWick >= Math.max(stats.body * 2, stats.range * 0.45) && latest.close <= latest.open;
+  const bullish = (bullishEngulf || bullishPin) && Boolean(nearSupport);
+  const bearish = (bearishEngulf || bearishPin) && Boolean(nearResistance);
+  const rawType = bullish ? 'bullish' : bearish ? 'bearish' : bullishEngulf || bullishPin ? 'bullish' : bearishEngulf || bearishPin ? 'bearish' : 'neutral';
+  const status = bullish || bearish ? 'confirmed' : rawType !== 'neutral' ? 'watch' : 'none';
+  const type = rawType;
+  const level = type === 'bullish' ? levels.support?.price : levels.resistance?.price;
+  const stop = type === 'bullish' ? latest.low - atrAt(rows) * 0.1 : type === 'bearish' ? latest.high + atrAt(rows) * 0.1 : null;
+  const target = type === 'bullish' ? levels.resistance?.price || latest.close + atrAt(rows) * 2 : type === 'bearish' ? levels.support?.price || latest.close - atrAt(rows) * 2 : null;
+  const event = makeEvent(rows, rows.length - 1, type, status, status === 'confirmed' ? `${type === 'bullish' ? '多方' : '空方'}吞噬／Pin Bar 確認` : '等待 K 棒訊號位於關鍵結構', { entryLower: latest.close, entryUpper: latest.close, stop, target }, { pattern: bullishEngulf || bearishEngulf ? 'engulfing' : bullishPin || bearishPin ? 'pin-bar' : null, level });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(level, '關鍵結構位', 'accent', 2, 2), overlayLine(stop, 'K 棒極值停損', 'negative', 2, 1), overlayLine(target, '結構目標', type === 'bullish' ? 'positive' : 'negative', 2, 1)],
+  }, `${bullish || bearish ? '關鍵位出現反轉 K' : rawType !== 'neutral' ? '偵測到 K 棒型態，但尚未靠近關鍵位' : '尚未形成有效 Pin Bar／吞噬 K'}；${bullishEngulf || bearishEngulf ? '吞噬' : bullishPin || bearishPin ? 'Pin Bar' : '—'}。`);
+}
+
+function evaluateVwap(def, rows) {
+  const values = rollingVwapSeries(rows, 20);
+  const latest = values.at(-1);
+  const previous = values.at(-2);
+  const latestRow = rows.at(-1);
+  if (!latest || !present(latest.value)) return makeResult(def, 'unavailable', 'neutral', '20 日滾動 VWAP 資料不足。');
+  const bullishCross = previous && rows.at(-2).close <= previous.value && latestRow.close > latest.value;
+  const bearishCross = previous && rows.at(-2).close >= previous.value && latestRow.close < latest.value;
+  const type = bullishCross || latestRow.close >= latest.value ? 'bullish' : 'bearish';
+  const status = bullishCross || bearishCross ? 'confirmed' : Math.abs(latestRow.close - latest.value) / latest.value <= 0.015 ? 'watch' : 'none';
+  const risk = directionRisk(rows, type, latest.value, type === 'bullish' ? latest.value - atrAt(rows) : latest.value + atrAt(rows));
+  const event = makeEvent(rows, rows.length - 1, type, status, bullishCross || bearishCross ? '20 日滾動 VWAP 穿越確認' : '等待滾動 VWAP 回踩／穿越', { entryLower: latest.value, entryUpper: latest.value, stop: risk.stop, target: risk.target }, { vwap: latest.value, distance: (latestRow.close - latest.value) / latest.value, vwapMode: 'rolling-20d-daily' });
+  const deviations = rows.slice(-20).map(row => row.close - (values[rows.indexOf(row)]?.value || row.close));
+  const deviation = standardDeviation(deviations);
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(latest.value, '20日滾動VWAP', 'accent', 2, 2), overlayLine(latest.value + deviation * 2, '滾動VWAP 上偏離', 'negative', 2, 1), overlayLine(latest.value - deviation * 2, '滾動VWAP 下偏離', 'positive', 2, 1), overlayLine(risk.stop, '滾動VWAP 失效', 'negative', 2, 1)],
+    series: [overlaySeries('20日滾動VWAP', values.slice(-180).map(item => ({ time: item.time, value: item.value })), 'accent', 1, 2)],
+  }, `${bullishCross || bearishCross ? '價格已穿越 20 日滾動 VWAP' : '價格相對 20 日滾動 VWAP 觀察中'}；這是日 K 滾動量加權均價，不是當日 Session VWAP。目前 ${latest.value.toFixed(2)}、偏離 ${(Math.abs(latestRow.close - latest.value) / latest.value * 100).toFixed(2)}%。`);
+}
+
+function evaluateVolumeBreakout(def, rows) {
+  const range = rangeLevels(rows, 20);
+  if (!range) return makeResult(def, 'unavailable', 'neutral', '成交量突破至少需要 25 根 K 線。');
+  const latest = rows.at(-1);
+  const ratio = volumeRatioAt(rows, rows.length - 1);
+  const bullish = latest.close > range.high * 1.001;
+  const bearish = latest.close < range.low * 0.999;
+  const confirmed = (bullish || bearish) && ratio >= 1.2;
+  const type = bullish ? 'bullish' : bearish ? 'bearish' : 'neutral';
+  const status = confirmed ? 'confirmed' : bullish || bearish || ratio >= 1.2 ? 'watch' : 'none';
+  const entry = bullish ? range.high : bearish ? range.low : null;
+  const risk = type === 'neutral'
+    ? { stop: null, target: null }
+    : directionRisk(rows, type, entry, bullish ? range.low : range.high);
+  const target = bullish ? range.high + range.height : bearish ? range.low - range.height : null;
+  const event = makeEvent(rows, rows.length - 1, type, status, confirmed ? `價格突破且成交量 ${ratio.toFixed(1)} 倍` : '等待價量同步突破', { entryLower: entry, entryUpper: entry, stop: risk.stop, target }, { upper: range.high, lower: range.low, volumeRatio: ratio, priceBreakout: Boolean(bullish || bearish) });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(range.high, '量價突破上緣', 'negative', 2, 2), overlayLine(range.low, '量價突破下緣', 'positive', 2, 2), overlayLine(target, '量價測幅', type === 'bearish' ? 'negative' : 'positive', 2, 1)],
+  }, `${confirmed ? '價量同步突破已確認' : '價格／量能尚未同時滿足'}；相對量 ${ratio.toFixed(2)} 倍。`);
+}
+
+function evaluateObvDivergence(def, rows) {
+  const maxActiveBars = 20;
+  const maxPivotGap = 60;
+  const minimumPriceSwing = 0.01;
+  const minimumObvMoveInVolumes = 1;
+  const lows = pivotIndexes(rows.map(row => row.low), 'low', 3);
+  const highs = pivotIndexes(rows.map(row => row.high), 'high', 3);
+  const find = type => {
+    const indexes = type === 'bullish' ? lows : highs;
+    for (let cursor = indexes.length - 1; cursor > 0; cursor -= 1) {
+      const first = indexes[cursor - 1];
+      const second = indexes[cursor];
+      if (second - first > maxPivotGap) continue;
+      const priceA = type === 'bullish' ? rows[first].low : rows[first].high;
+      const priceB = type === 'bullish' ? rows[second].low : rows[second].high;
+      const obvA = Number(rows[first].obv);
+      const obvB = Number(rows[second].obv);
+      const priceSwing = Math.abs(Number(priceB) - Number(priceA)) / Math.max(Math.abs(Number(priceA)), 1);
+      const volumeBaseline = average(rows.slice(Math.max(0, second - 20), second).map(row => Number(row.volume || 0)).filter(Number.isFinite));
+      const obvMove = Math.abs(obvB - obvA);
+      const meaningfulObvMove = obvMove >= Math.max(1, volumeBaseline * minimumObvMoveInVolumes);
+      const divergent = Number.isFinite(obvA) && Number.isFinite(obvB) && priceSwing >= minimumPriceSwing && meaningfulObvMove
+        && (type === 'bullish' ? priceB < priceA && obvB > obvA : priceB > priceA && obvB < obvA);
+      if (!divergent) continue;
+      const confirmationLevel = type === 'bullish' ? rows[second].high : rows[second].low;
+      const confirmationBuffer = Math.abs(confirmationLevel) * 0.001;
+      const confirmationIndex = firstLevelCrossIndex(rows, second, confirmationLevel, type, confirmationBuffer);
+      const invalidationIndex = rows.slice(second + 1).findIndex(row => {
+        const close = Number(row.close);
+        return Number.isFinite(close) && (type === 'bullish' ? close < priceB : close > priceB);
+      });
+      if (invalidationIndex >= 0) continue;
+      const confirmed = confirmationIndex != null;
+      const confirmationHeld = confirmationStillHeld(rows, confirmationIndex, confirmationLevel, type, confirmationBuffer);
+      const confirmationLost = confirmed && !confirmationHeld;
+      const confirmationLossAction = type === 'bullish' ? '跌回' : '漲回';
+      const status = confirmed ? (confirmationLost ? 'watch' : 'confirmed') : rows.length - 1 - second <= 12 ? 'watch' : 'none';
+      const eventIndex = confirmationIndex ?? second;
+      if (rows.length - 1 - eventIndex > maxActiveBars || status === 'none') continue;
+      const eventPrice = rows[eventIndex].close;
+      const risk = directionRisk(rows, type, eventPrice, priceB);
+      if (!Number.isFinite(risk.risk) || risk.risk <= 0) continue;
+      const event = makeEvent(rows, eventIndex, type, status, confirmationLost ? `OBV 背離確認後${confirmationLossAction}確認線` : confirmed ? 'OBV 背離價格確認' : 'OBV 背離等待價格確認', { entryLower: eventPrice, entryUpper: eventPrice, stop: risk.stop, target: risk.target }, {
+        firstTime: rows[first].time,
+        secondTime: rows[second].time,
+        firstPrice: priceA,
+        secondPrice: priceB,
+        firstObv: obvA,
+        secondObv: obvB,
+        obvChange: obvB - obvA,
+        priceSwing,
+        confirmationLevel,
+        confirmationTime: confirmationIndex == null ? null : rows[confirmationIndex].time,
+        confirmationLost,
+      });
+      const structurePoints = [
+        { time: rows[first].time, value: priceA },
+        { time: rows[second].time, value: priceB },
+        ...(confirmationIndex == null ? [] : [{ time: rows[confirmationIndex].time, value: rows[confirmationIndex].close }]),
+      ];
+      return resultFromEvent(def, event, {
+        priceLines: [overlayLine(priceB, '背離波段', type === 'bullish' ? 'positive' : 'negative', 2, 1), overlayLine(risk.stop, 'OBV 背離失效', 'negative', 2, 1), overlayLine(risk.target, '背離目標', type === 'bullish' ? 'positive' : 'negative', 2, 1)],
+        series: [overlaySeries('OBV 背離結構', structurePoints, type === 'bullish' ? 'positive' : 'negative', 1, 2)],
+      }, `${type === 'bullish' ? '低點' : '高點'}價格與 OBV 出現背離${confirmationLost ? `，曾於 ${rows[confirmationIndex].time} 完成確認，但最新收盤已${confirmationLossAction}確認線 ${confirmationLevel.toFixed(2)}，降為觀察` : confirmed ? '並維持價格確認' : '，等待價格突破'}。`);
+    }
+    return null;
+  };
+  const bullish = find('bullish');
+  const bearish = find('bearish');
+  const candidates = [bullish, bearish].filter(item => item && ['confirmed', 'watch'].includes(item.status));
+  const resultTime = item => String(item?.signal?.time || item?.latestEvent?.time || '');
+  const confirmed = candidates.filter(item => item.status === 'confirmed').sort((left, right) => resultTime(left).localeCompare(resultTime(right)));
+  if (confirmed.length) return confirmed.at(-1);
+  if (candidates.length) return candidates.sort((left, right) => resultTime(left).localeCompare(resultTime(right))).at(-1);
+  return makeResult(def, 'none', 'neutral', '最近 20 根 K 線內尚未形成仍有效的價格與 OBV 反向高低點。');
+}
+
+function evaluateMoneyFlowDivergence(def, rows, indicatorName) {
+  const isMfi = indicatorName === 'MFI';
+  const minimumIndicatorMove = isMfi ? 5 : 0.03;
+  const indicatorAt = index => isMfi ? mfiAt(rows, index) : Number(rows[index]?.cmf);
+  const companionAt = index => isMfi ? Number(rows[index]?.cmf) : mfiAt(rows, index);
+  const companionMinimumMove = isMfi ? 0.03 : 5;
+  if (rows.length < 35 || (!isMfi && rows.filter(row => present(row.cmf)).length < 30)) {
+    return makeResult(def, 'unavailable', 'neutral', `${indicatorName} 背離至少需要 35 根完整價量資料${isMfi ? '' : '與 CMF20'}。`);
+  }
+  const lows = pivotIndexes(rows.map(row => row.low), 'low', 3);
+  const highs = pivotIndexes(rows.map(row => row.high), 'high', 3);
+  const find = type => {
+    const indexes = type === 'bullish' ? lows : highs;
+    for (let cursor = indexes.length - 1; cursor > 0; cursor -= 1) {
+      const first = indexes[cursor - 1];
+      const second = indexes[cursor];
+      if (first < 14 || second - first > 60) continue;
+      const priceA = Number(type === 'bullish' ? rows[first].low : rows[first].high);
+      const priceB = Number(type === 'bullish' ? rows[second].low : rows[second].high);
+      const indicatorA = Number(indicatorAt(first));
+      const indicatorB = Number(indicatorAt(second));
+      const priceSwing = Math.abs(priceB - priceA) / Math.max(Math.abs(priceA), 1);
+      const indicatorMove = Math.abs(indicatorB - indicatorA);
+      const divergent = [priceA, priceB, indicatorA, indicatorB].every(Number.isFinite)
+        && priceSwing >= 0.01
+        && indicatorMove >= minimumIndicatorMove
+        && (type === 'bullish' ? priceB < priceA && indicatorB > indicatorA : priceB > priceA && indicatorB < indicatorA);
+      if (!divergent) continue;
+      const between = rows.slice(first, second + 1);
+      const confirmationLevel = type === 'bullish'
+        ? Math.max(...between.map(row => Number(row.high)).filter(Number.isFinite))
+        : Math.min(...between.map(row => Number(row.low)).filter(Number.isFinite));
+      const confirmationBuffer = Math.abs(confirmationLevel) * 0.001;
+      const confirmationIndex = firstLevelCrossIndex(rows, second, confirmationLevel, type, confirmationBuffer);
+      const invalidated = rows.slice(second + 1).some(row => {
+        const close = Number(row.close);
+        return Number.isFinite(close) && (type === 'bullish' ? close < priceB : close > priceB);
+      });
+      if (invalidated) continue;
+      const confirmed = confirmationIndex != null;
+      const confirmationHeld = confirmationStillHeld(rows, confirmationIndex, confirmationLevel, type, confirmationBuffer);
+      const confirmationLost = confirmed && !confirmationHeld;
+      const confirmationLossAction = type === 'bullish' ? '跌回' : '漲回';
+      const status = confirmed ? (confirmationLost ? 'watch' : 'confirmed') : rows.length - 1 - second <= 12 ? 'watch' : 'none';
+      const eventIndex = confirmationIndex ?? second;
+      if (status === 'none' || rows.length - 1 - eventIndex > 20) continue;
+      const eventPrice = Number(rows[eventIndex].close);
+      const risk = directionRisk(rows, type, eventPrice, priceB);
+      if (!(risk.risk > 0)) continue;
+      const companionA = Number(companionAt(first));
+      const companionB = Number(companionAt(second));
+      const resonance = [companionA, companionB].every(Number.isFinite)
+        && Math.abs(companionB - companionA) >= companionMinimumMove
+        && (type === 'bullish' ? companionB > companionA : companionB < companionA);
+      const companionName = isMfi ? 'CMF' : 'MFI';
+      const event = makeEvent(rows, eventIndex, type, status, confirmationLost ? `${indicatorName} 背離確認後${confirmationLossAction}確認線` : confirmed ? `${indicatorName} 背離已通過價格確認線` : `${indicatorName} 背離等待價格確認`, {
+        entryLower: confirmationLevel,
+        entryUpper: confirmationLevel,
+        stop: risk.stop,
+        target: risk.target,
+      }, {
+        indicatorName,
+        firstTime: rows[first].time,
+        secondTime: rows[second].time,
+        firstPrice: priceA,
+        secondPrice: priceB,
+        firstIndicator: indicatorA,
+        secondIndicator: indicatorB,
+        indicatorMove: indicatorB - indicatorA,
+        confirmationLevel,
+        confirmationTime: confirmationIndex == null ? null : rows[confirmationIndex].time,
+        confirmationLost,
+        resonance,
+        resonanceWith: resonance ? companionName : null,
+        companionFirst: companionA,
+        companionSecond: companionB,
+      });
+      const colorKey = type === 'bullish' ? 'positive' : 'negative';
+      return resultFromEvent(def, event, {
+        priceLines: [
+          overlayLine(confirmationLevel, `${indicatorName} 背離確認線`, colorKey, status === 'confirmed' ? 1 : 2, 2, 'neckline'),
+          overlayLine(risk.stop, `${indicatorName} 背離失效`, 'negative', 2, 1),
+          overlayLine(risk.target, `${indicatorName} 背離目標`, colorKey, 2, 1),
+        ],
+        series: [overlaySeries(`${indicatorName} 背離價格轉折`, [
+          { time: rows[first].time, value: priceA },
+          { time: rows[second].time, value: priceB },
+        ], colorKey, 1, 2)],
+      }, `${type === 'bullish' ? '價格創低、指標低點抬高' : '價格創高、指標高點降低'}：${indicatorName} ${indicatorA.toFixed(isMfi ? 1 : 2)} → ${indicatorB.toFixed(isMfi ? 1 : 2)}；${confirmationLost ? `曾於 ${rows[confirmationIndex].time} 通過確認線 ${confirmationLevel.toFixed(2)}，但最新收盤 ${Number(rows.at(-1).close).toFixed(2)} 已${confirmationLossAction}確認線，降為觀察` : confirmed ? `收盤已通過並維持確認線 ${confirmationLevel.toFixed(2)}` : `等待收盤通過確認線 ${confirmationLevel.toFixed(2)}`}${resonance ? `，並與 ${companionName} 同方向背離共振` : ''}。`);
+    }
+    return null;
+  };
+  const candidates = [find('bullish'), find('bearish')].filter(item => item && ['confirmed', 'watch'].includes(item.status));
+  const resultTime = item => String(item?.signal?.time || item?.latestEvent?.time || '');
+  const confirmed = candidates.filter(item => item.status === 'confirmed').sort((left, right) => resultTime(left).localeCompare(resultTime(right)));
+  if (confirmed.length) return confirmed.at(-1);
+  if (candidates.length) return candidates.sort((left, right) => resultTime(left).localeCompare(resultTime(right))).at(-1);
+  return makeResult(def, 'none', 'neutral', `最近 20 根 K 線內尚未形成仍有效的價格與 ${indicatorName} 背離。`);
+}
+
+const evaluateMfiDivergence = (def, rows) => evaluateMoneyFlowDivergence(def, rows, 'MFI');
+const evaluateCmfDivergence = (def, rows) => evaluateMoneyFlowDivergence(def, rows, 'CMF');
+
+function evaluateMoneyFlow(def, rows) {
+  const latest = rows.at(-1);
+  const previous = rows.at(-2);
+  if (!latest || !present(latest.cmf) || !previous || !present(previous.cmf)) return makeResult(def, 'unavailable', 'neutral', 'MFI／CMF 需要完整價量與 CMF20 資料。');
+  const mfi = mfiAt(rows);
+  const cmf = Number(latest.cmf);
+  const previousMfi = mfiAt(rows, rows.length - 2);
+  const bullish = cmf > 0 && mfi >= 50;
+  const bearish = cmf < 0 && mfi < 50;
+  const previousCmf = Number(previous.cmf);
+  const bullishCrossed = bullish && (previousMfi < 50 || previousCmf <= 0);
+  const bearishCrossed = bearish && (previousMfi >= 50 || previousCmf >= 0);
+  const crossed = bullishCrossed || bearishCrossed;
+  const type = bullish ? 'bullish' : bearish ? 'bearish' : 'neutral';
+  const status = crossed && type !== 'neutral' ? 'confirmed' : type !== 'neutral' ? 'watch' : 'none';
+  const risk = type === 'neutral'
+    ? { stop: null, target: null }
+    : directionRisk(rows, type, latest.close, type === 'bearish' ? latest.close + atrAt(rows) : latest.close - atrAt(rows));
+  const event = makeEvent(rows, rows.length - 1, type, status, crossed ? 'MFI 與 CMF 同向後穿越中性線' : '等待 MFI 與 CMF 同向並完成中性線穿越', { entryLower: latest.close, entryUpper: latest.close, stop: risk.stop, target: risk.target }, { mfi, cmf, previousMfi, previousCmf, bullishCrossed, bearishCrossed });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(risk.stop, '資金流失效', 'negative', 2, 1), overlayLine(risk.target, '資金流目標', type === 'bullish' ? 'positive' : 'negative', 2, 1)],
+  }, `MFI ${mfi.toFixed(1)}、CMF20 ${cmf.toFixed(2)}；${bullish ? '兩者同向偏多' : bearish ? '兩者同向偏空' : '兩者方向不一致，不得列為確認'}${crossed ? '，且本根完成中性線穿越。' : '。'} `);
+}
+
+function volumeProfileLevels(rows, lookback = 80, binCount = 24) {
+  const history = rows.slice(-lookback);
+  if (history.length < 20) return null;
+  const min = Math.min(...history.map(row => row.low));
+  const max = Math.max(...history.map(row => row.high));
+  const step = (max - min) / binCount;
+  if (!(step > 0)) return null;
+  const bins = Array.from({ length: binCount }, (_, index) => ({ lower: min + index * step, upper: min + (index + 1) * step, volume: 0 }));
+  history.forEach(row => {
+    const from = Math.max(0, Math.min(binCount - 1, Math.floor((row.low - min) / step)));
+    const to = Math.max(from, Math.min(binCount - 1, Math.floor((row.high - min) / step)));
+    const weight = Number(row.volume || 0) / Math.max(1, to - from + 1);
+    for (let index = from; index <= to; index += 1) bins[index].volume += weight;
+  });
+  const pocIndex = bins.reduce((best, bin, index) => bin.volume > bins[best].volume ? index : best, 0);
+  const total = bins.reduce((sum, bin) => sum + bin.volume, 0);
+  let lowIndex = pocIndex;
+  let highIndex = pocIndex;
+  let value = bins[pocIndex].volume;
+  while (value < total * 0.7 && (lowIndex > 0 || highIndex < binCount - 1)) {
+    const below = lowIndex > 0 ? bins[lowIndex - 1].volume : -1;
+    const above = highIndex < binCount - 1 ? bins[highIndex + 1].volume : -1;
+    if (above >= below) { highIndex += 1; value += bins[highIndex].volume; }
+    else { lowIndex -= 1; value += bins[lowIndex].volume; }
+  }
+  return { poc: (bins[pocIndex].lower + bins[pocIndex].upper) / 2, vah: bins[highIndex].upper, val: bins[lowIndex].lower, high: max, low: min };
+}
+
+function evaluateVolumeProfile(def, rows) {
+  const levels = volumeProfileLevels(rows);
+  if (!levels) return makeResult(def, 'unavailable', 'neutral', '成交分佈至少需要 20 根有效 K 線。');
+  const latest = rows.at(-1);
+  const previous = rows.at(-2);
+  const bullish = latest.close > levels.vah && previous.close <= levels.vah;
+  const bearish = latest.close < levels.val && previous.close >= levels.val;
+  const type = bullish ? 'bullish' : bearish ? 'bearish' : latest.close >= levels.poc ? 'bullish' : 'bearish';
+  const status = bullish || bearish ? 'confirmed' : Math.abs(latest.close - levels.poc) / latest.close < 0.02 ? 'watch' : 'none';
+  const target = type === 'bullish' ? levels.high : levels.low;
+  const stop = type === 'bullish' ? levels.vah - atrAt(rows) * 0.25 : levels.val + atrAt(rows) * 0.25;
+  const event = makeEvent(rows, rows.length - 1, type, status, bullish || bearish ? '價值區突破' : '等待 POC／價值區方向', { entryLower: type === 'bullish' ? levels.vah : levels.val, entryUpper: type === 'bullish' ? levels.vah : levels.val, stop, target }, levels);
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(levels.vah, 'VAH', 'negative', 2, 1), overlayLine(levels.poc, 'POC', 'warning', 2, 2), overlayLine(levels.val, 'VAL', 'positive', 2, 1), overlayLine(target, '下一節點', type === 'bullish' ? 'positive' : 'negative', 2, 1)],
+  }, `${bullish || bearish ? '價格已穿越估算價值區' : '價格仍在估算成交密集區附近'}；VAH ${levels.vah.toFixed(2)}、POC ${levels.poc.toFixed(2)}、VAL ${levels.val.toFixed(2)}。日 K 成交量是平均分配到當日高低價區間，不是交易所逐價成交資料。`);
+}
+
+function evaluateWyckoff(def, rows) {
+  if (rows.length < 75) return makeResult(def, 'unavailable', 'neutral', '簡化 Wyckoff 至少需要 75 根 K 線。');
+  const lookback = 60;
+  let setup = null;
+  for (let eventIndex = Math.max(lookback, rows.length - 16); eventIndex < rows.length; eventIndex += 1) {
+    const history = rows.slice(eventIndex - lookback, eventIndex);
+    const high = Math.max(...history.map(row => Number(row.high)));
+    const low = Math.min(...history.map(row => Number(row.low)));
+    const height = high - low;
+    if (!(height > 0)) continue;
+    const midpoint = (high + low) / 2;
+    const tolerance = Math.max(height * 0.08, atrAt(rows, eventIndex) * 0.5);
+    const upperTouches = history.filter(row => Number(row.high) >= high - tolerance).length;
+    const lowerTouches = history.filter(row => Number(row.low) <= low + tolerance).length;
+    const firstMean = average(history.slice(0, 20).map(row => Number(row.close)));
+    const lastMean = average(history.slice(-20).map(row => Number(row.close)));
+    const rangeStable = upperTouches >= 2 && lowerTouches >= 2 && Math.abs(lastMean - firstMean) <= height * 0.45;
+    if (!rangeStable) continue;
+    const eventRow = rows[eventIndex];
+    const stats = candleStats(eventRow);
+    const spring = eventRow.low < low * 0.995 && eventRow.close > low && stats.lowerWick > Math.max(stats.body * 1.2, atrAt(rows, eventIndex) * 0.2);
+    const utad = eventRow.high > high * 1.005 && eventRow.close < high && stats.upperWick > Math.max(stats.body * 1.2, atrAt(rows, eventIndex) * 0.2);
+    if (!spring && !utad) continue;
+    const type = spring ? 'bullish' : 'bearish';
+    let confirmationIndex = null;
+    let invalidated = false;
+    for (let cursor = eventIndex + 1; cursor < rows.length && cursor <= eventIndex + 10; cursor += 1) {
+      const candidate = rows[cursor];
+      if ((type === 'bullish' && candidate.close < eventRow.low) || (type === 'bearish' && candidate.close > eventRow.high)) {
+        invalidated = true;
+        break;
+      }
+      const crossedMidpoint = type === 'bullish' ? candidate.close > midpoint : candidate.close < midpoint;
+      if (crossedMidpoint && volumeRatioAt(rows, cursor) >= 1.2) {
+        confirmationIndex = cursor;
+        break;
+      }
+    }
+    if (confirmationIndex == null && rows.length - 1 > eventIndex + 10) continue;
+    if (!invalidated) setup = { type, eventIndex, confirmationIndex, high, low, midpoint, upperTouches, lowerTouches };
+  }
+  if (!setup) return makeResult(def, 'none', 'neutral', '近期沒有在可驗證的橫向區間中出現 Spring 或 UTAD，不分配多空方向。');
+  const { type, eventIndex, confirmationIndex, high, low, midpoint, upperTouches, lowerTouches } = setup;
+  const eventRow = rows[eventIndex];
+  const confirmed = confirmationIndex != null;
+  const status = confirmed ? 'confirmed' : 'watch';
+  const target = type === 'bullish' ? high : low;
+  const stop = type === 'bullish' ? eventRow.low - atrAt(rows, eventIndex) * 0.1 : eventRow.high + atrAt(rows, eventIndex) * 0.1;
+  const event = makeEvent(rows, confirmationIndex ?? eventIndex, type, status, confirmed ? `${type === 'bullish' ? 'Spring' : 'UTAD'} 後續確認` : `${type === 'bullish' ? 'Spring' : 'UTAD'} 待確認`, { entryLower: rows[confirmationIndex ?? eventIndex].close, entryUpper: rows[confirmationIndex ?? eventIndex].close, stop, target }, { upper: high, lower: low, midpoint, spring: type === 'bullish', utad: type === 'bearish', patternTime: eventRow.time, confirmationTime: confirmationIndex == null ? null : rows[confirmationIndex].time, upperTouches, lowerTouches });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(high, '交易區間上緣', 'negative', 2, 2), overlayLine(low, '交易區間下緣', 'positive', 2, 2), overlayLine(midpoint, '區間中軸', 'warning', 3, 1), overlayLine(stop, '型態失效', 'negative', 2, 1), overlayLine(target, 'SOS／SOW 目標', type === 'bullish' ? 'positive' : 'negative', 2, 1)],
+  }, `${type === 'bullish' ? 'Spring' : 'UTAD'} 出現於 ${eventRow.time}；區間上下緣各測試 ${upperTouches}／${lowerTouches} 次。${confirmed ? `後續收盤穿越中軸 ${midpoint.toFixed(2)} 且量能達標，訊號確認。` : `尚未收盤穿越中軸 ${midpoint.toFixed(2)} 並放量，僅列觀察。`}`);
+}
+
+function evaluateZScore(def, rows) {
+  const latest = rows.at(-1);
+  const previous = rows.at(-2);
+  const currentStats = rollingStats(rows, rows.length - 1, 20);
+  const previousStats = rollingStats(rows, rows.length - 2, 20);
+  if (!currentStats.deviation || !previousStats.deviation) return makeResult(def, 'unavailable', 'neutral', 'Z-Score 至少需要 20 根有效收盤。');
+  const z = (latest.close - currentStats.mean) / currentStats.deviation;
+  const previousZ = (previous.close - previousStats.mean) / previousStats.deviation;
+  const bullish = previousZ < -2 && z >= -2;
+  const bearish = previousZ > 2 && z <= 2;
+  const type = z <= -1.5 || bullish ? 'bullish' : z >= 1.5 || bearish ? 'bearish' : 'neutral';
+  const status = bullish || bearish ? 'confirmed' : Math.abs(z) >= 1.5 ? 'watch' : 'none';
+  const stop = type === 'bullish' ? currentStats.lower - atrAt(rows) : type === 'bearish' ? currentStats.upper + atrAt(rows) : null;
+  const event = makeEvent(rows, rows.length - 1, type, status, bullish || bearish ? 'Z-Score 回到統計容忍區' : '等待 Z-Score 極端與反向', { entryLower: latest.close, entryUpper: latest.close, stop, target: currentStats.mean }, { zScore: z, mean: currentStats.mean, deviation: currentStats.deviation });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(currentStats.upper, '+2σ', 'negative', 2, 1), overlayLine(currentStats.mean, '均值', 'accent', 2, 2), overlayLine(currentStats.lower, '-2σ', 'positive', 2, 1), overlayLine(stop, '統計失效', 'negative', 2, 1)],
+  }, `Z-Score ${z.toFixed(2)}；${bullish || bearish ? '已由極端區反向' : Math.abs(z) >= 1.5 ? '位於極端觀察區' : '接近均值'}，均值 ${currentStats.mean.toFixed(2)}。`);
+}
+
+function alignedPairRows(rows, pairRows) {
+  const map = new Map((pairRows || []).map(row => [String(row.time), Number(row.close)]));
+  return rows.map(row => ({ ...row, benchmarkClose: map.get(String(row.time)) })).filter(row => present(row.benchmarkClose) && row.benchmarkClose > 0);
+}
+
+function evaluatePairs(def, rows, context) {
+  const explicitPair = context?.pairRows?.length
+    ? { rows: context.pairRows, symbol: context.pairSymbol || '配對標的' }
+    : (context?.comparisonRows || []).find(item => Array.isArray(item?.rows) && item.rows.length);
+  if (!explicitPair) return makeResult(def, 'unavailable', 'neutral', '配對交易必須先在比較標的中選擇第二資產；市場指數不會自動被當成交易配對。');
+  const aligned = alignedPairRows(rows, explicitPair.rows);
+  if (aligned.length < 90) return makeResult(def, 'unavailable', 'neutral', '配對交易至少需要 90 個共同交易日。');
+  const sample = aligned.slice(-120);
+  const logPrimary = sample.map(row => Math.log(Number(row.close)));
+  const logPair = sample.map(row => Math.log(Number(row.benchmarkClose)));
+  const primaryReturns = logPrimary.slice(1).map((value, index) => value - logPrimary[index]);
+  const pairReturns = logPair.slice(1).map((value, index) => value - logPair[index]);
+  const returnCorrelation = correlation(primaryReturns, pairReturns);
+  const fit = linearFit(logPair, logPrimary);
+  if (!fit) return makeResult(def, 'unavailable', 'neutral', '配對資料變異不足，無法估算避險比率。');
+  const spreads = logPrimary.map((value, index) => value - (fit.alpha + fit.beta * logPair[index]));
+  const split = Math.floor(sample.length / 2);
+  const firstFit = linearFit(logPair.slice(0, split), logPrimary.slice(0, split));
+  const secondFit = linearFit(logPair.slice(split), logPrimary.slice(split));
+  const betaDrift = firstFit && secondFit ? Math.abs(firstFit.beta - secondFit.beta) / Math.max(Math.abs(fit.beta), 0.1) : Infinity;
+  const lagged = spreads.slice(0, -1);
+  const current = spreads.slice(1);
+  const rho = covariance(lagged, current) / Math.max(standardDeviation(lagged) ** 2, 1e-12);
+  const halfLife = rho > 0 && rho < 1 ? -Math.log(2) / Math.log(rho) : Infinity;
+  const stable = Math.abs(returnCorrelation) >= 0.6 && fit.beta > 0 && betaDrift <= 0.35 && rho > 0 && rho < 0.98 && halfLife <= 60;
+  if (!stable) return makeResult(def, 'none', 'neutral', `配對穩定性未通過：報酬相關 ${returnCorrelation.toFixed(2)}、β 漂移 ${(betaDrift * 100).toFixed(0)}%、半衰期 ${Number.isFinite(halfLife) ? halfLife.toFixed(1) : '無法估算'} 日。`);
+  const latest = spreads.at(-1);
+  const window = spreads.slice(-60);
+  const mean = average(window);
+  const deviation = standardDeviation(window);
+  if (!deviation) return makeResult(def, 'none', 'neutral', '兩資產價差目前沒有足夠波動可建立回歸訊號。');
+  const z = (latest - mean) / deviation;
+  const previousWindow = spreads.slice(-61, -1);
+  const previousZ = (spreads.at(-2) - average(previousWindow)) / Math.max(standardDeviation(previousWindow), 1e-8);
+  const bullish = previousZ < -2 && z >= -2;
+  const bearish = previousZ > 2 && z <= 2;
+  const type = z < 0 ? 'bullish' : 'bearish';
+  const status = bullish || bearish ? 'confirmed' : Math.abs(z) >= 1.5 ? 'watch' : 'none';
+  const ratioTarget = Math.exp(mean + fit.alpha + fit.beta * logPair.at(-1));
+  const risk = directionRisk(rows, type, rows.at(-1).close, type === 'bullish' ? rows.at(-1).close - atrAt(rows) : rows.at(-1).close + atrAt(rows));
+  const pairLabel = explicitPair.symbol || explicitPair.name || '配對標的';
+  const event = makeEvent(rows, rows.length - 1, type, status, bullish || bearish ? '穩定配對價差回到均值方向' : '觀察穩定配對價差偏離', { entryLower: rows.at(-1).close, entryUpper: rows.at(-1).close, stop: risk.stop, target: ratioTarget }, { zScore: z, spread: latest, benchmark: pairLabel, hedgeRatio: fit.beta, returnCorrelation, betaDrift, rho, halfLife });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(ratioTarget, '價差均值對應價', 'accent', 2, 2), overlayLine(risk.stop, '配對風險上限', 'negative', 2, 1)],
+  }, `${pairLabel} 配對價差 Z-Score ${z.toFixed(2)}；相關 ${returnCorrelation.toFixed(2)}、避險 β ${fit.beta.toFixed(2)}、半衰期 ${halfLife.toFixed(1)} 日；${bullish || bearish ? '回歸訊號已確認' : Math.abs(z) >= 1.5 ? '價差偏離觀察' : '價差接近均值'}。`);
+}
+
+function momentumScore(rows) {
+  if (!Array.isArray(rows) || rows.length < 61) return null;
+  const latest = Number(rows.at(-1)?.close);
+  const price20 = Number(rows.at(-21)?.close);
+  const price60 = Number(rows.at(-61)?.close);
+  if (![latest, price20, price60].every(value => Number.isFinite(value) && value > 0)) return null;
+  const return20 = latest / price20 - 1;
+  const return60 = latest / price60 - 1;
+  return { return20, return60, score: return20 * 0.4 + return60 * 0.6 };
+}
+
+function evaluateMomentumRanking(def, rows, context = {}) {
+  if (rows.length < 65) return makeResult(def, 'unavailable', 'neutral', '動能排名至少需要 65 根 K 線。');
+  const latest = rows.at(-1);
+  const own = momentumScore(rows);
+  const peers = (context?.comparisonRows || [])
+    .map(item => ({ symbol: item.symbol || item.name || '比較標的', ...momentumScore(item.rows) }))
+    .filter(item => present(item.score));
+  if (!own || peers.length < 2) return makeResult(def, 'unavailable', 'neutral', '動能排名至少需要目前標的加上兩個已選擇的比較標的。');
+  const universe = [{ symbol: context?.symbol || '目前標的', ...own }, ...peers].sort((left, right) => right.score - left.score);
+  const rank = universe.findIndex(item => item.symbol === (context?.symbol || '目前標的')) + 1;
+  const percentile = universe.length > 1 ? 1 - (rank - 1) / (universe.length - 1) : 0.5;
+  const type = percentile >= 0.7 ? 'bullish' : percentile <= 0.3 ? 'bearish' : 'neutral';
+  const status = type !== 'neutral' ? 'confirmed' : 'none';
+  const risk = type === 'neutral'
+    ? { stop: null, target: null }
+    : directionRisk(rows, type, latest.close, type === 'bullish' ? latest.close - atrAt(rows) * 1.5 : latest.close + atrAt(rows) * 1.5);
+  const event = makeEvent(rows, rows.length - 1, type, status, '比較標的動能排名更新', { entryLower: latest.close, entryUpper: latest.close, stop: type === 'neutral' ? null : risk.stop, target: type === 'neutral' ? null : risk.target }, { return20: own.return20, return60: own.return60, score: own.score, rankingAvailable: true, rank, universeSize: universe.length, percentile, universe });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(latest.ma20, 'MA20 動能基準', 'accent', 1, 2), overlayLine(risk.stop, '動能失效', 'negative', 2, 1), overlayLine(risk.target, '動能目標', type === 'bullish' ? 'positive' : 'negative', 2, 1)],
+  }, `20 日報酬 ${(own.return20 * 100).toFixed(1)}%、60 日報酬 ${(own.return60 * 100).toFixed(1)}%、動能分數 ${(own.score * 100).toFixed(1)}%；在 ${universe.length} 檔中排名 ${rank}。`);
+}
+
+function evaluateAtrBreakout(def, rows) {
+  const range = rangeLevels(rows, 20);
+  const latest = rows.at(-1);
+  if (!range || !latest) return makeResult(def, 'unavailable', 'neutral', 'ATR 突破至少需要 25 根 K 線。');
+  const atr = atrAt(rows);
+  const tr = trueRange(rows, rows.length - 1);
+  const bullish = latest.close > range.high * 1.001;
+  const bearish = latest.close < range.low * 0.999;
+  const expanded = tr > atr * 1.2;
+  const type = bullish ? 'bullish' : bearish ? 'bearish' : 'neutral';
+  const status = (bullish || bearish) && expanded ? 'confirmed' : expanded || bullish || bearish ? 'watch' : 'none';
+  const entry = bullish ? range.high : bearish ? range.low : null;
+  const risk = type === 'neutral'
+    ? { stop: null, target: null }
+    : directionRisk(rows, type, entry, bullish ? range.low : range.high);
+  const target = bullish ? range.high + range.height : bearish ? range.low - range.height : null;
+  const event = makeEvent(rows, rows.length - 1, type, status, (bullish || bearish) && expanded ? 'ATR 擴張並突破區間' : '等待 ATR 擴張／區間突破', { entryLower: entry, entryUpper: entry, stop: risk.stop, target }, { atr, trueRange: tr, expansionRatio: atr ? tr / atr : 0, priceBreakout: Boolean(bullish || bearish) });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(range.high, 'ATR 突破上緣', 'negative', 2, 1), overlayLine(range.low, 'ATR 突破下緣', 'positive', 2, 1), overlayLine(target, 'ATR 測幅', type === 'bearish' ? 'negative' : 'positive', 2, 1)],
+  }, `TR／ATR ${atr ? (tr / atr).toFixed(2) : '—'} 倍；${(bullish || bearish) && expanded ? '波動突破已確認' : expanded ? '波動已擴張，等待方向' : '尚未出現明顯波動擴張'}。`);
+}
+
+function evaluateVolatilityContraction(def, rows) {
+  const values = bollingerSeries(rows);
+  const latest = values.at(-1);
+  const previous = values.at(-2);
+  const latestRow = rows.at(-1);
+  if (!latest || latest.width == null) return makeResult(def, 'unavailable', 'neutral', '波動率資料不足。');
+  const widths = values.slice(-60).map(item => item.width).filter(present);
+  const percentile = widths.length ? widths.filter(value => value <= latest.width).length / widths.length : 1;
+  const contracted = percentile <= 0.25;
+  const expanded = previous?.width != null && latest.width > previous.width * 1.15;
+  const recentlyContracted = values.slice(-6, -1).some((item, offset, recent) => {
+    if (!present(item.width)) return false;
+    const history = values.slice(Math.max(0, values.length - 65 + offset), values.length - 5 + offset).map(point => point.width).filter(present);
+    const rank = history.length ? history.filter(value => value <= item.width).length / history.length : 1;
+    return rank <= 0.25;
+  });
+  const priorRows = rows.slice(-21, -1);
+  const rangeHigh = Math.max(...priorRows.map(row => Number(row.high)));
+  const rangeLow = Math.min(...priorRows.map(row => Number(row.low)));
+  const bullishBreakout = expanded && latestRow.close > rangeHigh * 1.001;
+  const bearishBreakout = expanded && latestRow.close < rangeLow * 0.999;
+  const type = bullishBreakout ? 'bullish' : bearishBreakout ? 'bearish' : 'neutral';
+  const status = (recentlyContracted || contracted) && (bullishBreakout || bearishBreakout) ? 'confirmed' : contracted || recentlyContracted ? 'watch' : 'none';
+  const risk = type === 'neutral' ? { stop: null, target: null } : directionRisk(rows, type, latestRow.close, type === 'bullish' ? rangeLow : rangeHigh);
+  const event = makeEvent(rows, rows.length - 1, type, status, status === 'confirmed' ? '布林帶寬收縮後完成方向突破' : '布林帶寬收縮，等待擴張與區間突破', { entryLower: type === 'bullish' ? rangeHigh : type === 'bearish' ? rangeLow : null, entryUpper: type === 'bullish' ? rangeHigh : type === 'bearish' ? rangeLow : null, stop: risk.stop, target: risk.target }, { width: latest.width, percentile, expansion: expanded, recentlyContracted, rangeHigh, rangeLow, bullishBreakout, bearishBreakout });
+  return resultFromEvent(def, event, {
+    priceLines: [overlayLine(latest.upper, '擴張上軌', 'negative', 2, 1), overlayLine(latest.mean, '波動均值', 'warning', 1, 1), overlayLine(latest.lower, '擴張下軌', 'positive', 2, 1), overlayLine(risk.stop, '波動失效', 'negative', 2, 1), overlayLine(risk.target, '波動目標', type === 'bullish' ? 'positive' : 'negative', 2, 1)],
+  }, `布林帶寬 ${(latest.width * 100).toFixed(2)}%、近 60 根分位 ${(percentile * 100).toFixed(0)}%；${status === 'confirmed' ? `收縮後${type === 'bullish' ? '向上' : '向下'}突破確認` : contracted || recentlyContracted ? '低波動收縮成立，但尚未確認方向' : '未處於低波動區'}。`);
+}
+
+const STRATEGY_EVALUATORS = {
+  'trend-ma-swing': evaluateMaSwing,
+  'pattern-double-top-bottom': evaluateDoublePattern,
+  'pattern-head-shoulders': evaluateHeadShoulders,
+  'pattern-triangle-flag': evaluateContraction,
+  'pattern-wedge': evaluateContraction,
+  'pattern-range': evaluateRangePattern,
+  'pattern-cup-handle': evaluateCupHandle,
+  'trend-ma-cross': evaluateMovingAverage,
+  'trend-month-quarter-ma': evaluateMonthQuarterTrend,
+  'trend-market-structure': evaluateMarketStructure,
+  'trend-donchian': evaluateDonchian,
+  'trend-adx': evaluateAdx,
+  'trend-ichimoku': evaluateIchimoku,
+  'trend-supertrend': evaluateSupertrend,
+  'indicator-macd-cross': evaluateMacdCross,
+  'indicator-kd-cross': evaluateKDCross,
+  'indicator-bollinger-squeeze': evaluateBollingerSqueeze,
+  'indicator-bollinger-reversion': evaluateBollingerReversion,
+  'indicator-rsi-regime': evaluateRsiRegime,
+  'price-sr-flip': evaluateSrFlip,
+  'price-bos-choch': evaluateStructure,
+  'price-liquidity-sweep': evaluateLiquiditySweep,
+  'price-order-block': evaluateOrderBlock,
+  'price-fvg-retest': evaluateFvg,
+  'price-candlestick': evaluateCandlestick,
+  'volume-vwap': evaluateVwap,
+  'volume-breakout': evaluateVolumeBreakout,
+  'volume-obv-divergence': evaluateObvDivergence,
+  'volume-mfi-divergence': evaluateMfiDivergence,
+  'volume-cmf-divergence': evaluateCmfDivergence,
+  'volume-mfi-cmf': evaluateMoneyFlow,
+  'volume-profile': evaluateVolumeProfile,
+  'volume-wyckoff': evaluateWyckoff,
+  'stats-zscore': evaluateZScore,
+  'stats-pairs': evaluatePairs,
+  'stats-momentum-ranking': evaluateMomentumRanking,
+  'stats-atr-breakout': evaluateAtrBreakout,
+  'stats-volatility-contraction': evaluateVolatilityContraction,
+};
+
+export function evaluateStrategyLibrary(rows, context = {}, options = {}) {
+  if (!Array.isArray(rows) || !rows.length) return STRATEGY_LIBRARY.map(def => makeResult(def, 'unavailable', 'neutral', '尚未取得 K 線資料。'));
+  return STRATEGY_LIBRARY.map(def => {
+    const evaluator = STRATEGY_EVALUATORS[def.key];
+    try {
+      const result = evaluator ? evaluator(def, rows, context, options) : makeResult(def, 'unavailable', 'neutral', '此策略尚未配置計算引擎。');
+      const lifecycleResult = applyPatternLifecycle(def, result, rows);
+      return { ...lifecycleResult, key: def.key, label: def.label, category: def.category, computed: true };
+    } catch (error) {
+      return makeResult(def, 'unavailable', 'neutral', `計算資料不足：${error?.message || '無法完成此策略計算。'}`);
+    }
+  });
+}

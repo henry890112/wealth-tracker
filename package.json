@@ -7,7 +7,10 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "sync:signal-engine": "node scripts/sync-signal-analysis-engine.mjs"
+    "sync:signal-engine": "node scripts/sync-signal-analysis-engine.mjs",
+    "test:strategies": "node --no-warnings --test tests/strategyEngines.test.mjs",
+    "test:trade-plans": "node --no-warnings --test tests/tradePlans.test.mjs",
+    "test:market-overview": "node --no-warnings --test tests/marketOverview.test.mjs"
   },
   "dependencies": {
     "@expo/ngrok": "^4.1.3",

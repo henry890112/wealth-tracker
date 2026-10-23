@@ -1,6 +1,6 @@
 # 玉山唯讀橋接層
 
-這個服務只提供 `GET /health`、`GET /v1/holdings` 與 `GET /v1/balance`，沒有任何下單、取消或修改券商資料的端點。`/v1/balance` 回傳可用餘額、交割餘額與股票預收款。
+這個服務只提供 `GET /health`、`GET /v1/holdings`、`GET /v1/balance` 與 `GET /v1/transactions?duration=3m`，沒有任何下單、取消或修改券商資料的端點。`/v1/balance` 回傳可用餘額、交割餘額與股票預收款；`/v1/transactions` 回傳唯讀的近期成交、手續費與交易稅。
 
 1. 從玉山官網下載 Node.js 的 `esun-trade` 與 `esun-marketdata` `.tgz`，分別放到 `vendor/esun-trade.tgz`、`vendor/esun-marketdata.tgz`。
 2. 複製 `.env.example` 為私有 `.env`，設定 `ESUN_CONFIG_PATH` 到官方 `config.ini` 的絕對路徑；`.p12` 必須留在同一私有目錄。

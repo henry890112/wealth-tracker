@@ -249,14 +249,14 @@ export default function ReceivablesScreen() {
                       {categoryTotal.toLocaleString('zh-TW', { maximumFractionDigits: 0 })}
                     </Text>
                   </View>
-                  {group.items.map(item => {
+                  {group.items.map((item, itemIndex) => {
                     const convertedAmount = item.currency === baseCurrency
                       ? Number(item.amount)
                       : Number(item.amount) * (rates[item.currency] || 1);
                     const freqLabel = FREQUENCIES.find(f => f.key === item.frequency)?.label;
                     return (
                       <TouchableOpacity
-                        key={item.id}
+                        key={`${group.category}-${item.id}-${itemIndex}`}
                         style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}
                         onPress={() => openEdit(item)}
                         onLongPress={() => handleDelete(item)}
@@ -297,7 +297,7 @@ export default function ReceivablesScreen() {
         onRequestClose={() => setModalVisible(false)}
       >
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior={Platform.OS === 'web' ? undefined : Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.modalOverlay}
         >
           <View style={[styles.modalSheet, { backgroundColor: c.card }]}>

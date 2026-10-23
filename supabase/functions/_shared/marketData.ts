@@ -123,14 +123,13 @@ function sessionFromYahoo(state: unknown) {
 }
 
 function yahooLooksLive(timestamp: number, market: MarketCode, state: string) {
-  if (state === "REGULAR") return true;
-  if (state) return false;
   const time = new Date(timestamp * 1000);
   const age = Date.now() - time.getTime();
+  if (state && state !== "REGULAR") return false;
   return marketClock(market, time).date === marketClock(market).date
     && marketIsOpen(market)
     && age >= -120_000
-    && age <= 10 * 60_000;
+    && age <= 3 * 60_000;
 }
 
 async function twseQuote(symbol: string): Promise<UnifiedQuote | null> {
@@ -141,10 +140,14 @@ async function twseQuote(symbol: string): Promise<UnifiedQuote | null> {
         { headers: { Referer: "https://mis.twse.com.tw/stock/fibest.html" } },
       );
       const item = payload?.msgArray?.[0];
-      const price = number(item?.z);
+      // MIS may put the latest trade only in trade.z while the legacy z field
+      // is "-". This is common for OTC symbols between individual trades.
+      const directPrice = number(item?.z);
+      const tradePrice = number(item?.trade?.z);
+      const price = directPrice || tradePrice;
       if (!(price > 0)) continue;
       const rawDate = String(item?.d || "");
-      const rawTime = String(item?.t || "");
+      const rawTime = String((directPrice > 0 ? item?.t : item?.trade?.t) || item?.t || "");
       const candleDate = /^\d{8}$/.test(rawDate)
         ? `${rawDate.slice(0, 4)}-${rawDate.slice(4, 6)}-${rawDate.slice(6, 8)}`
         : marketClock("TW").date;
@@ -192,6 +195,7 @@ async function yahooQuote(symbol: string, market: "TW" | "US"): Promise<UnifiedQ
         const state = String(meta.marketState || "").toUpperCase();
         const live = yahooLooksLive(timestamp, market, state);
         const candleDate = marketClock(market, new Date(timestamp * 1000)).date;
+        const stale = marketIsOpen(market) && !live;
         const bars = timestamps.map((time, index) => ({
           time,
           open: number(values.open?.[index]),
@@ -212,8 +216,8 @@ async function yahooQuote(symbol: string, market: "TW" | "US"): Promise<UnifiedQ
           previousClose: previousClose || undefined,
           source: "Yahoo Finance", sourceTime: new Date(timestamp * 1000).toISOString(), candleDate,
           session: sessionFromYahoo(state),
-          quoteStatus: live ? "intraday" : "official_close",
-          isStale: live && Date.now() - timestamp * 1000 > 10 * 60_000,
+          quoteStatus: live ? "intraday" : stale ? "stale" : "official_close",
+          isStale: stale,
         });
       } catch {
         // Try the next host or Taiwan suffix.
@@ -351,9 +355,11 @@ export async function fetchUnifiedQuote(symbolValue: string, marketValue: unknow
       || await finmindClose(symbol).catch(() => null);
     if (result) return result;
   } else {
-    const result = await yahooQuote(symbol, "US").catch(() => null)
-      || await nasdaqQuote(symbol).catch(() => null);
-    if (result) return result;
+    const yahoo = await yahooQuote(symbol, "US").catch(() => null);
+    if (yahoo && !yahoo.isStale) return yahoo;
+    const nasdaq = await nasdaqQuote(symbol).catch(() => null);
+    if (nasdaq) return nasdaq;
+    if (yahoo) return yahoo;
   }
   throw new Error(`Unable to fetch ${market}:${symbol}`);
 }

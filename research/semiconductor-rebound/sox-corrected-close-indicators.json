@@ -1,0 +1,22 @@
+{
+  "last": {
+    "close": 10731.9775390625,
+    "ma5": 11194.995398437499,
+    "ma20": 12234.830392578126,
+    "ma60": 11971.62266341146,
+    "ma200": 10674.085038769532,
+    "rsi": 31.321078439099125,
+    "dailyReturn": -0.06723553316287945
+  },
+  "nextMA5": 11209.42173828125,
+  "sources": {
+    "2026-10-21": {
+      "close": 11505.56,
+      "sources": [
+        "https://indexes.nasdaq.com/Index/Overview/SOX",
+        "https://fred.stlouisfed.org/data/NASDAQSOX"
+      ],
+      "note": "Official previous close and FRED Nasdaq daily observation agree to two decimals. No OHLC inferred."
+    }
+  }
+}

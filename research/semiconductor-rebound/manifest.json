@@ -1,0 +1,206 @@
+{
+  "fetchedAt": "2026-10-22T20:14:35.617Z",
+  "provider": "Yahoo Finance chart; same provider as WealthTracker market-history",
+  "symbols": [
+    {
+      "symbol": "^SOX",
+      "file": "_SOX.json",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/%5ESOX?range=10y&interval=1d&events=div%2Csplits",
+      "sha256": "bc3b7cbc07d7e7fc14701b208a4c59548b55e202e10a7ef0af4676e9af495c47",
+      "rows": 2513,
+      "first": "2016-10-24T13:30:00.000Z",
+      "last": "2026-10-22T13:30:00.000Z",
+      "timezone": "America/New_York"
+    },
+    {
+      "symbol": "SMH",
+      "file": "SMH.json",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/SMH?range=10y&interval=1d&events=div%2Csplits",
+      "sha256": "9261a02c0d380e7e0dd65bcc18d367f41831aaa0555b7679989c851e3442598b",
+      "rows": 2513,
+      "first": "2016-10-24T13:30:00.000Z",
+      "last": "2026-10-22T13:30:00.000Z",
+      "timezone": "America/New_York"
+    },
+    {
+      "symbol": "SOXX",
+      "file": "SOXX.json",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/SOXX?range=10y&interval=1d&events=div%2Csplits",
+      "sha256": "14134a8a9201d3b6732035ee4328b328d420eeebeb2d65dde34be9ad243848f0",
+      "rows": 2513,
+      "first": "2016-10-24T13:30:00.000Z",
+      "last": "2026-10-22T13:30:00.000Z",
+      "timezone": "America/New_York"
+    },
+    {
+      "symbol": "SPY",
+      "file": "SPY.json",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/SPY?range=10y&interval=1d&events=div%2Csplits",
+      "sha256": "0a997db441ccea01b8c173f7f7eac4f657ea4e1c3f8278615d0d1f32cad14dd0",
+      "rows": 2513,
+      "first": "2016-10-24T13:30:00.000Z",
+      "last": "2026-10-22T13:30:00.000Z",
+      "timezone": "America/New_York"
+    },
+    {
+      "symbol": "QQQ",
+      "file": "QQQ.json",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/QQQ?range=10y&interval=1d&events=div%2Csplits",
+      "sha256": "9665ea1fc7a1553ae3afc75e9c349339eb4a87fb8b3426e5d0c3b99a5484ea54",
+      "rows": 2513,
+      "first": "2016-10-24T13:30:00.000Z",
+      "last": "2026-10-22T13:30:00.000Z",
+      "timezone": "America/New_York"
+    },
+    {
+      "symbol": "^VIX",
+      "file": "_VIX.json",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?range=10y&interval=1d&events=div%2Csplits",
+      "sha256": "74af5e0ef0aa16fdd212fb7a277a0ade89f2d4c13410b671f316f6a79053d7d8",
+      "rows": 2609,
+      "first": "2016-10-24T07:00:00.000Z",
+      "last": "2026-10-22T07:00:00.000Z",
+      "timezone": "America/Chicago"
+    },
+    {
+      "symbol": "KLAC",
+      "file": "KLAC.json",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/KLAC?range=10y&interval=1d&events=div%2Csplits",
+      "sha256": "408949f091963ca12ad5c1ae7bc9e96e0255269a2ffd9c62ed2dd98d94df9057",
+      "rows": 2513,
+      "first": "2016-10-24T13:30:00.000Z",
+      "last": "2026-10-22T13:30:00.000Z",
+      "timezone": "America/New_York"
+    },
+    {
+      "symbol": "AVGO",
+      "file": "AVGO.json",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/AVGO?range=10y&interval=1d&events=div%2Csplits",
+      "sha256": "2569eb534a6c54d7f6363622d10502912288f5a4c0a1e7f77f5a9fd0c60034c8",
+      "rows": 2513,
+      "first": "2016-10-24T13:30:00.000Z",
+      "last": "2026-10-22T13:30:00.000Z",
+      "timezone": "America/New_York"
+    },
+    {
+      "symbol": "QCOM",
+      "file": "QCOM.json",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/QCOM?range=10y&interval=1d&events=div%2Csplits",
+      "sha256": "a5ca9c0414d87e931f9ca2b5c8ac3b00d2b9e09a68126327c33d09fa4e762f82",
+      "rows": 2513,
+      "first": "2016-10-24T13:30:00.000Z",
+      "last": "2026-10-22T13:30:00.000Z",
+      "timezone": "America/New_York"
+    },
+    {
+      "symbol": "DRAM",
+      "file": "DRAM.json",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/DRAM?range=10y&interval=1d&events=div%2Csplits",
+      "sha256": "2e3ec7480a7e1dea6f5c84159f93567059e3158a539a3e079534012d6a9d6601",
+      "rows": 141,
+      "first": "2026-04-02T13:30:00.000Z",
+      "last": "2026-10-22T13:30:00.000Z",
+      "timezone": "America/New_York"
+    },
+    {
+      "symbol": "CBRS",
+      "file": "CBRS.json",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/CBRS?range=10y&interval=1d&events=div%2Csplits",
+      "sha256": "6cac76ec5a9dab7f4dede8623ba39ae297dd26d7319c45fe2377db434f1e7942",
+      "rows": 112,
+      "first": "2026-05-14T13:30:00.000Z",
+      "last": "2026-10-22T13:30:00.000Z",
+      "timezone": "America/New_York"
+    },
+    {
+      "symbol": "AAOI",
+      "file": "AAOI.json",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/AAOI?range=10y&interval=1d&events=div%2Csplits",
+      "sha256": "7790a577ad1c61c04cbc42fb57a948d0fe6b29b7d4ca775f6be6f9a57bfc33f4",
+      "rows": 2513,
+      "first": "2016-10-24T13:30:00.000Z",
+      "last": "2026-10-22T13:30:00.000Z",
+      "timezone": "America/New_York"
+    },
+    {
+      "symbol": "2330.TW",
+      "file": "2330.TW.json",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/2330.TW?range=10y&interval=1d&events=div%2Csplits",
+      "sha256": "c97967da0e403c462b9f0d55d1f2de953d9b8f37afe7a15770db1f5f5ab8cb19",
+      "rows": 2433,
+      "first": "2016-10-24T01:00:00.000Z",
+      "last": "2026-10-22T01:00:00.000Z",
+      "timezone": "Asia/Taipei"
+    },
+    {
+      "symbol": "3711.TW",
+      "file": "3711.TW.json",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/3711.TW?range=10y&interval=1d&events=div%2Csplits",
+      "sha256": "cb8b6e040cd751d4bdce6fea697e07b43175d7225f8c83b27cd773b67f673cac",
+      "rows": 2433,
+      "first": "2016-10-24T01:00:00.000Z",
+      "last": "2026-10-22T01:00:00.000Z",
+      "timezone": "Asia/Taipei"
+    },
+    {
+      "symbol": "2454.TW",
+      "file": "2454.TW.json",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/2454.TW?range=10y&interval=1d&events=div%2Csplits",
+      "sha256": "17dc2aa2320af9bf23eb023ea8221e1459d914e98e044387d752f4599f72f876",
+      "rows": 2433,
+      "first": "2016-10-24T01:00:00.000Z",
+      "last": "2026-10-22T01:00:00.000Z",
+      "timezone": "Asia/Taipei"
+    },
+    {
+      "symbol": "2337.TW",
+      "file": "2337.TW.json",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/2337.TW?range=10y&interval=1d&events=div%2Csplits",
+      "sha256": "ed7bbdaa9ed4ac4057c599b231b4e46c8f29febc2bcb519b1f0cb93608e2e175",
+      "rows": 2433,
+      "first": "2016-10-24T01:00:00.000Z",
+      "last": "2026-10-22T01:00:00.000Z",
+      "timezone": "Asia/Taipei"
+    },
+    {
+      "symbol": "5347.TWO",
+      "file": "5347.TWO.json",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/5347.TWO?range=10y&interval=1d&events=div%2Csplits",
+      "sha256": "5755126b6a0aa0c8f31c393a7a647cae7fb35b7a5403df2cd3fbefa012a43d5c",
+      "rows": 2433,
+      "first": "2016-10-24T01:00:00.000Z",
+      "last": "2026-10-22T01:00:00.000Z",
+      "timezone": "Asia/Taipei"
+    },
+    {
+      "symbol": "6291.TWO",
+      "file": "6291.TWO.json",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/6291.TWO?range=10y&interval=1d&events=div%2Csplits",
+      "sha256": "494bc7bd98c9e3e45a1f94f9b98155d584af3195f502de5711d24438d105e6a0",
+      "rows": 2433,
+      "first": "2016-10-24T01:00:00.000Z",
+      "last": "2026-10-22T01:00:00.000Z",
+      "timezone": "Asia/Taipei"
+    },
+    {
+      "symbol": "6488.TWO",
+      "file": "6488.TWO.json",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/6488.TWO?range=10y&interval=1d&events=div%2Csplits",
+      "sha256": "5af0a01abb76eb62592ffcd0d66b863323f4c3269a6eed50c0f973fdeef52faa",
+      "rows": 2433,
+      "first": "2016-10-24T01:00:00.000Z",
+      "last": "2026-10-22T01:00:00.000Z",
+      "timezone": "Asia/Taipei"
+    },
+    {
+      "symbol": "2379.TW",
+      "file": "2379.TW.json",
+      "url": "https://query1.finance.yahoo.com/v8/finance/chart/2379.TW?range=10y&interval=1d&events=div%2Csplits",
+      "sha256": "bc6b4ecf73e25953f98f1cbd75abae9e6950a95ff967ecf6af2c11528c61f77c",
+      "rows": 2433,
+      "first": "2016-10-24T01:00:00.000Z",
+      "last": "2026-10-22T01:00:00.000Z",
+      "timezone": "Asia/Taipei"
+    }
+  ]
+}

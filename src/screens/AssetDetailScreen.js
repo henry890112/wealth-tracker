@@ -19,17 +19,22 @@ import {
 } from 'react-native';
 import { Svg, Polyline, Text as SvgText } from 'react-native-svg';
 import { useRoute, useNavigation } from '@react-navigation/native';
-import { Trash2, Plus, Edit2, BarChart3, Maximize2, RefreshCw } from 'lucide-react-native';
+import { Trash2, Plus, Edit2, BarChart3, Maximize2, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
-import { convertToBaseCurrency, fetchExchangeRatesBatch, fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice, fetchTWStockInstitutional, fetchTWStockMargin, fetchTWStockHoldingSharesPer, fetchTWStockMarginUsage, fetchHistoricalPrices, fetchAssetNews } from '../services/api';
+import { convertToBaseCurrency, fetchExchangeRatesBatch, fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice, fetchTWStockHoldingSharesPer, fetchHistoricalPrices, fetchAssetNews, fetchLatestMarketQuote } from '../services/api';
 import { buildTechnicalsText } from '../services/indicators';
 import { analyzeAsset } from '../services/ai';
 import { getAssetCurrency } from '../services/portfolio';
 import { useTheme } from '../lib/ThemeContext';
-import { describeQuote, getQuoteStatusColor } from '../lib/quoteMetadata';
+import { describeQuote, formatQuoteTime, getQuoteStatusColor } from '../lib/quoteMetadata';
+import { estimateHoldingPriceReturnPct, resolveAssetAIPrice } from '../utils/assetAIPrice';
 import TechnicalAnalysisChart from '../components/TechnicalAnalysisChart';
 import MarkdownText from '../components/MarkdownText';
 import { analyzeTechnicalData, fetchMarketTechnicalContext } from '../services/technicalAnalysis';
+import { calculateTradePlan, getTradePlanDisplayStatus } from '../services/tradePlanCalculator';
+import { loadTradePlanSettings, loadTradePlanStop, saveTradePlanStop, closeTradePlanStop } from '../services/tradePlans';
+import { getTransactionSourceLabel } from '../lib/transactionReconciliation';
+import { calculateFifoPositionAccounting } from '../lib/positionAccounting';
 
 const CATEGORY_LABELS = {
   liquid: '流動資產',
@@ -64,130 +69,10 @@ const isTWStock = (asset) =>
   /taiwan/i.test(asset.market_type || '') ||
   /^\d+$/.test(asset.symbol || '');
 
-// ── 籌碼分析元件 ──────────────────────────────────────────────────────────────
-const InstitutionalSection = ({ chipData, marginData, loading, colors }) => {
-  const cardBg = colors?.card || '#1e2235';
-  const textPrimary = colors?.text || '#f1f5f9';
-  const textSecondary = colors?.textSub || '#94a3b8';
-
-  if (loading) {
-    return (
-      <View style={instStyles.section}>
-        <Text style={[instStyles.sectionTitle, { color: textPrimary }]}>籌碼分析</Text>
-        <ActivityIndicator size="small" color={colors?.accent || '#8B8CF6'} style={{ marginTop: 16 }} />
-      </View>
-    );
-  }
-
-  if (!chipData && !marginData) {
-    return (
-      <View style={[instStyles.section, { backgroundColor: cardBg }]}>
-        <Text style={[instStyles.sectionTitle, { color: textPrimary }]}>籌碼分析</Text>
-        <Text style={[instStyles.subTitle, { color: textSecondary, marginTop: 8 }]}>暫無資料</Text>
-      </View>
-    );
-  }
-
-  const rows = chipData ? [
-    { label: '外資', values: chipData.foreign },
-    { label: '投信', values: chipData.trust },
-    { label: '自營', values: chipData.dealerSelf || chipData.dealer },
-  ] : [];
-
-  const sum = (arr) => arr.reduce((a, b) => a + b, 0);
-  const sums = rows.map(r => sum(r.values.slice(-5)));
-  const maxAbs = Math.max(...sums.map(Math.abs), 1);
-
-  const latestDate = chipData?.dates?.[chipData.dates.length - 1] || marginData?.date || '';
-
-  return (
-    <View style={[instStyles.section, { backgroundColor: cardBg }]}>
-      <View style={instStyles.headerRow}>
-        <Text style={[instStyles.sectionTitle, { color: textPrimary }]}>籌碼分析</Text>
-        {latestDate ? <Text style={[instStyles.dateText, { color: textSecondary }]}>{latestDate}</Text> : null}
-      </View>
-
-      {chipData && (
-        <>
-          <Text style={[instStyles.subTitle, { color: textSecondary }]}>法人方向（外資＋投信，單位：張）</Text>
-          <View style={instStyles.periodRow}>
-            {[1, 3, 5, 20].map(days => {
-              const combined = [...(chipData.foreign || [])].map((value, index) => Number(value || 0) + Number(chipData.trust?.[index] || 0));
-              const total = combined.slice(-days).reduce((sumValue, value) => sumValue + value, 0);
-              const directionColor = total > 0 ? colors.positive : total < 0 ? colors.negative : textSecondary;
-              return <View key={days} style={[instStyles.periodCell, { backgroundColor: colors.cardAlt, borderColor: colors.borderLight }]}><Text style={[instStyles.periodLabel, { color: textSecondary }]}>{days} 日</Text><Text style={[instStyles.periodValue, { color: directionColor }]}>{total > 0 ? '+' : ''}{Math.round(total).toLocaleString()}</Text></View>;
-            })}
-          </View>
-          <Text style={[instStyles.subTitle, { color: textSecondary }]}>最近 5 日分項加總</Text>
-          {rows.map((row, i) => {
-            const total = sums[i];
-            const isPos = total >= 0;
-            const barColor = isPos ? colors.positive : colors.negative;
-            const barFrac = Math.abs(total) / maxAbs;
-            const sign = isPos ? '+' : '';
-            return (
-              <View key={row.label} style={instStyles.barRow}>
-                <Text style={[instStyles.barLabel, { color: textSecondary }]}>{row.label}</Text>
-                <View style={instStyles.barTrack}>
-                  <View style={[instStyles.barFill, { width: `${Math.round(barFrac * 60)}%`, backgroundColor: barColor }]} />
-                </View>
-                <Text style={[instStyles.barValue, { color: barColor }]}>
-                  {sign}{Math.round(total).toLocaleString()} 張
-                </Text>
-              </View>
-            );
-          })}
-          {chipData.dealerHedging && <Text style={[instStyles.hedgingNote, { color: textSecondary }]}>自營商數字僅含自行買賣；避險部位另計，不作多空方向確認。</Text>}
-        </>
-      )}
-
-      {marginData && (
-        <View style={instStyles.marginRow}>
-          <View style={instStyles.marginCell}>
-            <Text style={[instStyles.marginLabel, { color: textSecondary }]}>融資餘額</Text>
-            <Text style={[instStyles.marginValue, { color: textPrimary }]}>{marginData.marginBalance.toLocaleString()} 張</Text>
-          </View>
-          <View style={instStyles.marginCell}>
-            <Text style={[instStyles.marginLabel, { color: textSecondary }]}>融券餘額</Text>
-            <Text style={[instStyles.marginValue, { color: textPrimary }]}>{marginData.shortBalance.toLocaleString()} 張</Text>
-          </View>
-          <View style={instStyles.marginCell}>
-            <Text style={[instStyles.marginLabel, { color: textSecondary }]}>資券相抵</Text>
-            <Text style={[instStyles.marginValue, { color: textPrimary }]}>{marginData.offsetBalance.toLocaleString()} 張</Text>
-          </View>
-        </View>
-      )}
-    </View>
-  );
-};
-
-const instStyles = StyleSheet.create({
-  section: { borderRadius: 14, padding: 16, marginHorizontal: 16, marginBottom: 14 },
-  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  sectionTitle: { fontSize: 16, fontWeight: '600' },
-  dateText: { fontSize: 12 },
-  subTitle: { fontSize: 12, marginBottom: 10 },
-  periodRow: { flexDirection: 'row', gap: 7, marginBottom: 14 },
-  periodCell: { flex: 1, borderWidth: 1, borderRadius: 10, paddingVertical: 8, paddingHorizontal: 9 },
-  periodLabel: { fontSize: 10 },
-  periodValue: { fontSize: 13, fontWeight: '800', marginTop: 3 },
-  barRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  barLabel: { width: 32, fontSize: 13 },
-  barTrack: { flex: 1, height: 10, backgroundColor: 'rgba(255,255,255,0.07)', borderRadius: 5, marginHorizontal: 8, overflow: 'hidden' },
-  barFill: { height: 10, borderRadius: 5 },
-  barValue: { width: 90, textAlign: 'right', fontSize: 12, fontWeight: '500' },
-  hedgingNote: { fontSize: 10, lineHeight: 15, marginTop: 4 },
-  marginRow: { flexDirection: 'row', marginTop: 14, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(255,255,255,0.1)' },
-  marginCell: { flex: 1, alignItems: 'center' },
-  marginLabel: { fontSize: 11, marginBottom: 4 },
-  marginValue: { fontSize: 13, fontWeight: '600' },
-});
-
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-const ChipLineChart = ({ data, label, unit, color, colors }) => {
+const ChipLineChart = ({ data, label, unit, color, colors, expanded = true, onToggle }) => {
   const cardBg = colors?.card || '#1e2235';
-  const textPrimary = colors?.text || '#f1f5f9';
   const textSecondary = colors?.textSub || '#94a3b8';
 
   if (!data || data.length < 2) return null;
@@ -211,12 +96,19 @@ const ChipLineChart = ({ data, label, unit, color, colors }) => {
 
   return (
     <View style={[chipLineStyles.container, { backgroundColor: cardBg }]}>
-      <View style={chipLineStyles.headerRow}>
+      <TouchableOpacity
+        style={chipLineStyles.headerRow}
+        onPress={onToggle}
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+      >
         <Text style={[chipLineStyles.label, { color: textSecondary }]}>{label}</Text>
-        <Text style={[chipLineStyles.latest, { color }]}>
-          {latest.toFixed(2)}{unit}
-        </Text>
-      </View>
+        <View style={chipLineStyles.headerRight}>
+          <Text style={[chipLineStyles.latest, { color }]}>{latest.toFixed(2)}{unit}</Text>
+          {expanded ? <ChevronUp size={17} color={textSecondary} /> : <ChevronDown size={17} color={textSecondary} />}
+        </View>
+      </TouchableOpacity>
+      {expanded && <>
       <Svg width={svgWidth} height={svgHeight}>
         <Polyline
           points={points}
@@ -231,13 +123,15 @@ const ChipLineChart = ({ data, label, unit, color, colors }) => {
         <SvgText x={PAD_L} y={svgHeight - 4} fill={textSecondary} fontSize={9}>{data[0].date.slice(5)}</SvgText>
         <SvgText x={svgWidth - PAD_R} y={svgHeight - 4} fill={textSecondary} fontSize={9} textAnchor="end">{data[data.length - 1].date.slice(5)}</SvgText>
       </Svg>
+      </>}
     </View>
   );
 };
 
 const chipLineStyles = StyleSheet.create({
   container: { borderRadius: 14, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8, marginHorizontal: 16, marginBottom: 14 },
-  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', minHeight: 32, marginBottom: 4 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   label: { fontSize: 13, fontWeight: '500' },
   latest: { fontSize: 15, fontWeight: '700' },
 });
@@ -253,6 +147,11 @@ export default function AssetDetailScreen() {
   const transactionColor = (type) => type === 'ADJUST' ? PRIMARY : TRANSACTION_TYPE_COLORS[type];
 
   const [asset, setAsset] = useState(null);
+  const [entryReason, setEntryReason] = useState('');
+  const [entryReasonSaved, setEntryReasonSaved] = useState('');
+  const [entryReasonSaving, setEntryReasonSaving] = useState(false);
+  const [entryReasonError, setEntryReasonError] = useState(null);
+  const [collapsedSections, setCollapsedSections] = useState({});
   const [transactions, setTransactions] = useState([]);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -262,15 +161,13 @@ export default function AssetDetailScreen() {
   const [technicalLoading, setTechnicalLoading] = useState(false);
   const [technicalError, setTechnicalError] = useState(null);
   const [technicalPeriod, setTechnicalPeriod] = useState('6M');
-  const [technicalStrategy, setTechnicalStrategy] = useState('divergence');
-  const [technicalLayers, setTechnicalLayers] = useState({ ma: true, levels: true, volume: true, volumeProfile: true, macd: false, rsi: false, kd: false });
+  const [technicalStrategy, setTechnicalStrategy] = useState(null);
+  const [technicalLayers, setTechnicalLayers] = useState({ ma: true, boll: true, levels: true, gap: true, volume: true, volumeProfile: false, macd: true, rsi: true, kd: true });
   const [priceTime, setPriceTime] = useState(null);
   const [quoteMetadata, setQuoteMetadata] = useState(null);
-  const [chipData, setChipData] = useState(null);
-  const [marginData, setMarginData] = useState(null);
   const [holdingData, setHoldingData] = useState(null);
-  const [marginUsageData, setMarginUsageData] = useState(null);
-  const [chipLoading, setChipLoading] = useState(false);
+  const [tradePlan, setTradePlan] = useState(null);
+  const [tradePlanLoading, setTradePlanLoading] = useState(false);
   // Ref to cancel in-flight live-price fetch when loadAssetDetails is called again
   const livePriceFetchIdRef = useRef(0);
 
@@ -281,11 +178,14 @@ export default function AssetDetailScreen() {
   const [txPrice, setTxPrice] = useState('');
   const [txDate, setTxDate] = useState(todayString());
   const [adding, setAdding] = useState(false);
+  const [applyTradePlan, setApplyTradePlan] = useState(false);
 
   // AI analysis state
   const [aiAnalysis,   setAiAnalysis]   = useState(null);
   const [aiLoading,    setAiLoading]    = useState(false);
   const [aiError,      setAiError]      = useState(null);
+  const [aiPriceInfo, setAiPriceInfo] = useState(null);
+  const aiRequestIdRef = useRef(0);
 
   // Edit asset modal state
   const [editModalVisible, setEditModalVisible] = useState(false);
@@ -318,66 +218,166 @@ export default function AssetDetailScreen() {
     loadTechnicalChart();
   }, [loadTechnicalChart]);
 
+  const loadTradePlan = useCallback(async () => {
+    if (!asset?.symbol || asset?.category !== 'investment') {
+      setTradePlan(null);
+      return;
+    }
+    setTradePlanLoading(true);
+    try {
+      const settings = await loadTradePlanSettings();
+      let dynamicStop = null;
+      let dynamicStopReady = true;
+      try {
+        dynamicStop = await loadTradePlanStop(asset.symbol, asset.market_type);
+        if (!(Number(asset.current_shares) > 0) && dynamicStop) {
+          await closeTradePlanStop(asset.symbol, asset.market_type);
+          dynamicStop = null;
+        }
+      } catch (error) {
+        dynamicStopReady = false;
+        console.warn('Trade plan dynamic stop load error:', error.message);
+      }
+      setTradePlan({ ...settings, dynamic_stop: dynamicStop, dynamic_stop_ready: dynamicStopReady });
+    } catch (error) {
+      console.warn('Trade plan load error:', error.message);
+      setTradePlan(null);
+    } finally {
+      setTradePlanLoading(false);
+    }
+  }, [asset?.id, asset?.symbol, asset?.market_type, asset?.category, asset?.currency, asset?.current_shares]);
+
+  useEffect(() => {
+    loadTradePlan();
+    const unsubscribe = navigation.addListener('focus', loadTradePlan);
+    return unsubscribe;
+  }, [navigation, loadTradePlan]);
+
   const technicalAnalysis = useMemo(() => {
     const count = technicalPeriod === '3M' ? 65 : technicalPeriod === '1Y' ? 260 : 130;
     const rows = technicalRows.slice(-count);
     return rows.length >= 60 ? analyzeTechnicalData(technicalRows, rows.length, technicalContext) : null;
   }, [technicalRows, technicalPeriod, technicalContext]);
 
-  // Trigger AI analysis for investment assets with a symbol
+  const tradePlanEvaluation = useMemo(() => {
+    if (!tradePlan) return null;
+    const hasPosition = Number(asset?.current_shares || 0) > 0;
+    return calculateTradePlan({
+      entryPrice: hasPosition ? asset?.average_cost : (technicalContext.quote?.price || technicalAnalysis?.latest?.close),
+      savedEntryPrice: tradePlan.dynamic_stop?.entry_price,
+      atr: technicalAnalysis?.latest?.atr14 || technicalAnalysis?.atr,
+      positionSize: hasPosition ? Number(asset?.current_shares) : null,
+      currentPrice: hasPosition ? (technicalContext.quote?.price || technicalAnalysis?.latest?.close) : null,
+      isIntraday: Boolean(technicalContext.isIntraday),
+      analysis: technicalAnalysis,
+      effectiveStop: tradePlan.dynamic_stop?.last_effective_stop,
+      effectiveStopSource: tradePlan.dynamic_stop?.last_stop_source,
+      initialStop: tradePlan.dynamic_stop?.initial_stop_price,
+      initialRiskPerShare: tradePlan.dynamic_stop?.initial_risk_per_share,
+      highestPriceSinceEntry: tradePlan.dynamic_stop?.highest_price_since_entry,
+      effectiveStopEvaluatedAt: tradePlan.dynamic_stop?.last_evaluated_at,
+      confirmedInvalidAt: tradePlan.dynamic_stop?.invalidated_at,
+      confirmedInvalidPrice: tradePlan.dynamic_stop?.invalidation_price,
+      confirmedInvalidSessionDate: tradePlan.dynamic_stop?.invalidation_session_date,
+      marketType: asset?.market_type,
+      atrMultiplier: tradePlan.atr_multiplier,
+    });
+  }, [tradePlan, asset?.current_shares, asset?.average_cost, asset?.market_type, technicalContext.quote?.price, technicalContext.isIntraday, technicalAnalysis?.latest?.close, technicalAnalysis?.latest?.atr14, technicalAnalysis?.atr, technicalAnalysis]);
+
+  const tradePlanEntryEvaluation = useMemo(() => {
+    if (!tradePlan) return null;
+    return calculateTradePlan({
+      entryPrice: technicalContext.quote?.price || technicalAnalysis?.latest?.close,
+      atr: technicalAnalysis?.latest?.atr14 || technicalAnalysis?.atr,
+      analysis: technicalAnalysis,
+      atrMultiplier: tradePlan.atr_multiplier,
+    });
+  }, [tradePlan, technicalContext.quote?.price, technicalAnalysis?.latest?.close, technicalAnalysis?.latest?.atr14, technicalAnalysis?.atr, technicalAnalysis]);
+
   useEffect(() => {
+    const hasPosition = Number(asset?.current_shares || 0) > 0;
+    const previous = Number(tradePlan?.dynamic_stop?.last_effective_stop || 0);
+    const next = Number(tradePlanEvaluation?.stopPrice || 0);
+    const nextHigh = Number(tradePlanEvaluation?.highestPriceSinceEntry || 0);
+    const needsSave = tradePlanEvaluation?.rebaseRequired
+      || !tradePlan?.dynamic_stop
+      || next > previous + 1e-8
+      || tradePlan.dynamic_stop.last_stop_source !== tradePlanEvaluation?.stopSource
+      || (tradePlanEvaluation?.confirmedInvalid && !tradePlan.dynamic_stop.invalidated_at);
+    if (!tradePlan?.saved || tradePlan.dynamic_stop_ready !== true || !hasPosition || !tradePlanEvaluation?.valid || !(next > 0) || !needsSave) return undefined;
+    let active = true;
+    saveTradePlanStop({
+      symbol: asset.symbol,
+      marketType: asset.market_type,
+      entryPrice: tradePlanEvaluation.entryPrice,
+      effectiveStop: next,
+      initialStop: tradePlanEvaluation.initialStopPrice,
+      initialRiskPerShare: tradePlanEvaluation.initialRiskPerShare,
+      highestPriceSinceEntry: nextHigh,
+      stopSource: tradePlanEvaluation.stopSource,
+      rebaseExisting: Boolean(tradePlanEvaluation.rebaseRequired),
+      invalidatedAt: tradePlanEvaluation.invalidatedAt,
+      invalidationPrice: tradePlanEvaluation.invalidationPrice,
+      invalidationSessionDate: tradePlanEvaluation.invalidationSessionDate,
+    })
+      .then(stop => active && setTradePlan(current => current ? { ...current, dynamic_stop: stop } : current))
+      .catch(error => console.warn('Trade plan dynamic stop save error:', error.message));
+    return () => { active = false; };
+  }, [asset?.symbol, asset?.market_type, asset?.current_shares, tradePlan?.saved, tradePlan?.dynamic_stop_ready, tradePlan?.dynamic_stop, tradePlanEvaluation]);
+
+  const runAssetAIAnalysis = async () => {
     if (!asset || asset.category !== 'investment' || !asset.symbol) return;
+    const requestId = ++aiRequestIdRef.current;
     setAiAnalysis(null);
+    setAiPriceInfo(null);
     setAiError(null);
     setAiLoading(true);
-    (async () => {
-      try {
-        const [closes, news] = await Promise.all([
-          fetchHistoricalPrices(asset.symbol, asset.market_type, 90),
-          fetchAssetNews(asset.symbol, asset.name, asset.market_type),
-        ]);
-        const lp      = closes ? closes[closes.length - 1] : null;
-        const technicals = lp ? buildTechnicalsText(closes, lp) : null;
-        const pnlPct  = asset.cost_basis_in_base > 0
-          ? ((asset.converted_amount - asset.cost_basis_in_base) / asset.cost_basis_in_base) * 100
-          : null;
-        const result = await analyzeAsset({
-          name:         asset.name,
-          symbol:       asset.symbol,
-          marketType:   asset.market_type,
-          currentPrice: lp,
-          pnlPct,
-          currency:     asset.currency,
-          technicals,
-          news,
-        });
-        setAiAnalysis(result);
-      } catch (e) {
-        setAiError(e.message || 'AI 分析失敗');
-      } finally {
-        setAiLoading(false);
-      }
-    })();
+    try {
+      const fallbackQuote = async () => {
+        if (asset.market_type === 'TW') return fetchTWStockPrice(asset.symbol);
+        if (asset.market_type === 'US') return fetchUSStockPrice(asset.symbol);
+        if (String(asset.market_type).toUpperCase() === 'CRYPTO') return fetchCryptoPrice(asset.symbol);
+        return null;
+      };
+      const [closes, news, quote] = await Promise.all([
+        fetchHistoricalPrices(asset.symbol, asset.market_type, 90),
+        fetchAssetNews(asset.symbol, asset.name, asset.market_type),
+        fetchLatestMarketQuote(asset.symbol, asset.market_type, { forceRefresh: true }).catch(fallbackQuote).catch(() => null),
+      ]);
+      const historicalClose = closes?.[closes.length - 1] ?? null;
+      const priceInfo = resolveAssetAIPrice(quote, historicalClose);
+      const technicals = closes?.length && priceInfo.price !== null
+        ? buildTechnicalsText(closes, priceInfo.price, priceInfo.label)
+        : null;
+      const pnlPct = estimateHoldingPriceReturnPct(priceInfo.price, asset.average_cost, asset.leverage, asset.current_shares);
+      const result = await analyzeAsset({
+        name: asset.name, symbol: asset.symbol, marketType: asset.market_type,
+        currentPrice: priceInfo.price, priceLabel: priceInfo.label,
+        priceTime: priceInfo.sourceTime, priceSource: priceInfo.source,
+        pnlPct, currency: asset.currency, technicals, news,
+      });
+      if (requestId !== aiRequestIdRef.current) return;
+      setAiPriceInfo(priceInfo);
+      setAiAnalysis(result);
+    } catch (e) {
+      if (requestId === aiRequestIdRef.current) setAiError(e.message || 'AI 分析失敗');
+    } finally {
+      if (requestId === aiRequestIdRef.current) setAiLoading(false);
+    }
+  };
+
+  // Trigger AI analysis once for a newly selected asset; manual refresh requests a fresh quote.
+  useEffect(() => {
+    if (asset?.category === 'investment' && asset?.symbol) runAssetAIAnalysis();
+    return () => { aiRequestIdRef.current += 1; };
   }, [asset?.id]);
 
   useEffect(() => {
     if (!asset || !isTWStock(asset) || !asset.symbol) return;
-    setChipLoading(true);
-    const startDate20 = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const startDate45 = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const startDate90 = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const startDate180 = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    Promise.all([
-      fetchTWStockInstitutional(asset.symbol, startDate45),
-      fetchTWStockMargin(asset.symbol, startDate20),
-      fetchTWStockHoldingSharesPer(asset.symbol, startDate180),
-      fetchTWStockMarginUsage(asset.symbol, startDate90),
-    ]).then(([chip, margin, holding, marginUsage]) => {
-      setChipData(chip);
-      setMarginData(margin);
-      setHoldingData(holding);
-      setMarginUsageData(marginUsage);
-    }).catch(() => {}).finally(() => setChipLoading(false));
+    fetchTWStockHoldingSharesPer(asset.symbol, startDate180)
+      .then(setHoldingData)
+      .catch(() => setHoldingData(null));
   }, [asset?.id]);
 
   const loadAssetDetails = async () => {
@@ -420,9 +420,6 @@ export default function AssetDetailScreen() {
         }
       }
 
-      // Transactions remain available as a record list. The persisted asset
-      // average_cost is the source of truth, including costs synchronized from
-      // a broker; reconstructing it only from local transactions can be stale.
       const { data: transactionsData, error: transactionsError } = await supabase
         .from('transactions')
         .select('*')
@@ -431,20 +428,30 @@ export default function AssetDetailScreen() {
 
       if (transactionsError) throw transactionsError;
 
-      // When duplicate assets with the same symbol are consolidated, calculate
-      // one weighted average from their saved costs so this detail view matches
-      // the broker-synced value shown everywhere else.
       const totalShares = allAssetsData.reduce((sum, a) => sum + (parseFloat(a.current_shares) || 0), 0);
-      const totalCost = allAssetsData.reduce(
+      const persistedCost = allAssetsData.reduce(
         (sum, a) => sum + (parseFloat(a.current_shares) || 0) * (parseFloat(a.average_cost) || 0),
         0,
       );
-      const avgCost = totalShares > 0 && totalCost > 0 ? totalCost / totalShares : 0;
+      const persistedAverageCost = totalShares > 0 && persistedCost > 0 ? persistedCost / totalShares : 0;
+      const expectedSharesByAssetId = Object.fromEntries(
+        allAssetsData.map(a => [a.id, parseFloat(a.current_shares) || 0]),
+      );
+      const positionAccounting = calculateFifoPositionAccounting(transactionsData || [], expectedSharesByAssetId);
+      const avgCost = positionAccounting.isComplete && positionAccounting.openShares > 0
+        ? positionAccounting.averageCost
+        : persistedAverageCost;
 
       // Convert cost basis to base currency for accurate P&L calculation
       // P&L = converted_amount (current market value) − cost_basis_in_base
       const lev = primaryAsset.leverage || 1;
-      const costBasisRaw = totalShares > 0 ? (totalShares * avgCost / lev) : 0;
+      const leverageByAssetId = new Map(allAssetsData.map(a => [a.id, Math.max(1, Number(a.leverage) || 1)]));
+      const costBasisRaw = positionAccounting.isComplete
+        ? positionAccounting.assets.reduce(
+          (sum, row) => sum + row.openCost / (leverageByAssetId.get(row.assetId) || 1),
+          0,
+        )
+        : (totalShares > 0 ? totalShares * avgCost / lev : 0);
       let costBasisInBase = costBasisRaw;
       if (costBasisRaw > 0) {
         try {
@@ -454,13 +461,38 @@ export default function AssetDetailScreen() {
         }
       }
 
+      let realizedPnlInBase = null;
+      if (positionAccounting.isComplete && positionAccounting.realizedShares > 0) {
+        realizedPnlInBase = 0;
+        const assetsById = new Map(allAssetsData.map(a => [a.id, a]));
+        for (const row of positionAccounting.assets) {
+          if (!(row.realizedShares > 0)) continue;
+          const transactionAsset = assetsById.get(row.assetId) || primaryAsset;
+          try {
+            realizedPnlInBase += await convertToBaseCurrency(
+              row.realizedPnl,
+              getAssetCurrency(transactionAsset, baseCurrency),
+              baseCurrency,
+              ratesMap,
+            );
+          } catch {
+            realizedPnlInBase += row.realizedPnl;
+          }
+        }
+      }
+
       setAsset({
         ...primaryAsset,
         converted_amount: totalConverted,
         current_shares: totalShares,
         average_cost: avgCost,
         cost_basis_in_base: costBasisInBase,
+        realized_pnl_in_base: realizedPnlInBase,
+        realized_pnl_available: positionAccounting.isComplete && positionAccounting.realizedShares > 0,
       });
+      setEntryReason(primaryAsset.entry_reason || '');
+      setEntryReasonSaved(primaryAsset.entry_reason || '');
+      setEntryReasonError(null);
       // Fetch live price for investment assets and update converted_amount + P&L.
       // Uses a fetch-id ref so that if loadAssetDetails is called again before this
       // resolves, the stale result is discarded and won't overwrite fresher state.
@@ -517,6 +549,42 @@ export default function AssetDetailScreen() {
   };
 
   const handleDelete = () => {
+    const permanentlyDelete = () => Alert.alert(
+      '永久刪除資產',
+      `確定要永久刪除「${asset?.name}」與 ${transactions.length} 筆交易嗎？刪除後年化收益率也會失去這段歷史。`,
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '永久刪除',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const { error } = await supabase.from('assets').delete().eq('id', assetId);
+              if (error) throw error;
+              navigation.goBack();
+            } catch (error) {
+              console.error('Delete error:', error);
+              Alert.alert('錯誤', '刪除失敗');
+            }
+          },
+        },
+      ]
+    );
+
+    if (asset?.category === 'investment' && transactions.length > 0) {
+      Alert.alert(
+        Number(asset?.current_shares || 0) <= 0 ? '部位已自動隱藏' : '建議保留交易紀錄',
+        Number(asset?.current_shares || 0) <= 0
+          ? '這個部位已平倉，總覽不再顯示，但交易紀錄會保留供年化收益率計算。'
+          : '投資部位賣到 0 股後會自動從總覽隱藏，不需要刪除。保留交易紀錄才能正確計算年化收益率。',
+        [
+          { text: '保留紀錄', style: 'cancel' },
+          { text: '仍要永久刪除', style: 'destructive', onPress: permanentlyDelete },
+        ]
+      );
+      return;
+    }
+
     Alert.alert(
       '刪除資產',
       `確定要刪除「${asset?.name}」嗎？此操作無法復原，所有交易記錄也將一併刪除。`,
@@ -525,19 +593,7 @@ export default function AssetDetailScreen() {
         {
           text: '刪除',
           style: 'destructive',
-          onPress: async () => {
-            try {
-              const { error } = await supabase
-                .from('assets')
-                .delete()
-                .eq('id', assetId);
-              if (error) throw error;
-              navigation.goBack();
-            } catch (error) {
-              console.error('Delete error:', error);
-              Alert.alert('錯誤', '刪除失敗');
-            }
-          },
+          onPress: permanentlyDelete,
         },
       ]
     );
@@ -604,6 +660,43 @@ export default function AssetDetailScreen() {
     }
   };
 
+  const handleSaveEntryReason = async () => {
+    const normalizedReason = entryReason.trim();
+    setEntryReasonSaving(true);
+    setEntryReasonError(null);
+    try {
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError) throw userError;
+      if (!user) throw new Error('請先登入再儲存進場原因');
+
+      const { data: updatedAsset, error } = await supabase
+        .from('assets')
+        .update({ entry_reason: normalizedReason || null })
+        .eq('id', assetId)
+        .eq('user_id', user.id)
+        .select('id')
+        .maybeSingle();
+      if (error) throw error;
+      if (!updatedAsset) throw new Error('找不到可更新的資產，進場原因尚未儲存');
+
+      setEntryReason(normalizedReason);
+      setEntryReasonSaved(normalizedReason);
+      setAsset(current => current ? { ...current, entry_reason: normalizedReason || null } : current);
+    } catch (error) {
+      console.error('Save entry reason error:', error);
+      const schemaNotReady = ['42703', 'PGRST204'].includes(error.code) || /entry_reason/i.test(error.message || '');
+      setEntryReasonError(schemaNotReady
+        ? '資料庫尚未套用進場原因欄位 migration'
+        : error.message || '進場原因儲存失敗');
+    } finally {
+      setEntryReasonSaving(false);
+    }
+  };
+
+  const toggleSection = (section) => {
+    setCollapsedSections(current => ({ ...current, [section]: !current[section] }));
+  };
+
   const isInvestmentAsset = asset?.category === 'investment';
 
   const resetAddModal = () => {
@@ -611,6 +704,7 @@ export default function AssetDetailScreen() {
     setTxPrice('');
     setTxType('BUY');
     setTxDate(todayString());
+    setApplyTradePlan(false);
   };
 
   const handleAddTransaction = async () => {
@@ -669,7 +763,7 @@ export default function AssetDetailScreen() {
       await loadAssetDetails();
       // Signal Dashboard to bypass debounce on next focus so net worth updates immediately
       await AsyncStorage.setItem('@wt_needs_refresh', '1');
-      Alert.alert('成功', '交易記錄已新增');
+      Alert.alert('成功', applyTradePlan ? '交易記錄已新增；共用風控規則會繼續套用此持倉' : '交易記錄已新增');
     } catch (error) {
       console.error('Add transaction error:', error);
       Alert.alert('錯誤', error.message || '新增失敗');
@@ -713,75 +807,105 @@ export default function AssetDetailScreen() {
       >
         {/* Asset Summary Card */}
         <View style={[styles.assetSummaryCard, { backgroundColor: colors.card }]}>
-          <Text style={[styles.assetName, { color: colors.text }]}>{asset.name}</Text>
-          {asset.symbol && <Text style={[styles.assetSymbol, { color: colors.textSub }]}>{asset.symbol}</Text>}
-          <View style={[styles.assetValueRow, { borderBottomColor: colors.borderLight }]}>
-            <Text style={[styles.assetValueLabel, { color: colors.textSub }]}>當前價值</Text>
-            <Text style={[styles.assetValue, { color: colors.text }]}>
-              {formatCurrency(asset.converted_amount)}
-            </Text>
-          </View>
-          {(quoteMetadata || priceTime) && (
-            <Text style={{
-              color: getQuoteStatusColor(
-                quoteMetadata?.quote_status,
-                quoteMetadata?.is_stale,
-                colors,
-              ),
-              fontSize: 11,
-              textAlign: 'center',
-              marginTop: 4,
-            }}>
-              {describeQuote({ ...quoteMetadata, price_time: priceTime })}
-            </Text>
-          )}
-          {asset.current_shares > 0 && (
-            <View style={styles.assetDetailRow}>
-              <Text style={[styles.assetDetailLabel, { color: colors.textSub }]}>持有股數</Text>
-              <Text style={[styles.assetDetailValue, { color: colors.text }]}>
-                {asset.current_shares.toLocaleString()} 股
+          <TouchableOpacity
+            style={styles.assetSummaryHeader}
+            onPress={() => toggleSection('summary')}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: !collapsedSections.summary }}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.assetName, { color: colors.text }]}>{asset.name}</Text>
+              {asset.symbol && <Text style={[styles.assetSymbol, { color: colors.textSub, marginBottom: 0 }]}>{asset.symbol}</Text>}
+            </View>
+            {collapsedSections.summary ? <ChevronDown size={20} color={colors.textSub} /> : <ChevronUp size={20} color={colors.textSub} />}
+          </TouchableOpacity>
+          {!collapsedSections.summary && <>
+            <View style={[styles.assetValueRow, { borderBottomColor: colors.borderLight }]}>
+              <Text style={[styles.assetValueLabel, { color: colors.textSub }]}>當前價值</Text>
+              <Text style={[styles.assetValue, { color: colors.text }]}>
+                {formatCurrency(asset.converted_amount)}
               </Text>
             </View>
-          )}
-          {asset.average_cost > 0 && (
-            <View style={styles.assetDetailRow}>
-              <Text style={[styles.assetDetailLabel, { color: colors.textSub }]}>平均成本</Text>
-              <Text style={[styles.assetDetailValue, { color: colors.text }]}>
-                {formatCurrency(asset.average_cost, asset.currency)}
+            {(quoteMetadata || priceTime) && (
+              <Text style={{
+                color: getQuoteStatusColor(
+                  quoteMetadata?.quote_status,
+                  quoteMetadata?.is_stale,
+                  colors,
+                ),
+                fontSize: 11,
+                textAlign: 'center',
+                marginTop: 4,
+              }}>
+                {describeQuote({ ...quoteMetadata, price_time: priceTime })}
               </Text>
-            </View>
-          )}
-          {asset.category === 'investment' && asset.current_shares > 0 && asset.average_cost > 0 && (() => {
-            const costBasis = asset.cost_basis_in_base || 0;
-            const pnl = asset.converted_amount - costBasis;
-            const pnl_pct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
-            const isUp = pnl >= 0;
-            return (
+            )}
+            {asset.current_shares > 0 && (
               <View style={styles.assetDetailRow}>
-                <Text style={styles.assetDetailLabel}>當前損益</Text>
-                <Text style={[styles.assetDetailValue, { color: isUp ? '#0DBD8B' : '#F03030', fontWeight: '700' }]}>
-                  {isUp ? '+' : ''}{profile?.base_currency || 'TWD'} {Math.round(pnl).toLocaleString('zh-TW')}
-                  {'  '}({isUp ? '+' : ''}{pnl_pct.toFixed(2)}%)
+                <Text style={[styles.assetDetailLabel, { color: colors.textSub }]}>持有股數</Text>
+                <Text style={[styles.assetDetailValue, { color: colors.text }]}>
+                  {asset.current_shares.toLocaleString()} 股
                 </Text>
               </View>
+            )}
+            {asset.average_cost > 0 && (
+              <View style={styles.assetDetailRow}>
+                <Text style={[styles.assetDetailLabel, { color: colors.textSub }]}>平均成本</Text>
+                <Text style={[styles.assetDetailValue, { color: colors.text }]}>
+                  {formatCurrency(asset.average_cost, asset.currency)}
+                </Text>
+              </View>
+            )}
+            {asset.category === 'investment' && asset.current_shares > 0 && asset.average_cost > 0 && (() => {
+            const costBasis = asset.cost_basis_in_base || 0;
+            const unrealizedPnl = asset.converted_amount - costBasis;
+            const pnlPct = costBasis > 0 ? (unrealizedPnl / costBasis) * 100 : 0;
+            const unrealizedIsUp = unrealizedPnl >= 0;
+            const realizedPnl = asset.realized_pnl_available ? Number(asset.realized_pnl_in_base || 0) : null;
+            const cumulativePnl = realizedPnl == null ? null : unrealizedPnl + realizedPnl;
+            const formatPnl = value => `${value >= 0 ? '+' : ''}${profile?.base_currency || 'TWD'} ${Math.round(value).toLocaleString('zh-TW')}`;
+            return (
+              <>
+                <View style={styles.assetDetailRow}>
+                  <Text style={styles.assetDetailLabel}>未實現損益</Text>
+                  <Text style={[styles.assetDetailValue, { color: unrealizedIsUp ? '#0DBD8B' : '#F03030', fontWeight: '700' }]}>
+                    {formatPnl(unrealizedPnl)}{'  '}({unrealizedIsUp ? '+' : ''}{pnlPct.toFixed(2)}%)
+                  </Text>
+                </View>
+                {realizedPnl != null && <>
+                  <View style={styles.assetDetailRow}>
+                    <Text style={styles.assetDetailLabel}>已實現損益</Text>
+                    <Text style={[styles.assetDetailValue, { color: realizedPnl >= 0 ? '#0DBD8B' : '#F03030', fontWeight: '700' }]}>
+                      {formatPnl(realizedPnl)}
+                    </Text>
+                  </View>
+                  <View style={styles.assetDetailRow}>
+                    <Text style={styles.assetDetailLabel}>累積損益</Text>
+                    <Text style={[styles.assetDetailValue, { color: cumulativePnl >= 0 ? '#0DBD8B' : '#F03030', fontWeight: '700' }]}>
+                      {formatPnl(cumulativePnl)}
+                    </Text>
+                  </View>
+                </>}
+              </>
             );
-          })()}
-          <View style={styles.assetDetailRow}>
-            <Text style={[styles.assetDetailLabel, { color: colors.textSub }]}>分類</Text>
-            <Text style={[styles.assetDetailValue, { color: colors.text }]}>
-              {CATEGORY_LABELS[asset.category]}
-            </Text>
-          </View>
-          <View style={styles.assetDetailRow}>
-            <Text style={[styles.assetDetailLabel, { color: colors.textSub }]}>原始幣別</Text>
-            <Text style={[styles.assetDetailValue, { color: colors.text }]}>{asset.currency}</Text>
-          </View>
-          {asset.leverage > 1 && (
+            })()}
+            <View style={styles.assetDetailRow}>
+              <Text style={[styles.assetDetailLabel, { color: colors.textSub }]}>分類</Text>
+              <Text style={[styles.assetDetailValue, { color: colors.text }]}>
+                {CATEGORY_LABELS[asset.category]}
+              </Text>
+            </View>
+            <View style={styles.assetDetailRow}>
+              <Text style={[styles.assetDetailLabel, { color: colors.textSub }]}>原始幣別</Text>
+              <Text style={[styles.assetDetailValue, { color: colors.text }]}>{asset.currency}</Text>
+            </View>
+            {asset.leverage > 1 && (
             <View style={styles.assetDetailRow}>
               <Text style={[styles.assetDetailLabel, { color: colors.textSub }]}>槓桿</Text>
               <Text style={[styles.assetDetailValue, { color: colors.text }]}>{asset.leverage}x</Text>
             </View>
-          )}
+            )}
+          </>}
         </View>
 
         {/* Action Buttons */}
@@ -803,44 +927,151 @@ export default function AssetDetailScreen() {
           </TouchableOpacity>
         </View>
 
+        <View style={[styles.entryReasonCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <TouchableOpacity
+            style={styles.entryReasonHeader}
+            onPress={() => toggleSection('entryReason')}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: !collapsedSections.entryReason }}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.entryReasonTitle, { color: colors.text }]}>進場原因</Text>
+              <Text style={[styles.entryReasonSubtitle, { color: colors.textMuted }]}>記下當時的進場依據與預期</Text>
+            </View>
+            {collapsedSections.entryReason ? <ChevronDown size={19} color={colors.textSub} /> : <ChevronUp size={19} color={colors.textSub} />}
+          </TouchableOpacity>
+          {!collapsedSections.entryReason && <>
+            <TextInput
+              style={[styles.entryReasonInput, { backgroundColor: colors.cardAlt, borderColor: colors.border, color: colors.text }]}
+              placeholder="例如：進場依據、預期催化因素、持有計畫與失效條件…"
+              placeholderTextColor={colors.textMuted}
+              value={entryReason}
+              onChangeText={setEntryReason}
+              multiline
+              maxLength={2000}
+              textAlignVertical="top"
+              accessibilityLabel="進場原因"
+            />
+            <View style={styles.entryReasonFooter}>
+              <Text style={[styles.entryReasonStatus, { color: entryReasonError ? colors.negative : entryReason.trim() !== entryReasonSaved ? colors.warning : colors.textMuted }]}>
+                {entryReasonError || (entryReason.trim() !== entryReasonSaved ? '尚未儲存' : `${entryReasonSaved ? '已儲存' : '尚未填寫'} · ${entryReason.length}/2000`)}
+              </Text>
+              <TouchableOpacity
+                style={[styles.entryReasonSave, { backgroundColor: colors.accent, opacity: entryReasonSaving || entryReason.trim() === entryReasonSaved ? 0.55 : 1 }]}
+                onPress={handleSaveEntryReason}
+                disabled={entryReasonSaving || entryReason.trim() === entryReasonSaved}
+              >
+                <Text style={[styles.entryReasonSaveText, { color: colors.accentContrast }]}>{entryReasonSaving ? '儲存中…' : '儲存原因'}</Text>
+              </TouchableOpacity>
+            </View>
+          </>}
+        </View>
+
+        {isInvestmentAsset && asset.symbol && (() => {
+          const hasSavedRule = Boolean(tradePlan?.saved);
+          const displayStatus = getTradePlanDisplayStatus(tradePlanEvaluation);
+          const state = displayStatus.state;
+          const canCalculate = Boolean(tradePlanEvaluation?.valid);
+          const hasConfirmedInvalidation = Boolean(tradePlanEvaluation?.confirmedInvalid);
+          const stopDataUnavailable = tradePlan?.dynamic_stop_ready === false;
+          const stateColor = state === 'invalid'
+            ? colors.negative
+            : state === 'warning' || !hasSavedRule || !canCalculate || stopDataUnavailable
+              ? colors.warning
+              : state === 'normal' ? colors.positive : colors.accent;
+          const issueLabel = !hasSavedRule ? '尚未設定'
+              : stopDataUnavailable ? '停損資料未載入'
+                : hasConfirmedInvalidation || state === 'invalid' ? displayStatus.label
+                : tradePlanEvaluation?.issueCode === 'MISSING_ATR' ? 'ATR 資料不足'
+                  : !canCalculate ? '計算條件不足' : displayStatus.label;
+          const planIssueText = stopDataUnavailable
+            ? '無法讀取已保存的停損計畫；為避免覆蓋原始 1R 與失效紀錄，目前暫停自動更新。'
+            : !canCalculate ? tradePlanEvaluation?.errors?.join('；') : '';
+          const visibleStop = hasConfirmedInvalidation && Number(tradePlanEvaluation?.invalidationStopPrice) > 0
+            ? Number(tradePlanEvaluation.invalidationStopPrice)
+            : canCalculate
+              ? Number(tradePlanEvaluation?.stopPrice || 0)
+              : Number(tradePlan?.dynamic_stop?.last_effective_stop || tradePlanEvaluation?.initialStopPrice || 0);
+          const stopOutcomeAmount = Number(tradePlanEvaluation?.stopOutcomeAmount);
+          const stopOutcomePercent = Number(tradePlanEvaluation?.stopOutcomePercent);
+          const hasStopOutcome = Number(asset.current_shares || 0) > 0 && Number.isFinite(stopOutcomeAmount) && Number.isFinite(stopOutcomePercent);
+          const stopOutcomeColor = stopOutcomeAmount > 0 ? colors.positive : stopOutcomeAmount < 0 ? colors.negative : colors.text;
+          const stopOutcomeCurrency = asset.currency || (String(asset.market_type).toUpperCase() === 'TW' ? 'TWD' : 'USD');
+          const formatOutcome = (amount, percent) => (
+            Number.isFinite(amount) && Number.isFinite(percent)
+              ? `${amount > 0 ? '+' : amount < 0 ? '-' : ''}${stopOutcomeCurrency} ${Math.abs(amount).toLocaleString('zh-TW', { maximumFractionDigits: 2 })}（${percent > 0 ? '+' : ''}${percent.toFixed(2)}%）`
+              : '—'
+          );
+          const stopOutcomeText = hasStopOutcome ? formatOutcome(stopOutcomeAmount, stopOutcomePercent) : '—';
+          const invalidationOutcomeAmount = Number(tradePlanEvaluation?.invalidationOutcomeAmount);
+          const invalidationOutcomePercent = Number(tradePlanEvaluation?.invalidationOutcomePercent);
+          const hasInvalidationOutcome = hasConfirmedInvalidation
+            && tradePlanEvaluation?.invalidationOutcomeAmount != null
+            && Number.isFinite(invalidationOutcomeAmount)
+            && Number.isFinite(invalidationOutcomePercent);
+          const currentOutcomeAmount = Number(tradePlanEvaluation?.unrealizedPnlAmount);
+          const currentOutcomePercent = Number(tradePlanEvaluation?.unrealizedPnlPercent);
+          const hasCurrentOutcome = Number(asset.current_shares || 0) > 0
+            && tradePlanEvaluation?.unrealizedPnlAmount != null
+            && Number.isFinite(currentOutcomeAmount)
+            && Number.isFinite(currentOutcomePercent);
+          return <View style={[styles.tradePlanCard, { backgroundColor: colors.card, borderColor: tradePlan ? stateColor : colors.border }]}>
+            <TouchableOpacity
+              style={styles.tradePlanHeader}
+              onPress={() => toggleSection('tradePlan')}
+              accessibilityRole="button"
+              accessibilityState={{ expanded: !collapsedSections.tradePlan }}
+            >
+              <View style={{ flex: 1 }}><Text style={[styles.tradePlanEyebrow, { color: colors.accent }]}>全標的共用風控</Text><Text style={[styles.tradePlanTitle, { color: colors.text }]}>交易計畫</Text></View>
+              {tradePlanLoading ? <ActivityIndicator size="small" color={colors.accent} /> : <View style={[styles.tradePlanBadge, { borderColor: stateColor, backgroundColor: `${stateColor}18` }]}><Text style={[styles.tradePlanBadgeText, { color: stateColor }]}>{issueLabel}</Text></View>}
+              {collapsedSections.tradePlan ? <ChevronDown size={18} color={colors.textSub} /> : <ChevronUp size={18} color={colors.textSub} />}
+            </TouchableOpacity>
+            {!collapsedSections.tradePlan && <>
+            {hasSavedRule ? <>
+              <Text style={[styles.tradePlanReason, { color: colors.textSub }]}>{tradePlanEvaluation?.stateReason} 初始停損與 1R 在建立計畫時固定；目前狀態依停損位置判斷。</Text>
+              {planIssueText ? <Text style={[styles.tradePlanReason, { color: colors.warning }]}>{planIssueText}</Text> : null}
+              <View style={styles.tradePlanMetrics}>
+                <View style={styles.tradePlanMetric}><Text style={[styles.tradePlanMetricLabel, { color: colors.textMuted }]}>ATR 倍數</Text><Text style={[styles.tradePlanMetricValue, { color: colors.text }]}>{Number(tradePlan.atr_multiplier || 1.5).toFixed(1)}×</Text></View>
+                <View style={styles.tradePlanMetric}><Text style={[styles.tradePlanMetricLabel, { color: colors.textMuted }]}>計算基準</Text><Text style={[styles.tradePlanMetricValue, { color: colors.text }]}>{tradePlanEvaluation?.entryPrice ? Number(tradePlanEvaluation.entryPrice).toLocaleString() : '—'}</Text></View>
+                <View style={styles.tradePlanMetric}><Text style={[styles.tradePlanMetricLabel, { color: colors.textMuted }]}>初始停損</Text><Text style={[styles.tradePlanMetricValue, { color: colors.text }]}>{tradePlanEvaluation?.initialStopPrice > 0 ? Number(tradePlanEvaluation.initialStopPrice).toLocaleString() : '—'}</Text></View>
+                <View style={styles.tradePlanMetric}><Text style={[styles.tradePlanMetricLabel, { color: colors.textMuted }]}>{hasConfirmedInvalidation ? '失效時停損價' : canCalculate ? '目前停損' : '已保存停損'}</Text><Text style={[styles.tradePlanMetricValue, { color: hasConfirmedInvalidation ? stateColor : colors.negative }]}>{visibleStop > 0 ? visibleStop.toLocaleString('zh-TW', { maximumFractionDigits: 3 }) : '—'}</Text></View>
+                <View style={styles.tradePlanMetric}><Text style={[styles.tradePlanMetricLabel, { color: colors.textMuted }]}>目前報酬</Text><Text style={[styles.tradePlanMetricValue, { color: Number(tradePlanEvaluation?.rewardMultiple) >= 0 ? colors.positive : colors.negative }]}>{Number.isFinite(tradePlanEvaluation?.rewardMultiple) ? `${tradePlanEvaluation.rewardMultiple >= 0 ? '+' : ''}${tradePlanEvaluation.rewardMultiple.toFixed(2)}R` : '—'}</Text></View>
+                <View style={styles.tradePlanMetric}><Text style={[styles.tradePlanMetricLabel, { color: colors.textMuted }]}>停損對應風險</Text><Text style={[styles.tradePlanMetricValue, { color: colors.negative }]}>{Number.isFinite(tradePlanEvaluation?.lockedRewardMultiple) ? `${tradePlanEvaluation.lockedRewardMultiple >= 0 ? '+' : ''}${tradePlanEvaluation.lockedRewardMultiple.toFixed(2)}R` : '—'}</Text></View>
+                <View style={styles.tradePlanMetric}><Text style={[styles.tradePlanMetricLabel, { color: colors.textMuted }]}>每股初始風險（固定 1R）</Text><Text style={[styles.tradePlanMetricValue, { color: colors.text }]}>{Number(tradePlanEvaluation?.initialRiskPerShare) > 0 ? Number(tradePlanEvaluation.initialRiskPerShare).toLocaleString('zh-TW', { maximumFractionDigits: 3 }) : '—'}</Text></View>
+                {Number(asset.current_shares || 0) > 0 && <View style={styles.tradePlanMetric}><Text style={[styles.tradePlanMetricLabel, { color: colors.textMuted }]}>實際持有數量</Text><Text style={[styles.tradePlanMetricValue, { color: colors.text }]}>{Number(asset.current_shares).toLocaleString()}</Text></View>}
+                {hasConfirmedInvalidation && tradePlanEvaluation?.invalidationPrice > 0 && <View style={styles.tradePlanMetric}><Text style={[styles.tradePlanMetricLabel, { color: colors.textMuted }]}>失效確認價</Text><Text style={[styles.tradePlanMetricValue, { color: colors.negative }]}>{Number(tradePlanEvaluation.invalidationPrice).toLocaleString()}</Text></View>}
+                {hasInvalidationOutcome && <View style={styles.tradePlanMetric}><Text style={[styles.tradePlanMetricLabel, { color: colors.textMuted }]}>失效確認時損益</Text><Text style={[styles.tradePlanMetricValue, { color: invalidationOutcomeAmount < 0 ? colors.negative : colors.positive }]}>{formatOutcome(invalidationOutcomeAmount, invalidationOutcomePercent)}</Text></View>}
+                {hasConfirmedInvalidation && hasCurrentOutcome && <View style={styles.tradePlanMetric}><Text style={[styles.tradePlanMetricLabel, { color: colors.textMuted }]}>目前價格損益</Text><Text style={[styles.tradePlanMetricValue, { color: currentOutcomeAmount < 0 ? colors.negative : colors.positive }]}>{formatOutcome(currentOutcomeAmount, currentOutcomePercent)}</Text></View>}
+                {!hasConfirmedInvalidation && hasStopOutcome && <View style={styles.tradePlanMetric}><Text style={[styles.tradePlanMetricLabel, { color: colors.textMuted }]}>停損價預估損益</Text><Text style={[styles.tradePlanMetricValue, { color: stopOutcomeColor }]}>{stopOutcomeText}</Text></View>}
+              </View>
+              <Text style={[styles.tradePlanReason, { color: colors.textMuted }]}>{hasConfirmedInvalidation
+                ? `原停損來源：${tradePlanEvaluation?.stopSourceLabel || '—'}；${tradePlanEvaluation?.recoveredAfterInvalidation ? '最新價格已收復原停損，但狀態仍列為失效。' : '原停損價僅保留作為計畫基準。'}失效確認與目前損益分別依正式收盤價及最新價格計算，未含滑價、手續費與交易稅。`
+                : `目前停損來源：${tradePlanEvaluation?.stopSourceLabel || '—'}；預估損益假設能在停損價附近出場，未含滑價、手續費與交易稅。`}</Text>
+            </> : <Text style={[styles.tradePlanReason, { color: colors.textSub }]}>新建立計畫時會依 MA20／MA40／MA60 支撐或 ATR 設定停損，建立後固定不自動移動；狀態分為正常、警戒、失效。</Text>}
+            <TouchableOpacity style={[styles.tradePlanAction, { borderColor: colors.accent, backgroundColor: colors.accentSoft }]} onPress={() => navigation.navigate('TechnicalAnalysis', { symbol: asset.symbol, name: asset.name, averageCost: asset.average_cost || 0, currentShares: asset.current_shares || 0, marketType: asset.market_type, currency: asset.currency, analysisKey: 'tradePlan' })}><Text style={[styles.tradePlanActionText, { color: colors.accent }]}>{hasSavedRule ? '查看共用規則' : '設定共用規則'}</Text></TouchableOpacity>
+            </>}
+          </View>;
+        })()}
+
         {/* ── AI Analysis Card (investment assets only) ─────────────────── */}
         {isInvestmentAsset && asset.symbol && (
           <View style={[aiCardStyles.card, { backgroundColor: colors.card }]}>
             <View style={aiCardStyles.header}>
-              <View style={[aiCardStyles.iconWrap, { backgroundColor: colors.accentSoft }]}>
-                <Text style={aiCardStyles.iconText}>🤖</Text>
-              </View>
-              <Text style={[aiCardStyles.title, { color: colors.text }]}>AI 智能分析</Text>
+              <TouchableOpacity
+                style={aiCardStyles.headerToggle}
+                onPress={() => toggleSection('ai')}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: !collapsedSections.ai }}
+              >
+                <View style={[aiCardStyles.iconWrap, { backgroundColor: colors.accentSoft }]}>
+                  <Text style={aiCardStyles.iconText}>🤖</Text>
+                </View>
+                <Text style={[aiCardStyles.title, { color: colors.text }]}>AI 智能分析</Text>
+                {collapsedSections.ai ? <ChevronDown size={18} color={colors.textSub} /> : <ChevronUp size={18} color={colors.textSub} />}
+              </TouchableOpacity>
               {!aiLoading && (
                 <TouchableOpacity
-                  onPress={() => {
-                    setAiAnalysis(null);
-                    setAiError(null);
-                    setAiLoading(true);
-                    (async () => {
-                      try {
-                        const [closes, news] = await Promise.all([
-                          fetchHistoricalPrices(asset.symbol, asset.market_type, 90),
-                          fetchAssetNews(asset.symbol, asset.name, asset.market_type),
-                        ]);
-                        const lp = closes ? closes[closes.length - 1] : null;
-                        const technicals = lp ? buildTechnicalsText(closes, lp) : null;
-                        const pnlPct = asset.cost_basis_in_base > 0
-                          ? ((asset.converted_amount - asset.cost_basis_in_base) / asset.cost_basis_in_base) * 100
-                          : null;
-                        const result = await analyzeAsset({
-                          name: asset.name, symbol: asset.symbol,
-                          marketType: asset.market_type, currentPrice: lp,
-                          pnlPct, currency: asset.currency, technicals, news,
-                        });
-                        setAiAnalysis(result);
-                      } catch (e) {
-                        setAiError(e.message || 'AI 分析失敗');
-                      } finally {
-                        setAiLoading(false);
-                      }
-                    })();
-                  }}
+                  onPress={runAssetAIAnalysis}
                   style={aiCardStyles.refreshBtn}
                 >
                   <Text style={[aiCardStyles.refreshText, { color: colors.textSub }]}>重新分析</Text>
@@ -848,6 +1079,7 @@ export default function AssetDetailScreen() {
               )}
             </View>
 
+            {!collapsedSections.ai && <>
             {aiLoading && (
               <View style={aiCardStyles.loadingWrap}>
                 <ActivityIndicator size="small" color={PRIMARY} />
@@ -862,8 +1094,14 @@ export default function AssetDetailScreen() {
             )}
 
             {!aiLoading && aiAnalysis && (
-              <MarkdownText text={aiAnalysis} color={colors.text} colors={colors} />
+              <>
+                {aiPriceInfo && <Text style={[aiCardStyles.loadingText, { color: aiPriceInfo.isLive ? colors.accent : colors.textMuted }]}>
+                  分析價格：{aiPriceInfo.label}{aiPriceInfo.price !== null ? ` ${aiPriceInfo.price.toFixed(2)} ${asset.currency || ''}` : ''}{aiPriceInfo.sourceTime ? ` · ${formatQuoteTime(aiPriceInfo.sourceTime) || aiPriceInfo.sourceTime}` : ''}
+                </Text>}
+                <MarkdownText text={aiAnalysis} color={colors.text} colors={colors} />
+              </>
             )}
+            </>}
           </View>
         )}
 
@@ -871,53 +1109,65 @@ export default function AssetDetailScreen() {
         {isInvestmentAsset && asset.symbol && asset.market_type && (
           <View style={[styles.chartSection, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={[styles.chartTitleRow, { borderBottomColor: colors.borderLight }]}>
-              <View style={styles.chartTitleGroup}><BarChart3 size={18} color={PRIMARY} /><View><Text style={[styles.chartTitle, { color: colors.text }]}>K 線技術圖</Text><Text style={[styles.chartSubtitle, { color: colors.textMuted }]}>日線 · {technicalAnalysis ? `資料截至 ${technicalAnalysis.latest.time}` : '平均成本 · 技術指標'}</Text></View></View>
-              <TouchableOpacity style={[styles.fullChartButton, { borderColor: colors.border }]} onPress={() => navigation.navigate('TechnicalAnalysis', { symbol: asset.symbol, name: asset.name, averageCost: asset.average_cost || 0, marketType: asset.market_type, strategyKey: technicalStrategy })}><Maximize2 size={15} color={PRIMARY} /><Text style={[styles.fullChartText, { color: PRIMARY }]}>完整分析</Text></TouchableOpacity>
+              <TouchableOpacity
+                style={styles.chartTitleGroup}
+                onPress={() => toggleSection('chart')}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: !collapsedSections.chart }}
+              >
+                <BarChart3 size={18} color={PRIMARY} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.chartTitle, { color: colors.text }]}>K 線技術圖</Text>
+                  <Text style={[styles.chartSubtitle, { color: colors.textMuted }]}>日線 · {technicalAnalysis ? `資料截至 ${technicalAnalysis.latest.time}` : '平均成本 · 技術指標'}</Text>
+                </View>
+                {collapsedSections.chart ? <ChevronDown size={17} color={colors.textSub} /> : <ChevronUp size={17} color={colors.textSub} />}
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.fullChartButton, { borderColor: colors.border }]} onPress={() => navigation.navigate('TechnicalAnalysis', { symbol: asset.symbol, name: asset.name, averageCost: asset.average_cost || 0, currentShares: asset.current_shares || 0, marketType: asset.market_type, currency: asset.currency, strategyKey: technicalStrategy })}><Maximize2 size={15} color={PRIMARY} /><Text style={[styles.fullChartText, { color: PRIMARY }]}>完整分析</Text></TouchableOpacity>
             </View>
 
+            {!collapsedSections.chart && <>
             <View style={styles.chartControls}>
               <View style={styles.periodControls}>{[['3M', '3月'], ['6M', '6月'], ['1Y', '1年']].map(([key, label]) => <TouchableOpacity key={key} style={[styles.periodButton, { backgroundColor: technicalPeriod === key ? colors.accentSoft : colors.cardAlt, borderColor: technicalPeriod === key ? PRIMARY : colors.border }]} onPress={() => setTechnicalPeriod(key)}><Text style={[styles.periodButtonText, { color: technicalPeriod === key ? PRIMARY : colors.textSub }]}>{label}</Text></TouchableOpacity>)}</View>
               <TouchableOpacity accessibilityLabel="重新載入技術圖" style={[styles.chartRefresh, { borderColor: colors.border }]} onPress={() => loadTechnicalChart(true)}><RefreshCw size={15} color={colors.textSub} /></TouchableOpacity>
             </View>
 
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.strategyControls}>{[
-              ['divergence', 'MACD 背離'], ['pullback', '趨勢回檔'], ['breakout', '放量突破'], ['rsi', 'RSI 反轉'], ['boundary', '雙軌邊界'], ['smc', 'SMC'],
-            ].map(([key, label]) => <TouchableOpacity key={key} style={[styles.layerButton, { borderColor: technicalStrategy === key ? PRIMARY : colors.border, backgroundColor: technicalStrategy === key ? colors.accentSoft : colors.cardAlt }]} onPress={() => {
-              setTechnicalStrategy(key);
-              setTechnicalLayers(current => ({
-                ...current,
-                ma: key === 'divergence' || key === 'pullback' || key === 'boundary',
-                volume: key === 'breakout' || key === 'boundary' || key === 'smc',
-                macd: key === 'divergence' || key === 'boundary',
-                rsi: key === 'rsi',
-                kd: key === 'boundary',
-                levels: key === 'divergence' || key === 'rsi',
-                volumeProfile: current.volumeProfile,
-              }));
-            }}><Text style={[styles.layerButtonText, { color: technicalStrategy === key ? PRIMARY : colors.textSub }]}>{label}</Text></TouchableOpacity>)}</ScrollView>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.strategyControls}>
+              <TouchableOpacity style={[styles.layerButton, { borderColor: technicalStrategy === null ? PRIMARY : colors.border, backgroundColor: technicalStrategy === null ? colors.accentSoft : colors.cardAlt }]} onPress={() => setTechnicalStrategy(null)}><Text style={[styles.layerButtonText, { color: technicalStrategy === null ? PRIMARY : colors.textSub }]}>不選策略</Text></TouchableOpacity>
+              {[
+                ['candlestick', 'K 線型態'], ['divergence', 'MACD 背離'], ['rsiDivergence', 'RSI 背離'], ['kdDivergence', 'KD 背離'], ['pullback', '趨勢回檔'], ['breakout', '放量突破'], ['rsi', 'RSI5／RSI10 交叉'], ['boundary', '雙軌邊界'], ['smc', 'SMC'],
+              ].map(([key, label]) => <TouchableOpacity key={key} style={[styles.layerButton, { borderColor: technicalStrategy === key ? PRIMARY : colors.border, backgroundColor: technicalStrategy === key ? colors.accentSoft : colors.cardAlt }]} onPress={() => {
+                if (technicalStrategy === key) {
+                  setTechnicalStrategy(null);
+                  return;
+                }
+                setTechnicalStrategy(key);
+                setTechnicalLayers(current => ({
+                  ...current,
+                  ma: ['candlestick', 'divergence', 'rsiDivergence', 'kdDivergence', 'pullback', 'boundary'].includes(key),
+                  volume: true,
+                  macd: key === 'divergence' || key === 'boundary',
+                  rsi: key === 'rsi' || key === 'rsiDivergence',
+                  kd: key === 'boundary' || key === 'kdDivergence',
+                  levels: ['divergence', 'rsi', 'rsiDivergence', 'kdDivergence'].includes(key),
+                  volumeProfile: current.volumeProfile,
+                  boll: current.boll,
+                }));
+              }}><Text style={[styles.layerButtonText, { color: technicalStrategy === key ? PRIMARY : colors.textSub }]}>{label}</Text></TouchableOpacity>)}
+            </ScrollView>
 
-            {technicalLoading ? <View style={styles.chartLoading}><ActivityIndicator size="small" color={PRIMARY} /><Text style={[styles.chartLoadingText, { color: colors.textSub }]}>正在計算 K 線與指標…</Text></View> : technicalError || !technicalAnalysis ? <View style={styles.chartLoading}><Text style={[styles.chartErrorTitle, { color: colors.text }]}>暫時無法顯示 K 線</Text><Text style={[styles.chartLoadingText, { color: colors.textSub }]}>{technicalError || '歷史資料不足'}</Text></View> : <TechnicalAnalysisChart analysis={technicalAnalysis} colors={colors} averageCost={Number(asset.average_cost || 0)} layers={technicalLayers} selectedStrategy={technicalStrategy} liveQuote={technicalContext.quote} />}
+            {technicalLoading ? <View style={styles.chartLoading}><ActivityIndicator size="small" color={PRIMARY} /><Text style={[styles.chartLoadingText, { color: colors.textSub }]}>正在計算 K 線與指標…</Text></View> : technicalError || !technicalAnalysis ? <View style={styles.chartLoading}><Text style={[styles.chartErrorTitle, { color: colors.text }]}>暫時無法顯示 K 線</Text><Text style={[styles.chartLoadingText, { color: colors.textSub }]}>{technicalError || '歷史資料不足'}</Text></View> : <TechnicalAnalysisChart analysis={technicalAnalysis} colors={colors} averageCost={Number(asset.average_cost || 0)} layers={technicalLayers} periodKey={technicalPeriod} viewportKey={`${asset.market_type}:${asset.symbol}:${technicalPeriod}`} selectedStrategy={technicalStrategy} liveQuote={technicalContext.quote} />}
 
             {technicalAnalysis && (() => {
               const strategy = technicalAnalysis.strategies?.find(item => item.key === technicalStrategy);
               if (!strategy) return null;
               const status = strategy.status === 'confirmed' ? '已確認' : strategy.status === 'watch' ? '等待確認' : '未成立';
               const signalColor = strategy.status === 'confirmed' ? (strategy.direction === 'bearish' ? colors.negative : colors.positive) : strategy.status === 'watch' ? colors.warning : colors.textMuted;
-              return <TouchableOpacity style={[styles.compactSignal, { backgroundColor: colors.cardAlt, borderColor: colors.border }]} onPress={() => navigation.navigate('TechnicalAnalysis', { symbol: asset.symbol, name: asset.name, averageCost: asset.average_cost || 0, marketType: asset.market_type, strategyKey: technicalStrategy })}><View style={[styles.compactSignalDot, { backgroundColor: signalColor }]} /><View style={{ flex: 1 }}><Text style={[styles.compactSignalTitle, { color: colors.text }]}>{strategy.label} · {status}</Text><Text style={[styles.compactSignalMeta, { color: colors.textMuted }]}>{strategy.reason}</Text></View><Text style={[styles.compactSignalLink, { color: PRIMARY }]}>查看規則</Text></TouchableOpacity>;
+              return <TouchableOpacity style={[styles.compactSignal, { backgroundColor: colors.cardAlt, borderColor: colors.border }]} onPress={() => navigation.navigate('TechnicalAnalysis', { symbol: asset.symbol, name: asset.name, averageCost: asset.average_cost || 0, currentShares: asset.current_shares || 0, marketType: asset.market_type, currency: asset.currency, strategyKey: technicalStrategy })}><View style={[styles.compactSignalDot, { backgroundColor: signalColor }]} /><View style={{ flex: 1 }}><Text style={[styles.compactSignalTitle, { color: colors.text }]}>{strategy.label} · {status}</Text><Text style={[styles.compactSignalMeta, { color: colors.textMuted }]}>{strategy.reason}</Text></View><Text style={[styles.compactSignalLink, { color: PRIMARY }]}>查看規則</Text></TouchableOpacity>;
             })()}
 
-            <View style={[styles.layerControls, { borderTopColor: colors.borderLight }]}>{[['ma', 'MA20/60'], ['levels', '支撐壓力'], ['volume', '成交量'], ['volumeProfile', '量價分佈'], ['macd', 'MACD'], ['rsi', 'RSI14'], ['kd', 'KD']].map(([key, label]) => <TouchableOpacity key={key} style={[styles.layerButton, { borderColor: technicalLayers[key] ? PRIMARY : colors.border, backgroundColor: technicalLayers[key] ? colors.accentSoft : colors.cardAlt }]} onPress={() => setTechnicalLayers(current => ({ ...current, [key]: !current[key] }))}><View style={[styles.layerDot, { backgroundColor: technicalLayers[key] ? PRIMARY : colors.textMuted }]} /><Text style={[styles.layerButtonText, { color: technicalLayers[key] ? PRIMARY : colors.textSub }]}>{label}</Text></TouchableOpacity>)}</View>
+            <View style={[styles.layerControls, { borderTopColor: colors.borderLight }]}>{[['ma', 'MA20/60'], ['boll', 'BOLL'], ['levels', '支撐壓力'], ['gap', '跳空區'], ['volume', '成交量'], ['volumeProfile', '量價分佈'], ['macd', 'MACD'], ['rsi', 'RSI5/10/14'], ['kd', 'KD']].map(([key, label]) => <TouchableOpacity key={key} style={[styles.layerButton, { borderColor: technicalLayers[key] ? PRIMARY : colors.border, backgroundColor: technicalLayers[key] ? colors.accentSoft : colors.cardAlt }]} onPress={() => setTechnicalLayers(current => ({ ...current, [key]: !current[key] }))}><View style={[styles.layerDot, { backgroundColor: technicalLayers[key] ? PRIMARY : colors.textMuted }]} /><Text style={[styles.layerButtonText, { color: technicalLayers[key] ? PRIMARY : colors.textSub }]}>{label}</Text></TouchableOpacity>)}</View>
+            </>}
           </View>
-        )}
-
-        {/* Chip Analysis (TW stocks only) */}
-        {isTWStock(asset) && (
-          <InstitutionalSection
-            chipData={chipData}
-            marginData={marginData}
-            loading={chipLoading}
-            colors={colors}
-          />
         )}
 
         {isTWStock(asset) && (
@@ -927,25 +1177,26 @@ export default function AssetDetailScreen() {
             unit="%"
             color={PRIMARY}
             colors={colors}
-          />
-        )}
-
-        {isTWStock(asset) && (
-          <ChipLineChart
-            data={marginUsageData?.map(d => ({ date: d.date, value: d.usageRate }))}
-            label="融資使用率"
-            unit="%"
-            color="#4A90E2"
-            colors={colors}
+            expanded={!collapsedSections.holders}
+            onToggle={() => toggleSection('holders')}
           />
         )}
 
         {/* Transaction History */}
         <View style={[styles.transactionsSection, { backgroundColor: colors.card }]}>
-          <Text style={[styles.transactionsTitle, { color: colors.text, borderBottomColor: colors.borderLight }]}>交易歷史</Text>
+          <TouchableOpacity
+            style={[styles.transactionsTitle, styles.transactionsTitleRow, { borderBottomColor: colors.borderLight }]}
+            onPress={() => toggleSection('transactions')}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: !collapsedSections.transactions }}
+          >
+            <Text style={{ color: colors.text, fontSize: 18, fontWeight: 'bold' }}>交易歷史</Text>
+            {collapsedSections.transactions ? <ChevronDown size={18} color={colors.textSub} /> : <ChevronUp size={18} color={colors.textSub} />}
+          </TouchableOpacity>
+          {!collapsedSections.transactions && <>
           {transactions.length > 0 ? (
-            transactions.map((transaction) => (
-              <View key={transaction.id} style={[styles.transactionCard, { borderBottomColor: colors.borderLight }]}>
+            transactions.map((transaction, index) => (
+              <View key={`${transaction.id}-${transaction.trans_date}-${transaction.type}-${index}`} style={[styles.transactionCard, { borderBottomColor: colors.borderLight }]}>
                 <View style={styles.transactionHeader}>
                   <Text
                     style={[
@@ -954,6 +1205,9 @@ export default function AssetDetailScreen() {
                     ]}
                   >
                     {transaction.type === 'BUY' ? '買入' : transaction.type === 'SELL' ? '賣出' : '調整'}
+                  </Text>
+                  <Text style={[styles.transactionSource, { color: colors.textMuted }]}>
+                    {getTransactionSourceLabel(transaction)}{transaction.ignored_from_performance ? ' · 不計績效' : ''}
                   </Text>
                   <View style={styles.transactionHeaderRight}>
                     <Text style={[styles.transactionDate, { color: colors.textSub }]}>
@@ -989,6 +1243,7 @@ export default function AssetDetailScreen() {
               <Text style={styles.emptyStateText}>尚無交易記錄</Text>
             </View>
           )}
+          </>}
         </View>
       </ScrollView>
 
@@ -999,21 +1254,33 @@ export default function AssetDetailScreen() {
         transparent={true}
         onRequestClose={() => setModalVisible(false)}
       >
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+        <TouchableWithoutFeedback onPress={Platform.OS === 'web' ? undefined : Keyboard.dismiss}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior={Platform.OS === 'web' ? undefined : Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.modalOverlay}
         >
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>新增交易記錄</Text>
+          <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>新增交易記錄</Text>
 
-            <Text style={styles.label}>類型</Text>
+            {isInvestmentAsset && txType === 'BUY' && tradePlan?.saved && tradePlanEntryEvaluation?.valid && (
+              <View style={[styles.modalTradePlan, { backgroundColor: colors.cardAlt, borderColor: colors.accent }]}>
+                <Text style={[styles.modalTradePlanTitle, { color: colors.text }]}>交易計畫參考</Text>
+                <Text style={[styles.modalTradePlanText, { color: colors.textSub }]}>目前價 {Number(tradePlanEntryEvaluation.entryPrice).toLocaleString()} · 參考停損 {Number(tradePlanEntryEvaluation.stopPrice).toLocaleString()}（{tradePlanEntryEvaluation.stopSourceLabel}）· 每股／單位風險 {Number(tradePlanEntryEvaluation.initialRiskPerShare || 0).toLocaleString()}</Text>
+                <TouchableOpacity onPress={() => {
+                  setTxPrice(String(Number(tradePlanEntryEvaluation.entryPrice)));
+                  setApplyTradePlan(true);
+                }} style={[styles.modalTradePlanButton, { backgroundColor: applyTradePlan ? colors.positive : colors.accent }]}><Text style={[styles.modalTradePlanButtonText, { color: colors.accentContrast }]}>{applyTradePlan ? '已帶入參考價格' : '帶入目前價格'}</Text></TouchableOpacity>
+              </View>
+            )}
+
+            <Text style={[styles.label, { color: colors.text }]}>類型</Text>
             <View style={styles.typeRow}>
               {TRANSACTION_TYPES.map((t) => (
                 <TouchableOpacity
                   key={t.id}
                   style={[
                     styles.typeChip,
+                    { backgroundColor: colors.cardAlt, borderColor: colors.border },
                     txType === t.id && styles.typeChipActive,
                     txType === t.id && { backgroundColor: transactionColor(t.id) },
                   ]}
@@ -1022,6 +1289,7 @@ export default function AssetDetailScreen() {
                   <Text
                     style={[
                       styles.typeChipText,
+                      { color: txType === t.id ? colors.accentContrast : colors.textSub },
                       txType === t.id && styles.typeChipTextActive,
                     ]}
                   >
@@ -1031,10 +1299,11 @@ export default function AssetDetailScreen() {
               ))}
             </View>
 
-            <Text style={styles.label}>日期</Text>
+            <Text style={[styles.label, { color: colors.text }]}>日期</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, { backgroundColor: colors.cardAlt, borderColor: colors.border, color: colors.text }]}
               placeholder="YYYY-MM-DD"
+              placeholderTextColor={colors.textMuted}
               value={txDate}
               onChangeText={setTxDate}
               keyboardType="numbers-and-punctuation"
@@ -1043,10 +1312,11 @@ export default function AssetDetailScreen() {
 
             {isInvestmentAsset && (
               <>
-                <Text style={styles.label}>股數</Text>
+                <Text style={[styles.label, { color: colors.text }]}>股數</Text>
                 <TextInput
-                  style={styles.input}
+                  style={[styles.input, { backgroundColor: colors.cardAlt, borderColor: colors.border, color: colors.text }]}
                   placeholder="輸入股數"
+                  placeholderTextColor={colors.textMuted}
                   value={txShares}
                   onChangeText={setTxShares}
                   keyboardType="decimal-pad"
@@ -1054,12 +1324,13 @@ export default function AssetDetailScreen() {
               </>
             )}
 
-            <Text style={styles.label}>
+            <Text style={[styles.label, { color: colors.text }]}>
               {isInvestmentAsset ? `價格 (${asset.currency})` : `金額 (${asset.currency})`}
             </Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, { backgroundColor: colors.cardAlt, borderColor: colors.border, color: colors.text }]}
               placeholder={isInvestmentAsset ? '輸入價格' : '輸入金額'}
+              placeholderTextColor={colors.textMuted}
               value={txPrice}
               onChangeText={setTxPrice}
               keyboardType="decimal-pad"
@@ -1086,10 +1357,10 @@ export default function AssetDetailScreen() {
 
             <View style={styles.modalButtons}>
               <TouchableOpacity
-                style={styles.cancelButton}
+                style={[styles.cancelButton, { backgroundColor: colors.cardAlt, borderColor: colors.border }]}
                 onPress={() => { setModalVisible(false); resetAddModal(); }}
               >
-                <Text style={styles.cancelButtonText}>取消</Text>
+                <Text style={[styles.cancelButtonText, { color: colors.textSub }]}>取消</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.confirmButton, { backgroundColor: PRIMARY }, adding && styles.confirmButtonDisabled]}
@@ -1113,23 +1384,24 @@ export default function AssetDetailScreen() {
         transparent={true}
         onRequestClose={() => setEditModalVisible(false)}
       >
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+        <TouchableWithoutFeedback onPress={Platform.OS === 'web' ? undefined : Keyboard.dismiss}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior={Platform.OS === 'web' ? undefined : Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.modalOverlay}
         >
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>編輯資產</Text>
+          <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>編輯資產</Text>
 
-            <Text style={styles.label}>名稱</Text>
+            <Text style={[styles.label, { color: colors.text }]}>名稱</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, { backgroundColor: colors.cardAlt, borderColor: colors.border, color: colors.text }]}
               placeholder="資產名稱"
+              placeholderTextColor={colors.textMuted}
               value={editName}
               onChangeText={setEditName}
             />
 
-            <Text style={styles.label}>分類</Text>
+            <Text style={[styles.label, { color: colors.text }]}>分類</Text>
             <View style={styles.categoryRow}>
               {CATEGORIES.map((c) => (
                 <TouchableOpacity
@@ -1154,10 +1426,11 @@ export default function AssetDetailScreen() {
 
             {editCategory === 'investment' && (
               <>
-                <Text style={styles.label}>槓桿倍數</Text>
+                <Text style={[styles.label, { color: colors.text }]}>槓桿倍數</Text>
                 <TextInput
-                  style={styles.input}
+                  style={[styles.input, { backgroundColor: colors.cardAlt, borderColor: colors.border, color: colors.text }]}
                   placeholder="例如: 1, 2, 3"
+                  placeholderTextColor={colors.textMuted}
                   value={editLeverage}
                   onChangeText={setEditLeverage}
                   keyboardType="decimal-pad"
@@ -1167,10 +1440,10 @@ export default function AssetDetailScreen() {
 
             <View style={styles.modalButtons}>
               <TouchableOpacity
-                style={styles.cancelButton}
+                style={[styles.cancelButton, { backgroundColor: colors.cardAlt, borderColor: colors.border }]}
                 onPress={() => setEditModalVisible(false)}
               >
-                <Text style={styles.cancelButtonText}>取消</Text>
+                <Text style={[styles.cancelButtonText, { color: colors.textSub }]}>取消</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.confirmButton, { backgroundColor: PRIMARY }, editSaving && styles.confirmButtonDisabled]}
@@ -1222,6 +1495,7 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
+  assetSummaryHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 40 },
   assetName: {
     fontSize: 24,
     fontWeight: 'bold',
@@ -1272,6 +1546,15 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     gap: 8,
   },
+  entryReasonCard: { marginHorizontal: 16, marginBottom: 16, borderWidth: 1, borderRadius: 16, padding: 15 },
+  entryReasonHeader: { flexDirection: 'row', alignItems: 'center', minHeight: 38, gap: 8 },
+  entryReasonTitle: { fontSize: 17, fontWeight: '800' },
+  entryReasonSubtitle: { fontSize: 11, marginTop: 3 },
+  entryReasonInput: { minHeight: 112, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, lineHeight: 20, marginTop: 12 },
+  entryReasonFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginTop: 9 },
+  entryReasonStatus: { flex: 1, fontSize: 11, lineHeight: 16 },
+  entryReasonSave: { minHeight: 38, borderRadius: 10, paddingHorizontal: 15, alignItems: 'center', justifyContent: 'center' },
+  entryReasonSaveText: { fontSize: 12, fontWeight: '800' },
   addTxButton: {
     flex: 1,
     flexDirection: 'row',
@@ -1318,6 +1601,19 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
+  tradePlanCard: { marginHorizontal: 16, marginBottom: 16, borderWidth: 1, borderRadius: 16, padding: 15 },
+  tradePlanHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  tradePlanEyebrow: { fontSize: 10, fontWeight: '800' },
+  tradePlanTitle: { fontSize: 18, fontWeight: '900', marginTop: 2 },
+  tradePlanBadge: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 9, paddingVertical: 6 },
+  tradePlanBadgeText: { fontSize: 10, fontWeight: '900' },
+  tradePlanReason: { fontSize: 11, lineHeight: 17, marginTop: 9 },
+  tradePlanMetrics: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 12 },
+  tradePlanMetric: { width: '47%' },
+  tradePlanMetricLabel: { fontSize: 9, marginBottom: 3 },
+  tradePlanMetricValue: { fontSize: 13, fontWeight: '800' },
+  tradePlanAction: { minHeight: 39, borderWidth: 1, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginTop: 13 },
+  tradePlanActionText: { fontSize: 12, fontWeight: '900' },
   chartSection: {
     marginHorizontal: 16,
     marginBottom: 16,
@@ -1380,12 +1676,14 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
   },
+  transactionsTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   transactionCard: {
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
   },
+  transactionSource: { fontSize: 11, fontWeight: '700', marginLeft: 8 },
   transactionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1441,6 +1739,11 @@ const styles = StyleSheet.create({
     color: '#18213C',
     marginBottom: 24,
   },
+  modalTradePlan: { borderWidth: 1, borderRadius: 12, padding: 11, marginBottom: 16 },
+  modalTradePlanTitle: { fontSize: 13, fontWeight: '900' },
+  modalTradePlanText: { fontSize: 10, lineHeight: 16, marginTop: 4 },
+  modalTradePlanButton: { minHeight: 36, borderRadius: 9, alignItems: 'center', justifyContent: 'center', marginTop: 9 },
+  modalTradePlanButtonText: { fontSize: 11, fontWeight: '900' },
   label: {
     fontSize: 14,
     fontWeight: '600',
@@ -1456,6 +1759,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 8,
+    borderWidth: 1,
     backgroundColor: '#f1f5f9',
   },
   typeChipActive: {},
@@ -1549,6 +1853,7 @@ const aiCardStyles = StyleSheet.create({
   header: {
     flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12,
   },
+  headerToggle: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, minHeight: 34 },
   iconWrap: {
     width: 30, height: 30, borderRadius: 9,
     justifyContent: 'center', alignItems: 'center',

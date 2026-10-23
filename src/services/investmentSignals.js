@@ -211,3 +211,17 @@ export async function syncLocalWatchlistToCloud(listOverride) {
   if (error) throw error;
   return { synced: rows.length };
 }
+
+export async function loadCloudWatchlist() {
+  const user = await currentUser();
+  const { data, error } = await supabase
+    .from('watchlist')
+    .select('id,symbol,market_type')
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data || []).map(item => ({
+    symbol: String(item.symbol).toUpperCase(),
+    market_type: item.market_type,
+  }));
+}

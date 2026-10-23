@@ -1,13 +1,14 @@
 import React, { useState, useCallback, useMemo, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, ActivityIndicator,
-  TouchableOpacity, RefreshControl,
+  TouchableOpacity, RefreshControl, Alert,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { SlidersHorizontal, X } from 'lucide-react-native';
+import { Eye, EyeOff, SlidersHorizontal, Trash2, X } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/ThemeContext';
+import { getTransactionSourceLabel } from '../lib/transactionReconciliation';
 
 const TYPE_CONFIG = {
   BUY:    { label: '買入', color: '#0DBD8B', bg: 'rgba(13,189,139,0.12)' },
@@ -42,6 +43,8 @@ export default function RecordsScreen() {
   const [assetFilter, setAssetFilter] = useState('all');
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
+  const [updatingIgnoreId, setUpdatingIgnoreId] = useState(null);
   const lastLoadedRef = useRef(0);
 
   useFocusEffect(useCallback(() => {
@@ -70,8 +73,8 @@ export default function RecordsScreen() {
           .limit(200),
         supabase
           .from('transactions')
-          .select('*', { count: 'exact', head: true })
-          .eq('user_id', user.id),
+          .select('id, assets!inner(user_id)', { count: 'exact', head: true })
+          .eq('assets.user_id', user.id),
       ]);
 
       setTransactions(data || []);
@@ -111,6 +114,87 @@ export default function RecordsScreen() {
   const resetAdvancedFilters = () => {
     setMarketFilter('all');
     setAssetFilter('all');
+  };
+
+  const deleteTransaction = async tx => {
+    if (!tx?.id || deletingId) return;
+    setDeletingId(tx.id);
+    try {
+      const { error } = await supabase
+        .from('transactions')
+        .delete()
+        .eq('id', tx.id);
+      if (error) throw error;
+
+      // The database trigger rebuilds the linked asset position. Reload the
+      // list so the displayed records, count, holdings and performance all
+      // reflect the deletion instead of only removing the local row.
+      setTransactions(current => current.filter(item => item.id !== tx.id));
+      setTotalCount(current => Math.max(0, current - 1));
+      lastLoadedRef.current = 0;
+      await loadData();
+    } catch (e) {
+      Alert.alert('刪除失敗', e.message || '無法刪除這筆交易紀錄，請稍後再試。');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const confirmDelete = tx => {
+    const typeLabel = TYPE_CONFIG[tx?.type]?.label || '調整';
+    const assetLabel = tx?.assets?.name || tx?.assets?.symbol || '這筆資產';
+    Alert.alert(
+      '刪除交易紀錄？',
+      `${assetLabel} · ${typeLabel}\n刪除後會重新計算持倉與投資報酬，且無法復原。`,
+      [
+        { text: '取消', style: 'cancel' },
+        { text: '刪除', style: 'destructive', onPress: () => { void deleteTransaction(tx); } },
+      ],
+    );
+  };
+
+  const togglePerformanceIgnore = async tx => {
+    if (!tx?.id || !['BUY', 'SELL'].includes(tx.type) || updatingIgnoreId) return;
+    const nextIgnored = !Boolean(tx.ignored_from_performance);
+    setUpdatingIgnoreId(tx.id);
+    try {
+      const { error } = await supabase
+        .from('transactions')
+        .update({ ignored_from_performance: nextIgnored })
+        .eq('id', tx.id);
+      if (error) throw error;
+      setTransactions(current => current.map(item => (
+        item.id === tx.id ? { ...item, ignored_from_performance: nextIgnored } : item
+      )));
+    } catch (e) {
+      const message = String(e?.message || '');
+      const migrationMissing = /ignored_from_performance|column .* does not exist/i.test(message)
+        || ['42703', 'PGRST204', 'PGRST205'].includes(String(e?.code || ''));
+      Alert.alert(
+        migrationMissing ? '功能尚未啟用' : '更新失敗',
+        migrationMissing
+          ? '請先套用交易忽略功能的 Supabase migration，之後才能忽略賣出報酬。'
+          : (message || '無法更新這筆賣出的報酬計算狀態。'),
+      );
+    } finally {
+      setUpdatingIgnoreId(null);
+    }
+  };
+
+  const confirmTogglePerformanceIgnore = tx => {
+    if (!['BUY', 'SELL'].includes(tx?.type)) return;
+    const nextIgnored = !Boolean(tx.ignored_from_performance);
+    const assetLabel = tx.assets?.name || tx.assets?.symbol || '這筆賣出';
+    Alert.alert(
+      nextIgnored ? '不計算這筆交易？' : '恢復計算這筆交易？',
+      nextIgnored
+        ? `${assetLabel} 會保留在交易紀錄，但不納入 FIFO 與淨值現金流。`
+        : `${assetLabel} 將重新納入 FIFO 報酬與淨值曲線計算。`,
+      [
+        { text: '取消', style: 'cancel' },
+        { text: nextIgnored ? '不計算' : '恢復計算', style: nextIgnored ? 'destructive' : 'default', onPress: () => { void togglePerformanceIgnore(tx); } },
+      ],
+    );
   };
 
   if (loading) {
@@ -204,7 +288,7 @@ export default function RecordsScreen() {
               const amount = parseFloat(tx.total_amount);
               return (
                 <View
-                  key={tx.id}
+                  key={`${tx.id}-${tx.asset_id || tx.assets?.id || ''}-${tx.trans_date}-${idx}`}
                   style={[styles.row, { borderBottomColor: colors.borderLight }, idx === filtered.length - 1 && { borderBottomWidth: 0 }]}
                 >
                   <View style={[styles.badge, { backgroundColor: cfg.bg }]}>
@@ -215,16 +299,48 @@ export default function RecordsScreen() {
                     <Text style={[styles.meta, { color: colors.textMuted }]}>
                       {tx.assets?.symbol ? `${tx.assets.symbol} · ` : ''}{dateStr}
                     </Text>
+                    <Text style={[styles.sourceLabel, { color: colors.textSub }]}>{getTransactionSourceLabel(tx)}</Text>
                   </View>
-                  <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={[styles.amount, { color: cfg.color }]}>
-                      {tx.type === 'SELL' ? '-' : '+'}{assetCurrency} {amount.toLocaleString('zh-TW', { maximumFractionDigits: 0 })}
-                    </Text>
-                    {parseFloat(tx.shares) !== 0 && (
-                      <Text style={[styles.shares, { color: colors.textMuted }]}>
-                        {tx.shares} 股 @ {parseFloat(tx.price).toFixed(2)}
+                  <View style={styles.rowEnd}>
+                    <View style={{ alignItems: 'flex-end', flexShrink: 1 }}>
+                      <Text style={[styles.amount, { color: cfg.color }]} numberOfLines={1} adjustsFontSizeToFit>
+                        {tx.type === 'SELL' ? '-' : '+'}{assetCurrency} {amount.toLocaleString('zh-TW', { maximumFractionDigits: 0 })}
                       </Text>
+                      {parseFloat(tx.shares) !== 0 && (
+                        <Text style={[styles.shares, { color: colors.textMuted }]} numberOfLines={1}>
+                          {tx.shares} 股 @ {parseFloat(tx.price).toFixed(2)}
+                        </Text>
+                      )}
+                      {tx.ignored_from_performance && (
+                        <Text style={[styles.ignoredLabel, { color: colors.warning || '#F5A623' }]}>不計績效</Text>
+                      )}
+                    </View>
+                    {['BUY', 'SELL'].includes(tx.type) && (
+                      <TouchableOpacity
+                        style={[styles.ignoreButton, { borderColor: tx.ignored_from_performance ? colors.warning || '#F5A623' : colors.borderLight, backgroundColor: tx.ignored_from_performance ? 'rgba(245,166,35,0.12)' : colors.cardAlt }]}
+                        onPress={() => confirmTogglePerformanceIgnore(tx)}
+                        disabled={updatingIgnoreId === tx.id}
+                        accessibilityRole="button"
+                        accessibilityLabel={tx.ignored_from_performance ? '恢復這筆交易績效計算' : '不計算這筆交易績效'}
+                      >
+                        {updatingIgnoreId === tx.id
+                          ? <ActivityIndicator size="small" color={colors.warning || '#F5A623'} />
+                          : (tx.ignored_from_performance
+                            ? <Eye size={15} color={colors.warning || '#F5A623'} />
+                            : <EyeOff size={15} color={colors.textSub} />)}
+                      </TouchableOpacity>
                     )}
+                    <TouchableOpacity
+                      style={[styles.deleteButton, { borderColor: colors.borderLight, backgroundColor: colors.cardAlt }]}
+                      onPress={() => confirmDelete(tx)}
+                      disabled={deletingId === tx.id}
+                      accessibilityRole="button"
+                      accessibilityLabel={`刪除${tx.assets?.name || tx.assets?.symbol || '這筆'}交易紀錄`}
+                    >
+                      {deletingId === tx.id
+                        ? <ActivityIndicator size="small" color={colors.danger || '#F03030'} />
+                        : <Trash2 size={15} color={colors.danger || '#F03030'} />}
+                    </TouchableOpacity>
                   </View>
                 </View>
               );
@@ -287,8 +403,19 @@ const styles = StyleSheet.create({
   },
   badgeText: { fontSize: 12, fontWeight: '700' },
   rowContent: { flex: 1 },
+  rowEnd: { flexDirection: 'row', alignItems: 'center', gap: 8, maxWidth: '58%' },
   assetName: { fontSize: 14, fontWeight: '500', marginBottom: 2 },
   meta: { fontSize: 12 },
   amount: { fontSize: 14, fontWeight: '600' },
   shares: { fontSize: 11, marginTop: 2 },
+  ignoredLabel: { fontSize: 10, fontWeight: '700', marginTop: 2 },
+  sourceLabel: { fontSize: 10, fontWeight: '600', marginTop: 2 },
+  ignoreButton: {
+    width: 30, height: 30, borderRadius: 15, borderWidth: 1,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  deleteButton: {
+    width: 30, height: 30, borderRadius: 15, borderWidth: 1,
+    alignItems: 'center', justifyContent: 'center',
+  },
 });

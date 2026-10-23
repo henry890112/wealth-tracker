@@ -196,13 +196,18 @@ export default function InvestmentSignalsScreen({ navigation }) {
           <Text style={[styles.emptyTitle, { color: colors.text }]}>尚未有分析結果</Text>
           <Text style={[styles.emptyText, { color: colors.textSub }]}>先新增台股自選或持倉，然後按上方「立即分析目前資料」。</Text>
         </View>
-      ) : latestResults.map(signal => {
+      ) : latestResults.map((signal, index) => {
         const open = expanded === signal.id;
         const metrics = signal.metrics || {};
         const isHolding = holdingSymbols.has(String(signal.symbol).toUpperCase());
         const holding = holdings.find(item => String(item.symbol).toUpperCase() === String(signal.symbol).toUpperCase());
         return (
-          <TouchableOpacity key={signal.id} activeOpacity={0.88} onPress={() => toggleExpanded(signal)} style={[styles.signalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <TouchableOpacity
+            key={`${signal.id}-${signal.symbol}-${index}`}
+            activeOpacity={0.88}
+            onPress={() => toggleExpanded(signal)}
+            style={[styles.signalCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+          >
             <View style={styles.signalTop}>
               <View style={styles.flex}><View style={styles.symbolRow}><Text style={[styles.symbol, { color: colors.text }]}>{signal.symbol}</Text>{!signal.read_at && <View style={[styles.dot, { backgroundColor: PRIMARY }]} />}{isHolding && <View style={[styles.holdingBadge, { backgroundColor: colors.accentSoft }]}><Text style={[styles.holdingBadgeText, { color: PRIMARY }]}>我的持倉</Text></View>}</View><Text style={[styles.name, { color: colors.textSub }]}>{signal.name}</Text></View>
               <View style={[styles.score, { backgroundColor: signal.is_candidate ? colors.accentSoft : colors.cardAlt }]}><Text style={[styles.scoreValue, { color: signal.is_candidate ? PRIMARY : colors.textSub }]}>{number(signal.score, 0)}</Text><Text style={[styles.scoreLabel, { color: signal.is_candidate ? PRIMARY : colors.textSub }]}>{signal.is_candidate ? '值得研究' : '尚未符合'}</Text></View>
@@ -212,7 +217,7 @@ export default function InvestmentSignalsScreen({ navigation }) {
             {open && <View style={[styles.detail, { borderTopColor: colors.border }]}>
               <View style={styles.metrics}><Metric label="本益比" value={metrics.per ? `${number(metrics.per)} 倍` : '—'} colors={colors} isDark={isDark} /><Metric label="三年 PER 25%" value={metrics.per_p25 ? `${number(metrics.per_p25)} 倍` : '—'} colors={colors} isDark={isDark} /><Metric label="近 5 日法人" value={metrics.institutional_net_buy ? `${number(metrics.institutional_net_buy, 0)} 股` : '—'} colors={colors} isDark={isDark} /><Metric label="20 日均額" value={metrics.avg_trading_money ? `$${number(metrics.avg_trading_money, 0)}` : '—'} colors={colors} isDark={isDark} /></View>
               <View style={styles.signalActions}>
-                <TouchableOpacity style={[styles.signalChartButton, { backgroundColor: colors.accentSoft }]} onPress={event => { event.stopPropagation?.(); navigation.navigate('TechnicalAnalysis', { symbol: signal.symbol, name: signal.name, averageCost: holding?.average_cost || 0, marketType: 'TW' }); }}><BarChart3 size={16} color={PRIMARY} /><Text style={[styles.signalAiButtonText, { color: PRIMARY }]}>K 線技術圖</Text></TouchableOpacity>
+                <TouchableOpacity style={[styles.signalChartButton, { backgroundColor: colors.accentSoft }]} onPress={event => { event.stopPropagation?.(); navigation.navigate('TechnicalAnalysis', { symbol: signal.symbol, name: signal.name, averageCost: holding?.average_cost || 0, currentShares: holding?.current_shares || 0, marketType: 'TW' }); }}><BarChart3 size={16} color={PRIMARY} /><Text style={[styles.signalAiButtonText, { color: PRIMARY }]}>K 線技術圖</Text></TouchableOpacity>
                 {isHolding && <TouchableOpacity style={[styles.signalAiButton, { borderColor: PRIMARY }]} onPress={event => { event.stopPropagation?.(); askAI(`請深入分析我的台股持倉 ${signal.name}（${signal.symbol}）。結合最新研究訊號、我的持有成本與目前損益，說明已符合的條件、未符合原因、持倉風險，以及接下來應追蹤的三項資訊。不要直接給買進或賣出指令。`); }}><Bot size={16} color={PRIMARY} /><Text style={[styles.signalAiButtonText, { color: PRIMARY }]}>問 AI</Text></TouchableOpacity>}
               </View>
             </View>}

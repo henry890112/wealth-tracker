@@ -302,7 +302,7 @@ Function 會自行判斷每位使用者目前是否到達其每小時或每日�
 
 ### AI 重大事件通知
 
-App 的「更多 → 重大事件通知」會依使用者的持倉與自選清單，以 Gemini Google Search 搜尋當日重大事件，回傳繁體中文摘要、關聯標的、重要性與可開啟的來源連結。台股、美股與加密貨幣可分別開關，Email／LINE 收件管道沿用「訊號通知」設定。
+App 的「更多 → 重大事件通知」會依使用者的持倉與自選清單，以 Gemini Google Search 搜尋當日重大事件，回傳繁體中文摘要、關聯標的、重要性與可開啟的來源連結。來源會依 Gemini grounding citation 逐則配對；發布時間優先由新聞頁面的 `datePublished`、`article:published_time` 或 `<time datetime>` metadata 取得。缺少明確發布時間或無法配對可靠新聞來源的事件不顯示，也不寄送。台股、美股與加密貨幣可分別開關，Email／LINE 收件管道沿用「訊號通知」設定。
 
 ```bash
 npx supabase@latest db push

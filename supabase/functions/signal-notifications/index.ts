@@ -10,7 +10,8 @@ type Preference = {
   timezone: string; email_enabled: boolean; notification_email: string | null;
   line_enabled: boolean; line_user_id: string | null; include_holdings: boolean;
   include_watchlist: boolean; markets: string[]; strategies: string[];
-  signal_statuses: string[]; signal_directions: string[]; max_symbols: number; last_notification_run_at: string | null;
+  signal_statuses: string[]; signal_directions: string[]; strategy_settings: Record<string, unknown> | null;
+  max_symbols: number; last_notification_run_at: string | null;
 };
 type Target = { symbol: string; market: string; name: string; holding: boolean; watchlist: boolean };
 type FlowConfirmation = {
@@ -59,10 +60,26 @@ const CORS = {
 };
 const STRATEGY_NAMES: Record<string, string> = {
   hybrid: "混合策略",
-  divergence: "MACD 背離", pullback: "趨勢回檔", breakout: "放量突破",
-  rsi: "RSI 反轉", boundary: "雙軌邊界", smc: "SMC",
+  candlestick: "K 線型態",
+  divergence: "MACD 背離", rsiDivergence: "RSI 背離", kdDivergence: "KD 背離", pullback: "趨勢回檔", breakout: "放量突破",
+  rsi: "RSI5／RSI10 交叉", boundary: "雙軌邊界", smc: "SMC", institutional: "法人籌碼／資金動能",
+  "pattern-double-top-bottom": "雙底／雙頂", "pattern-head-shoulders": "頭肩底／頭肩頂",
+  "pattern-triangle-flag": "三角收斂／旗型", "pattern-wedge": "楔型突破", "pattern-range": "矩形區間突破", "pattern-cup-handle": "杯柄型",
+  "trend-ma-cross": "均線交叉／多空排列", "trend-donchian": "Donchian 通道突破", "trend-adx": "ADX 趨勢濾網",
+  "trend-ichimoku": "一目均衡表雲層突破", "trend-supertrend": "Supertrend 趨勢跟隨",
+  "indicator-macd-cross": "MACD 黃金／死亡交叉", "indicator-kd-cross": "KD／Stochastic 交叉",
+  "indicator-bollinger-squeeze": "TTM Squeeze／布林波動擠壓", "indicator-bollinger-reversion": "布林帶均值回歸", "indicator-rsi-regime": "RSI 趨勢區間",
+  "price-sr-flip": "支撐／阻力互換", "price-bos-choch": "BOS／CHoCH 結構反轉", "price-liquidity-sweep": "流動性獵取",
+  "price-order-block": "Order Block 回踩", "price-fvg-retest": "FVG／失衡回補", "price-candlestick": "Pin Bar／吞噬 K",
+  "volume-vwap": "VWAP 回踩／均值回歸", "volume-breakout": "成交量突破確認", "volume-obv-divergence": "OBV 背離",
+  "volume-mfi-cmf": "MFI／CMF 資金流", "volume-profile": "Volume Profile POC／價值區", "volume-wyckoff": "威科夫吸籌／派發",
+  "stats-zscore": "Z-Score 均值回歸", "stats-pairs": "配對交易／價差回歸", "stats-momentum-ranking": "動能排名",
+  "stats-atr-breakout": "ATR 波動突破", "stats-volatility-contraction": "波動率收縮／擴張",
 };
 const MARKET_NAMES: Record<string, string> = { TW: "台股", US: "美股", CRYPTO: "加密貨幣" };
+const strategyName = (strategy: string, market = "") => strategy === "institutional"
+  ? (market === "TW" ? "法人籌碼" : "資金動能")
+  : (STRATEGY_NAMES[strategy] || strategy);
 const MARKET_ORDER = ["TW", "US", "CRYPTO"];
 const CRYPTO_NAMES: Record<string, string> = {
   BTC: "Bitcoin", ETH: "Ethereum", USDT: "Tether", BNB: "BNB", SOL: "Solana", XRP: "XRP",
@@ -718,7 +735,7 @@ function alertBreakdown(alerts: AlertItem[]) {
   return Object.fromEntries(MARKET_ORDER.map(market => [market, alerts.filter(item => item.market === market).length]));
 }
 
-function sharedSignals(marketData: MarketData, market: string, symbol: string): Signal[] {
+function sharedSignals(marketData: MarketData, market: string, symbol: string, strategySettings: Record<string, unknown> | null = null): Signal[] {
   const analysis = analyzeSharedTechnicalData(
     marketData.rows,
     Math.min(260, marketData.rows.length),
@@ -729,6 +746,7 @@ function sharedSignals(marketData: MarketData, market: string, symbol: string): 
       benchmarkRows: marketData.benchmarkRows || [],
       relativeStrengthRows: marketData.relativeStrengthRows || [],
       relativeStrengthBenchmark: marketData.relativeStrengthBenchmark || "",
+      strategySettings: strategySettings || {},
     },
   );
   const candidates = [...(analysis?.strategies || []), ...(analysis?.hybrid ? [analysis.hybrid] : [])];
@@ -778,7 +796,7 @@ async function relativeStrengthRowsForMarket(market: string, finmindToken: strin
   }
 }
 
-function hybridAnalysis(marketData: MarketData, market: string, symbol: string) {
+function hybridAnalysis(marketData: MarketData, market: string, symbol: string, strategySettings: Record<string, unknown> | null = null) {
   return analyzeSharedTechnicalData(
     marketData.rows,
     Math.min(260, marketData.rows.length),
@@ -789,6 +807,7 @@ function hybridAnalysis(marketData: MarketData, market: string, symbol: string) 
       benchmarkRows: marketData.benchmarkRows || [],
       relativeStrengthRows: marketData.relativeStrengthRows || [],
       relativeStrengthBenchmark: marketData.relativeStrengthBenchmark || "",
+      strategySettings: strategySettings || {},
     },
   );
 }
@@ -799,7 +818,7 @@ async function syncHybridPosition(
   target: Target,
   marketData: MarketData,
 ) {
-  const analysis = hybridAnalysis(marketData, target.market, target.symbol);
+  const analysis = hybridAnalysis(marketData, target.market, target.symbol, preference.strategy_settings);
   const hybrid = analysis?.hybrid;
   const latest = analysis?.latest;
   if (!latest) return { suppressEntry: false, exitSignal: null as Signal | null };
@@ -914,7 +933,7 @@ function digestText(alerts: AlertItem[], { manualTest = false }: MessageOptions 
     const hybrid = hybridGateSummary(item.signal);
     const risk = hybridRiskSummary(item.signal);
     const priceLabel = item.isIntraday ? "盤中暫估" : "收盤";
-    return `• ${MARKET_NAMES[item.market] || item.market}｜${item.symbol}${displayName}｜${STRATEGY_NAMES[item.signal.strategy]}｜${direction}・${status}\n  技術依據：${item.signal.reason}（${priceLabel}截至 ${item.candleDate}，${item.close.toFixed(2)}）${hybrid ? `\n  條件：${hybrid}` : ""}${risk ? `\n  路線／風控：${risk}` : ""}${flow}`;
+    return `• ${MARKET_NAMES[item.market] || item.market}｜${item.symbol}${displayName}｜${strategyName(item.signal.strategy, item.market)}｜${direction}・${status}\n  技術依據：${item.signal.reason}（${priceLabel}截至 ${item.candleDate}，${item.close.toFixed(2)}）${hybrid ? `\n  條件：${hybrid}` : ""}${risk ? `\n  路線／風控：${risk}` : ""}${flow}`;
   });
   const extra = alerts.length > 20 ? `\n另有 ${alerts.length - 20} 筆，請回 App 查看。` : "";
   const manual = manualTest ? "【手動測試】\n這是依 App 畫面目前選擇即時掃描的測試通知，不影響正式排程與去重紀錄。\n\n" : "";
@@ -971,7 +990,7 @@ function lineSignalBubble(item: AlertItem, manualTest = false, position: SignalC
         { type: "text", text: direction, size: "lg", weight: "bold", color: accent },
         { type: "box", layout: "horizontal", margin: "md", contents: [
           { type: "text", text: "策略", size: "xs", color: "#64748B", flex: 2 },
-          { type: "text", text: lineText(STRATEGY_NAMES[item.signal.strategy], 30), size: "sm", weight: "bold", color: "#172033", align: "end", flex: 5, wrap: true },
+          { type: "text", text: lineText(strategyName(item.signal.strategy, item.market), 30), size: "sm", weight: "bold", color: "#172033", align: "end", flex: 5, wrap: true },
         ] },
         { type: "separator", margin: "lg", color: "#E2E8F0" },
         { type: "text", text: "技術依據", size: "xs", color: "#64748B", margin: "lg" },
@@ -1137,7 +1156,7 @@ function emailHtml(alerts: AlertItem[], { manualTest = false, includeAll = false
           ? `<div style="margin-top:8px;padding:9px 10px;border-radius:8px;background-color:#17263a;color:#93c5fd;font-size:12px;line-height:1.55;overflow-wrap:anywhere"><strong style="color:#bfdbfe">分層條件：</strong>${escapeHtml(hybridGateSummary(item.signal))}<br/><strong style="color:#bfdbfe">路線／風控：</strong>${escapeHtml(hybridRiskSummary(item.signal))}</div>`
           : "";
         return `<div style="margin-top:${index ? "10" : "0"}px;padding:12px;border:1px solid #334155;border-radius:10px;background-color:#101722;color:#e5edf7;overflow:hidden;word-break:break-word">
-          <div style="font-size:12px;color:#94a3b8;line-height:1.45"><strong style="color:#e2e8f0">此標的第 ${index + 1}/${items.length} 張</strong> · ${escapeHtml(STRATEGY_NAMES[item.signal.strategy] || item.signal.strategy)}</div>
+          <div style="font-size:12px;color:#94a3b8;line-height:1.45"><strong style="color:#e2e8f0">此標的第 ${index + 1}/${items.length} 張</strong> · ${escapeHtml(strategyName(item.signal.strategy, item.market))}</div>
           <div style="margin-top:5px;font-size:14px;font-weight:700;color:${accent}">${bullish ? "偏多／進場注意" : "偏空／出場注意"} · ${item.isIntraday ? item.signal.status === "confirmed" ? "盤中暫估成立" : "盤中暫估觀察" : item.signal.status === "confirmed" ? "已確認" : "等待確認"}</div>
           <div style="margin-top:7px;font-size:13px;line-height:1.6;color:#dbe4ef;overflow-wrap:anywhere"><strong style="color:#f1f5f9">技術依據：</strong>${escapeHtml(item.signal.reason)}</div>
           <div style="margin-top:6px;font-size:12px;line-height:1.5;color:${item.isIntraday ? "#fbbf24" : "#94a3b8"}">${item.isIntraday ? "盤中暫估" : "行情截至"} ${escapeHtml(item.candleDate)} · ${item.isIntraday ? "盤中價" : "收盤"} ${item.close.toFixed(2)}${item.isIntraday && item.quoteTime ? ` · 掃描 ${escapeHtml(alertQuoteTime(item))}` : ""}</div>${hybridDetails}${marker}
@@ -1185,7 +1204,7 @@ async function sendIntradayEmail(to: string, events: Array<{ state: IntradayStat
       ${state.name ? `<div style="margin-top:4px;color:#aeb9c8;font-size:13px;line-height:1.4;overflow-wrap:anywhere">${escapeHtml(state.name)}</div>` : ""}
       <div style="margin-top:11px;font-size:15px;font-weight:700;color:${accent}">${status}</div>
       <div style="margin-top:8px;padding:10px;border-radius:9px;background-color:#101722;color:#dbe4ef;font-size:13px;line-height:1.65">
-        <strong style="color:#f1f5f9">策略：</strong>${escapeHtml(STRATEGY_NAMES[state.strategy] || state.strategy)}<br/>
+        <strong style="color:#f1f5f9">策略：</strong>${escapeHtml(strategyName(state.strategy, state.market))}<br/>
         <strong style="color:#f1f5f9">盤中現價：</strong>${price.toFixed(2)}<br/>
         <strong style="color:#f1f5f9">日線失效價：</strong>${Number(state.invalidation_level).toFixed(2)}
       </div>
@@ -1203,7 +1222,7 @@ async function sendTestEmail(request: Request, body: Record<string, unknown>, ad
   const requestedEmail = text(body.email); const destination = requestedEmail || text(data.user.email);
   if (!/^\S+@\S+\.\S+$/.test(destination)) return json({ error: "通知 Email 格式不正確" }, 400);
   const { data: preference, error: preferenceError } = await admin.from("investment_signal_preferences")
-    .select("user_id,enabled,schedule_frequency,daily_hour,timezone,email_enabled,notification_email,line_enabled,line_user_id,include_holdings,include_watchlist,markets,strategies,signal_statuses,signal_directions,max_symbols,last_notification_run_at")
+    .select("user_id,enabled,schedule_frequency,daily_hour,timezone,email_enabled,notification_email,line_enabled,line_user_id,include_holdings,include_watchlist,markets,strategies,signal_statuses,signal_directions,strategy_settings,max_symbols,last_notification_run_at")
     .eq("user_id", data.user.id).maybeSingle();
   if (preferenceError) return json({ error: preferenceError.message }, 500);
   if (!preference) return json({ error: "請先儲存通知設定後，再寄送目前訊號測試信" }, 400);
@@ -1236,7 +1255,7 @@ async function sendTestLine(request: Request, body: Record<string, unknown>, adm
   const { data, error } = await admin.auth.getUser(jwt);
   if (error || !data.user) return json({ error: "登入已失效，請重新登入" }, 401);
   const { data: preference, error: preferenceError } = await admin.from("investment_signal_preferences")
-    .select("user_id,enabled,schedule_frequency,daily_hour,timezone,email_enabled,notification_email,line_enabled,line_user_id,include_holdings,include_watchlist,markets,strategies,signal_statuses,signal_directions,max_symbols,last_notification_run_at")
+    .select("user_id,enabled,schedule_frequency,daily_hour,timezone,email_enabled,notification_email,line_enabled,line_user_id,include_holdings,include_watchlist,markets,strategies,signal_statuses,signal_directions,strategy_settings,max_symbols,last_notification_run_at")
     .eq("user_id", data.user.id).maybeSingle();
   if (preferenceError) return json({ error: preferenceError.message }, 500);
   if (!preference) return json({ error: "請先儲存通知設定後，再寄送目前訊號測試 LINE" }, 400);
@@ -1322,7 +1341,7 @@ async function scanPreference(
       const namedTarget = marketData.name && marketData.name.toUpperCase() !== target.symbol.toUpperCase()
         ? { ...target, name: marketData.name }
         : target;
-      let signals = sharedSignals(marketData, target.market, target.symbol);
+      let signals = sharedSignals(marketData, target.market, target.symbol, preference.strategy_settings);
       if (options.persistHybrid && preference.strategies.includes("hybrid")) {
         const completedMarketData = {
           ...marketData,
@@ -1492,7 +1511,7 @@ async function refreshIntradayForUser(request: Request, admin: ReturnType<typeof
 
   const { data: preference, error: preferenceError } = await admin
     .from("investment_signal_preferences")
-    .select("user_id,enabled,schedule_frequency,daily_hour,timezone,email_enabled,notification_email,line_enabled,line_user_id,include_holdings,include_watchlist,markets,strategies,signal_statuses,signal_directions,max_symbols,last_notification_run_at")
+    .select("user_id,enabled,schedule_frequency,daily_hour,timezone,email_enabled,notification_email,line_enabled,line_user_id,include_holdings,include_watchlist,markets,strategies,signal_statuses,signal_directions,strategy_settings,max_symbols,last_notification_run_at")
     .eq("user_id", auth.user.id)
     .maybeSingle();
   if (preferenceError) return json({ error: preferenceError.message }, 500);
@@ -1527,7 +1546,7 @@ async function refreshIntradayForUser(request: Request, admin: ReturnType<typeof
 }
 
 async function runScheduled(admin: ReturnType<typeof createClient>) {
-  const { data, error } = await admin.from("investment_signal_preferences").select("user_id,enabled,schedule_frequency,daily_hour,timezone,email_enabled,notification_email,line_enabled,line_user_id,include_holdings,include_watchlist,markets,strategies,signal_statuses,signal_directions,max_symbols,last_notification_run_at").eq("enabled", true);
+  const { data, error } = await admin.from("investment_signal_preferences").select("user_id,enabled,schedule_frequency,daily_hour,timezone,email_enabled,notification_email,line_enabled,line_user_id,include_holdings,include_watchlist,markets,strategies,signal_statuses,signal_directions,strategy_settings,max_symbols,last_notification_run_at").eq("enabled", true);
   if (error) throw error;
   const due = ((data || []) as Preference[]).filter(preference => isDue(preference));
   const cache = new Map<string, Promise<MarketData>>();

@@ -42,7 +42,7 @@ export function calculateMA(closes, period) {
  * Build a short plain-text technicals summary to feed to the AI.
  * Returns null if there's not enough data.
  */
-export function buildTechnicalsText(closes, currentPrice) {
+export function buildTechnicalsText(closes, currentPrice, priceLabel = '目前價格') {
   if (!closes || closes.length < 15) return null;
 
   const rsi   = calculateRSI(closes);
@@ -58,11 +58,11 @@ export function buildTechnicalsText(closes, currentPrice) {
   }
   if (ma20 !== null) {
     const pos = currentPrice > ma20 ? '站上 ↑' : '跌破 ↓';
-    lines.push(`MA20：${fmt(ma20)}（目前價格${pos} MA20）`);
+    lines.push(`MA20：${fmt(ma20)}（${priceLabel}${pos} MA20）`);
   }
   if (ma50 !== null) {
     const pos = currentPrice > ma50 ? '站上 ↑' : '跌破 ↓';
-    lines.push(`MA50：${fmt(ma50)}（目前價格${pos} MA50）`);
+    lines.push(`MA50：${fmt(ma50)}（${priceLabel}${pos} MA50）`);
   }
 
   return lines.length > 0 ? lines.join('\n') : null;

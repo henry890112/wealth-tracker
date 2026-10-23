@@ -10,14 +10,24 @@ import {
   Alert,
   ActivityIndicator,
   Platform,
+  Modal,
+  KeyboardAvoidingView,
 } from 'react-native';
-import { Check, LogOut, Globe, RefreshCw, Sun, Moon, Smartphone, Download, Upload, CloudUpload, Leaf, UserRound, Waves, Sparkles, Flame, Palette } from 'lucide-react-native';
+import { Check, LogOut, Globe, RefreshCw, Sun, Moon, Smartphone, Download, Upload, CloudUpload, Leaf, UserRound, Waves, Sparkles, Flame, Palette, X } from 'lucide-react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
 import { supabase } from '../lib/supabase';
+import { activateUserStorage, deactivateUserStorage } from '../lib/userScopedStorage';
+import {
+  forgetSavedAccount,
+  getSavedAccountSession,
+  listSavedAccounts,
+  rememberAccountSession,
+} from '../lib/accountSessions';
 import { fetchTWStockPrice, fetchUSStockPrice, fetchCryptoPrice } from '../services/api';
 import { useTheme } from '../lib/ThemeContext';
+import WebSafeTextInput from '../components/WebSafeTextInput';
 
 const CURRENCIES = [
   { code: 'TWD', name: '新台幣 (TWD)' },
@@ -56,9 +66,15 @@ export default function SettingsScreen({ route }) {
   const showSync = showAll || section === 'sync';
   const showData = showAll || section === 'data';
   const [profile, setProfile] = useState(null);
+  const [currentUserId, setCurrentUserId] = useState('');
   const [userEmail, setUserEmail] = useState('');
+  const [savedAccounts, setSavedAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [authAction, setAuthAction] = useState('');
+  const [accountModalVisible, setAccountModalVisible] = useState(false);
+  const [switchEmail, setSwitchEmail] = useState('');
+  const [switchPassword, setSwitchPassword] = useState('');
 
   useFocusEffect(useCallback(() => { loadProfile(); }, []));
 
@@ -67,7 +83,9 @@ export default function SettingsScreen({ route }) {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
+      setCurrentUserId(user.id);
       setUserEmail(user.email || '');
+      setSavedAccounts(await listSavedAccounts());
 
       const { data, error } = await supabase
         .from('profiles')
@@ -234,18 +252,100 @@ export default function SettingsScreen({ route }) {
     );
   };
 
+  const leaveCurrentAccount = async action => {
+    setAuthAction(action);
+    let userId = '';
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      userId = user?.id || '';
+      await deactivateUserStorage(userId);
+      const { error } = await supabase.auth.signOut({ scope: 'local' });
+      if (error) throw error;
+      await forgetSavedAccount(userId);
+    } catch (error) {
+      if (userId) await activateUserStorage(userId).catch(() => undefined);
+      Alert.alert(action === 'switch' ? '無法切換使用者' : '登出失敗', error.message || '請稍後再試');
+    } finally {
+      setAuthAction('');
+    }
+  };
+
+  const handleSwitchUser = () => {
+    setSwitchEmail('');
+    setSwitchPassword('');
+    setAccountModalVisible(true);
+  };
+
+  const handleSavedAccountSwitch = async account => {
+    if (!account?.id || account.id === currentUserId || authAction) return;
+    setAuthAction(account.id);
+    try {
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      if (currentSession) await rememberAccountSession(currentSession);
+
+      const savedSession = await getSavedAccountSession(account.id);
+      if (!savedSession) throw new Error('saved_session_missing');
+
+      const { data, error } = await supabase.auth.setSession(savedSession);
+      if (error || !data?.session) throw error || new Error('saved_session_invalid');
+      await rememberAccountSession(data.session);
+      setAccountModalVisible(false);
+    } catch (error) {
+      await forgetSavedAccount(account.id).catch(() => undefined);
+      setSavedAccounts(await listSavedAccounts());
+      Alert.alert('需要重新登入', `${account.email} 的登入已過期，請輸入密碼重新登入。`);
+      setSwitchEmail(account.email);
+    } finally {
+      setAuthAction('');
+    }
+  };
+
+  const handleAddAccount = async () => {
+    const normalizedEmail = switchEmail.trim().toLowerCase();
+    if (!/^\S+@\S+\.\S+$/.test(normalizedEmail) || !switchPassword) {
+      Alert.alert('資料不完整', '請輸入有效的電子郵件與密碼。');
+      return;
+    }
+
+    setAuthAction('login');
+    try {
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      if (currentSession) await rememberAccountSession(currentSession);
+
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: normalizedEmail,
+        password: switchPassword,
+      });
+      if (error || !data?.session) throw error || new Error('missing_session');
+
+      await rememberAccountSession(data.session);
+      setSwitchPassword('');
+      setAccountModalVisible(false);
+    } catch (error) {
+      const message = String(error?.message || '').toLowerCase();
+      Alert.alert(
+        '登入失敗',
+        message.includes('invalid login credentials')
+          ? '電子郵件或密碼不正確。'
+          : message.includes('email not confirmed')
+            ? '請先完成電子郵件驗證。'
+            : '目前無法登入，請稍後再試。',
+      );
+    } finally {
+      setAuthAction('');
+    }
+  };
+
   const handleSignOut = async () => {
     Alert.alert(
       '登出',
-      '確定要登出嗎？',
+      '確定要登出目前裝置嗎？其他裝置不會受到影響。',
       [
         { text: '取消', style: 'cancel' },
         {
           text: '登出',
           style: 'destructive',
-          onPress: async () => {
-            await supabase.auth.signOut();
-          },
+          onPress: () => leaveCurrentAccount('signout'),
         },
       ]
     );
@@ -340,6 +440,36 @@ export default function SettingsScreen({ route }) {
               <Text style={[styles.infoValue, { color: colors.textSub }]} numberOfLines={1}>{userEmail}</Text>
             </View>
           </View>
+        </View>
+
+        <Text style={[styles.savedAccountsTitle, { color: colors.textSub }]}>此裝置的其他帳號</Text>
+        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          {savedAccounts.filter(account => account.id !== currentUserId).length ? (
+            savedAccounts
+              .filter(account => account.id !== currentUserId)
+              .map((account, index, accounts) => (
+                <TouchableOpacity
+                  key={account.id}
+                  style={[
+                    styles.savedAccountRow,
+                    { borderBottomColor: colors.borderLight },
+                    index === accounts.length - 1 && { borderBottomWidth: 0 },
+                  ]}
+                  onPress={() => handleSavedAccountSwitch(account)}
+                  disabled={Boolean(authAction)}
+                >
+                  <View style={[styles.accountIconSmall, { backgroundColor: colors.accentSoft }]}>
+                    <UserRound size={18} color={PRIMARY} />
+                  </View>
+                  <Text style={[styles.savedAccountEmail, { color: colors.text }]} numberOfLines={1}>{account.email}</Text>
+                  {authAction === account.id
+                    ? <ActivityIndicator size="small" color={PRIMARY} />
+                    : <Text style={[styles.switchLabel, { color: PRIMARY }]}>切換</Text>}
+                </TouchableOpacity>
+              ))
+          ) : (
+            <Text style={[styles.emptyAccountText, { color: colors.textMuted }]}>尚未儲存其他帳號，請點下方加入。</Text>
+          )}
         </View>
       </View>}
 
@@ -451,11 +581,25 @@ export default function SettingsScreen({ route }) {
         <Text style={[styles.sectionTitle, { color: colors.text }]}>帳號</Text>
         <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <TouchableOpacity
-            style={[styles.actionRow, { borderBottomWidth: 0 }]}
-            onPress={handleSignOut}
+            style={[styles.actionRow, { borderBottomColor: colors.borderLight }]}
+            onPress={handleSwitchUser}
+            disabled={Boolean(authAction)}
           >
             <View style={styles.optionContent}>
-              <LogOut size={20} color="#E07070" />
+              {authAction === 'switch' ? <ActivityIndicator size="small" color={PRIMARY} /> : <RefreshCw size={20} color={PRIMARY} />}
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.optionText, { color: PRIMARY, fontWeight: '600' }]}>加入或切換使用者</Text>
+                <Text style={[styles.actionHint, { color: colors.textMuted }]}>登入一次後，之後可從上方快速切換</Text>
+              </View>
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.actionRow, { borderBottomWidth: 0 }]}
+            onPress={handleSignOut}
+            disabled={Boolean(authAction)}
+          >
+            <View style={styles.optionContent}>
+              {authAction === 'signout' ? <ActivityIndicator size="small" color="#E07070" /> : <LogOut size={20} color="#E07070" />}
               <Text style={[styles.optionText, styles.dangerText]}>登出</Text>
             </View>
           </TouchableOpacity>
@@ -469,6 +613,59 @@ export default function SettingsScreen({ route }) {
           個人資產管理系統
         </Text>
       </View>
+
+      <Modal
+        visible={accountModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !authAction && setAccountModalVisible(false)}
+      >
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'web' ? undefined : Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={[styles.accountModal, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={styles.modalHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.modalTitle, { color: colors.text }]}>登入其他帳號</Text>
+                <Text style={[styles.modalSubtitle, { color: colors.textSub }]}>帳號會安全保存在這部裝置</Text>
+              </View>
+              <TouchableOpacity onPress={() => setAccountModalVisible(false)} disabled={Boolean(authAction)}>
+                <X size={24} color={colors.textSub} />
+              </TouchableOpacity>
+            </View>
+
+            <WebSafeTextInput
+              style={[styles.accountInput, { backgroundColor: colors.input, borderColor: colors.border, color: colors.text }]}
+              placeholder="電子郵件"
+              placeholderTextColor={colors.textMuted}
+              value={switchEmail}
+              onChangeText={setSwitchEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              editable={!authAction}
+            />
+            <WebSafeTextInput
+              style={[styles.accountInput, { backgroundColor: colors.input, borderColor: colors.border, color: colors.text }]}
+              placeholder="密碼"
+              placeholderTextColor={colors.textMuted}
+              value={switchPassword}
+              onChangeText={setSwitchPassword}
+              secureTextEntry
+              editable={!authAction}
+            />
+            <TouchableOpacity
+              style={[styles.accountLoginButton, { backgroundColor: PRIMARY }, Boolean(authAction) && styles.buttonDisabled]}
+              onPress={handleAddAccount}
+              disabled={Boolean(authAction)}
+            >
+              {authAction === 'login'
+                ? <ActivityIndicator color={colors.accentContrast} />
+                : <Text style={[styles.accountLoginText, { color: colors.accentContrast }]}>登入並保存帳號</Text>}
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </ScrollView>
   );
 }
@@ -510,6 +707,41 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   accountIcon: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EAF2FF' },
+  savedAccountsTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  savedAccountRow: {
+    minHeight: 58,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderBottomWidth: 1,
+  },
+  accountIconSmall: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  savedAccountEmail: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  switchLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  emptyAccountText: {
+    padding: 16,
+    fontSize: 13,
+    lineHeight: 19,
+  },
   infoLabel: {
     fontSize: 16,
     fontWeight: '700',
@@ -556,9 +788,59 @@ const styles = StyleSheet.create({
   actionText: {
     fontWeight: '500',
   },
+  actionHint: { fontSize: 11, marginTop: 3 },
   dangerText: {
     color: '#E07070',
     fontWeight: '500',
+  },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: 20,
+    backgroundColor: 'rgba(0,0,0,0.62)',
+  },
+  accountModal: {
+    width: '100%',
+    maxWidth: 420,
+    alignSelf: 'center',
+    borderRadius: 20,
+    borderWidth: 1,
+    padding: 20,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 18,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  modalSubtitle: {
+    fontSize: 12,
+    marginTop: 4,
+  },
+  accountInput: {
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    fontSize: 16,
+    marginBottom: 12,
+  },
+  accountLoginButton: {
+    minHeight: 50,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
+  },
+  accountLoginText: {
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  buttonDisabled: {
+    opacity: 0.55,
   },
   footer: {
     alignItems: 'center',

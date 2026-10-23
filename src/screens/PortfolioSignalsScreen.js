@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { BarChart3, ChevronRight, CircleAlert, RefreshCw, ShieldCheck } from 'lucide-react-native';
+import { BarChart3, Check, ChevronRight, ChevronUp, CircleAlert, RefreshCw, ShieldCheck, SlidersHorizontal, X } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/ThemeContext';
 import { analyzeTechnicalData, fetchMarketTechnicalContext } from '../services/technicalAnalysis';
@@ -50,11 +50,14 @@ const MARKET_LABELS = { TW: '台股', US: '美股', CRYPTO: '加密貨幣' };
 const STRATEGY_FILTERS = [
   { key: 'ALL', label: '綜合策略' },
   { key: 'divergence', label: 'MACD 背離' },
+  { key: 'rsiDivergence', label: 'RSI 背離' },
+  { key: 'kdDivergence', label: 'KD 背離' },
   { key: 'pullback', label: '趨勢回檔' },
   { key: 'breakout', label: '放量突破' },
-  { key: 'rsi', label: 'RSI 反轉' },
+  { key: 'rsi', label: 'RSI5／RSI10 交叉' },
   { key: 'boundary', label: '雙軌邊界' },
   { key: 'smc', label: 'SMC' },
+  { key: 'institutional', label: '籌碼／資金動能' },
 ];
 const STRATEGY_LABELS = Object.fromEntries(STRATEGY_FILTERS.filter(item => item.key !== 'ALL').map(item => [item.key, item.label]));
 
@@ -79,6 +82,24 @@ const STRATEGY_RULES = {
       '3 個月：確認突破／跌破、MACD 與 MA20；三者同向才是高共識。',
     ],
   },
+  rsiDivergence: {
+    title: 'RSI 背離怎麼判斷？',
+    intro: '比較價格高低點與 RSI14 高低點；背離形成後，仍等待價格、RSI14 與 MA20 同向確認。',
+    lines: [
+      '偏多：價格創較低低點，但 RSI14 創較高低點；偏空條件反向判斷。',
+      '確認：收盤突破／跌破價格確認線、RSI14 多方高於 50 或空方低於 50，且收盤通過 MA20。',
+      '跌破／突破失效線、超過觀察期限或確認後重新跌回／站回確認線，訊號失效或降為觀察。',
+    ],
+  },
+  kdDivergence: {
+    title: 'KD 背離怎麼判斷？',
+    intro: '比較價格高低點與 KD-K 高低點；背離形成後，仍等待價格、K／D 動能與 MA20 同向確認。',
+    lines: [
+      '偏多：價格創較低低點，但 KD-K 創較高低點；偏空條件反向判斷。',
+      '確認：收盤突破／跌破價格確認線、偏多 K 高於 D 或偏空 K 低於 D，且收盤通過 MA20。',
+      '跌破／突破失效線、超過觀察期限或確認後重新跌回／站回確認線，訊號失效或降為觀察。',
+    ],
+  },
   pullback: {
     title: '趨勢回檔怎麼判斷？',
     intro: '先確認均線趨勢，再等待價格回測 MA20 後轉強或轉弱。',
@@ -98,12 +119,12 @@ const STRATEGY_RULES = {
     ],
   },
   rsi: {
-    title: 'RSI 反轉怎麼判斷？',
-    intro: 'RSI 必須與程式辨識出的支撐／壓力區同時成立，不單看超買超賣。',
+    title: 'RSI5／RSI10 交叉怎麼判斷？',
+    intro: '以短期 RSI5 與長期 RSI10 的實際交叉判斷動能方向，支撐／壓力只作輔助。',
     lines: [
-      '偏多：RSI14 從 30 以下重新站回 30，且價格位於最近支撐區附近。',
-      '偏空：RSI14 從 70 以上跌回 70，且價格位於最近壓力區附近。',
-      '觀察：RSI 接近 35／65 且靠近關鍵區，但尚未完成穿越確認。',
+      '偏多：RSI5 上穿 RSI10，標記在交叉發生的 K 棒。',
+      '偏空：RSI5 下穿 RSI10，標記在交叉發生的 K 棒。',
+      '門檻：低檔黃金交叉需 RSI5 上穿 RSI10 且任一線 ≤40；高檔死亡交叉需 RSI5 下穿 RSI10 且任一線 ≥60；未達門檻只列觀察。',
     ],
   },
   boundary: {
@@ -124,6 +145,17 @@ const STRATEGY_RULES = {
       'Sweep：折價區刺破 SSL 收回，或溢價區刺破 BSL 收回，並出現長影線。',
       'CHoCH：大實體 K 棒收破最近內部結構，形成 FVG 或找到突破前最後一根反向 OB，等待回踩才確認。',
       '股票需有相對量與大盤同向；預估 R:R 未達 2.5，或位於 EQ 無人區，只列觀察或不成立。',
+    ],
+  },
+  institutional: {
+    title: '籌碼／資金動能怎麼判斷？',
+    intro: '台股使用真實法人買賣資料；美股與加密貨幣使用量價資金動能代理指標。',
+    lines: [
+      '偏多確認：外資＋投信近 5 日合計買超，且至少 3 日為買超。',
+      '偏空確認：外資＋投信近 5 日合計賣超，且至少 3 日為賣超。',
+      '合計已有方向但同向未達 3 日時只列觀察；資料未公布或其他市場不建立訊號。',
+      '自營商與避險部位會顯示在明細中，但不作為此策略的方向確認條件。',
+      '美股／加密貨幣：CMF20 與 OBV 近 5 日斜率同向，且相對強弱同向時確認；RVOL ≥ 1.2 標記成交參與明顯。',
     ],
   },
 };
@@ -436,6 +468,7 @@ export default function PortfolioSignalsScreen({ navigation }) {
   const [institutionalOnly, setInstitutionalOnly] = useState(false);
   const [intradayStates, setIntradayStates] = useState([]);
   const [checkingIntraday, setCheckingIntraday] = useState(false);
+  const [strategySheetVisible, setStrategySheetVisible] = useState(false);
 
   const load = useCallback(async (forceRefresh = false, includeIntraday = true) => {
     forceRefresh ? setRefreshing(true) : setLoading(true);
@@ -485,7 +518,10 @@ export default function PortfolioSignalsScreen({ navigation }) {
       if (localWatchlistRaw !== null) {
         try { localWatchlist = JSON.parse(localWatchlistRaw); } catch { localWatchlist = []; }
       }
-      const watchlist = Array.isArray(localWatchlist) ? localWatchlist : (watchlistResult.data || []);
+      const cloudWatchlist = watchlistResult.error ? [] : (watchlistResult.data || []);
+      const watchlist = cloudWatchlist.length > 0
+        ? cloudWatchlist
+        : (Array.isArray(localWatchlist) ? localWatchlist : []);
       const holdings = mergeHoldings((assetsResult.data || []).filter(asset => asset.symbol));
       const universe = mergeWatchlist(holdings, watchlist);
       setProgress({ done: 0, total: universe.length });
@@ -604,6 +640,7 @@ export default function PortfolioSignalsScreen({ navigation }) {
   }), [institutionFilteredItems, statusFilter]);
 
   const selectedRules = STRATEGY_RULES[strategyFilter] || STRATEGY_RULES.ALL;
+  const selectedStrategyLabel = STRATEGY_FILTERS.find(strategy => strategy.key === strategyFilter)?.label || '綜合策略';
   const selectedUniverseTitle = sourceFilter === 'HOLDING' ? '持倉' : sourceFilter === 'WATCHLIST' ? '自選' : '全部';
   const selectedMarketTitle = marketFilter === 'ALL' ? '全部市場' : marketLabel(marketFilter);
 
@@ -617,15 +654,9 @@ export default function PortfolioSignalsScreen({ navigation }) {
   if (loading) return <View style={[styles.center, { backgroundColor: colors.bg }]}><ActivityIndicator size="large" color={colors.accent} /><Text style={[styles.loadingTitle, { color: colors.text }]}>正在分析持倉與自選</Text><Text style={[styles.loadingSub, { color: colors.textSub }]}>{progress.done}/{progress.total || '—'} 檔</Text></View>;
 
   return (
-    <ScrollView style={{ backgroundColor: colors.bg }} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={colors.accent} />}>
+    <View style={[styles.screen, { backgroundColor: colors.bg }]}>
+    <ScrollView style={styles.scroll} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={colors.accent} />}>
       <View style={[styles.hero, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={[styles.heroIcon, { backgroundColor: colors.accentSoft }]}><ShieldCheck size={22} color={colors.accent} /></View><View style={styles.flex}><Text style={[styles.heroTitle, { color: colors.text }]}>持倉與自選進出場訊號</Text><Text style={[styles.heroSub, { color: colors.textSub }]}>多頭趨勢過濾後，等待突破或回檔，再確認量能與相對強弱。</Text></View><TouchableOpacity accessibilityRole="button" accessibilityLabel="立即檢查盤中" disabled={checkingIntraday} onPress={refreshIntraday} style={[styles.intradayRefresh, { backgroundColor: colors.accentSoft, borderColor: colors.accent, opacity: checkingIntraday ? 0.6 : 1 }]}>{checkingIntraday ? <ActivityIndicator size="small" color={colors.accent} /> : <RefreshCw size={15} color={colors.accent} />}<Text style={[styles.intradayRefreshText, { color: colors.accent }]}>{checkingIntraday ? '檢查中' : '盤中檢查'}</Text></TouchableOpacity></View>
-
-      <View><Text style={[styles.filterLabel, { color: colors.textMuted }]}>判斷策略</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
-        {STRATEGY_FILTERS.map(strategy => {
-          const selected = strategyFilter === strategy.key;
-          return <TouchableOpacity key={strategy.key} style={[styles.strategyFilterChip, { backgroundColor: selected ? colors.accentSoft : colors.card, borderColor: selected ? colors.accent : colors.border }]} onPress={() => setStrategyFilter(strategy.key)} activeOpacity={0.8}><Text style={[styles.strategyFilterText, { color: selected ? colors.accent : colors.textSub }]}>{strategy.label}</Text></TouchableOpacity>;
-        })}
-      </ScrollView></View>
 
       <View style={[styles.rules, { backgroundColor: colors.cardAlt, borderColor: colors.border }]}> 
         <Text style={[styles.rulesTitle, { color: colors.text }]}>{selectedRules.title}</Text>
@@ -686,7 +717,7 @@ export default function PortfolioSignalsScreen({ navigation }) {
         const hasIntradayState = Boolean(item.intraday?.length);
         const market = marketKey(holding);
         const intradayTime = quoteClock(item.quoteTime, market);
-        return <TouchableOpacity key={`${holding.symbol}:${holding.market_type}`} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]} activeOpacity={0.82} onPress={() => navigation.navigate('TechnicalAnalysis', { symbol: holding.symbol, name: holding.name, averageCost: holding.average_cost, marketType: holding.market_type, strategyKey: strategyFilter })}>
+        return <TouchableOpacity key={`${holding.symbol}:${holding.market_type}`} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]} activeOpacity={0.82} onPress={() => navigation.navigate('TechnicalAnalysis', { symbol: holding.symbol, name: holding.name, averageCost: holding.average_cost, currentShares: holding.current_shares, marketType: holding.market_type, strategyKey: strategyFilter })}>
           <View style={styles.cardHeader}><View style={styles.flex}><View style={styles.symbolRow}><Text style={[styles.symbol, { color: colors.text }]}>{holding.symbol}</Text>{holding.isHolding && <View style={[styles.sourceBadge, { backgroundColor: colors.cardAlt, borderColor: colors.accent }]}><Text style={[styles.sourceBadgeText, { color: colors.accent }]}>持倉</Text></View>}{holding.isWatchlist && <View style={[styles.sourceBadge, { backgroundColor: colors.accentSoft, borderColor: colors.accent }]}><Text style={[styles.sourceBadgeText, { color: colors.accent }]}>自選</Text></View>}</View><Text style={[styles.name, { color: colors.textSub }]}>{holding.name}{holding.isHolding ? ` · ${holding.current_shares.toLocaleString()} 股` : ' · 尚未持有'}</Text></View><View style={[styles.badge, { backgroundColor: `${color}20`, borderColor: color }]}><Text style={[styles.badgeText, { color }]}>{display.label || STATUS_LABELS[display.key]}</Text></View><ChevronRight size={17} color={colors.textMuted} /></View>
           <View style={styles.dataModeRow}>
             <View style={[styles.dataModeBadge, { backgroundColor: item.isIntraday ? `${colors.warning}18` : colors.cardAlt, borderColor: item.isIntraday ? colors.warning : colors.border }]}><Text style={[styles.dataModeText, { color: item.isIntraday ? colors.warning : colors.textSub }]}>{item.isIntraday ? `盤中暫估日 K${intradayTime ? ` · ${intradayTime}` : ''}` : '正式收盤日 K'}{item.quoteSource ? ` · ${item.quoteSource}` : ''}</Text></View>
@@ -745,18 +776,86 @@ export default function PortfolioSignalsScreen({ navigation }) {
       })}
 
       <View style={[styles.notice, { backgroundColor: colors.accentSoft, borderColor: colors.border }]}><CircleAlert size={15} color={colors.accent} /><Text style={[styles.noticeText, { color: colors.textSub }]}>市場開盤時，卡片會以當日盤中 OHLCV 顯示暫估策略結果；正式進場與失效仍以收盤日 K 為準。法人資訊為額外標記，不參與混合策略必要條件。所有結果皆為研究訊號，不會自動下單。</Text></View>
-      <View style={{ height: 40 }} />
+      <View style={{ height: 88 }} />
     </ScrollView>
+
+    <TouchableOpacity
+      accessibilityRole="button"
+      accessibilityLabel={`切換判斷策略，目前為${selectedStrategyLabel}`}
+      activeOpacity={0.88}
+      onPress={() => setStrategySheetVisible(true)}
+      style={[styles.floatingStrategyButton, { backgroundColor: colors.accent, borderColor: colors.border }]}
+    >
+      <SlidersHorizontal size={17} color={colors.accentContrast} />
+      <Text numberOfLines={1} style={[styles.floatingStrategyText, { color: colors.accentContrast }]}>策略・{selectedStrategyLabel}</Text>
+      <ChevronUp size={16} color={colors.accentContrast} />
+    </TouchableOpacity>
+
+    <Modal visible={strategySheetVisible} transparent animationType="slide" statusBarTranslucent onRequestClose={() => setStrategySheetVisible(false)}>
+      <View style={styles.strategySheetOverlay}>
+        <Pressable accessibilityRole="button" accessibilityLabel="關閉策略選單" style={StyleSheet.absoluteFill} onPress={() => setStrategySheetVisible(false)} />
+        <View style={[styles.strategySheet, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.strategySheetHeader}>
+            <View style={styles.flex}>
+              <Text style={[styles.strategySheetTitle, { color: colors.text }]}>切換判斷策略</Text>
+              <Text style={[styles.strategySheetHint, { color: colors.textMuted }]}>選擇後會立即更新統計與標的訊號</Text>
+            </View>
+            <TouchableOpacity accessibilityRole="button" accessibilityLabel="關閉" onPress={() => setStrategySheetVisible(false)} style={[styles.strategySheetClose, { backgroundColor: colors.cardAlt }]}>
+              <X size={19} color={colors.textSub} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView style={styles.strategySheetList} showsVerticalScrollIndicator={false}>
+            <View style={styles.strategySheetGrid}>
+              {STRATEGY_FILTERS.map(strategy => {
+                const selected = strategyFilter === strategy.key;
+                const rules = STRATEGY_RULES[strategy.key] || STRATEGY_RULES.ALL;
+                return (
+                  <TouchableOpacity
+                    key={strategy.key}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    activeOpacity={0.78}
+                    onPress={() => {
+                      setStrategyFilter(strategy.key);
+                      setStrategySheetVisible(false);
+                    }}
+                    style={[styles.strategySheetOption, { backgroundColor: selected ? colors.accentSoft : colors.cardAlt, borderColor: selected ? colors.accent : colors.border }]}
+                  >
+                    <View style={styles.strategySheetOptionTop}>
+                      <Text numberOfLines={1} style={[styles.strategySheetOptionLabel, { color: selected ? colors.accent : colors.text }]}>{strategy.label}</Text>
+                      {selected && <Check size={15} color={colors.accent} />}
+                    </View>
+                    <Text numberOfLines={2} style={[styles.strategySheetOptionHint, { color: colors.textMuted }]}>{rules.intro}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  content: { padding: 16, gap: 13 }, flex: { flex: 1 }, center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 28 }, loadingTitle: { fontSize: 16, fontWeight: '800', marginTop: 13 }, loadingSub: { fontSize: 12, marginTop: 5 },
+  screen: { flex: 1 }, scroll: { flex: 1 }, content: { padding: 16, gap: 13 }, flex: { flex: 1 }, center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 28 }, loadingTitle: { fontSize: 16, fontWeight: '800', marginTop: 13 }, loadingSub: { fontSize: 12, marginTop: 5 },
   hero: { borderWidth: 1, borderRadius: 18, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 11 }, heroIcon: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' }, heroTitle: { fontSize: 17, fontWeight: '800' }, heroSub: { fontSize: 11, lineHeight: 17, marginTop: 3 }, intradayRefresh: { minWidth: 66, minHeight: 48, borderWidth: 1, borderRadius: 11, paddingHorizontal: 7, alignItems: 'center', justifyContent: 'center', gap: 3 }, intradayRefreshText: { fontSize: 8, fontWeight: '900' },
   rules: { borderWidth: 1, borderRadius: 15, padding: 12, gap: 7 }, rulesTitle: { fontSize: 13, fontWeight: '800' }, rulesIntro: { fontSize: 10, lineHeight: 16, marginBottom: 2 }, ruleLine: { flexDirection: 'row', alignItems: 'flex-start', gap: 7 }, ruleBullet: { width: 5, height: 5, borderRadius: 3, marginTop: 6 }, rulesText: { flex: 1, fontSize: 10, lineHeight: 16 },
   summaryRow: { flexDirection: 'row', gap: 8 }, summary: { flex: 1, minHeight: 82, borderWidth: 1, borderRadius: 14, paddingVertical: 9, paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center' }, summaryValue: { fontSize: 20, fontWeight: '900' }, summaryLabel: { fontSize: 9, marginTop: 2 }, summaryHint: { fontSize: 7, fontWeight: '700', marginTop: 4 },
   filterRow: { gap: 8, paddingRight: 4 }, filterChip: { minHeight: 38, borderWidth: 1, borderRadius: 19, paddingLeft: 13, paddingRight: 7, flexDirection: 'row', alignItems: 'center', gap: 7 }, filterText: { fontSize: 11, fontWeight: '800' }, filterCount: { minWidth: 24, height: 24, paddingHorizontal: 6, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, filterCountText: { fontSize: 9, fontWeight: '900' },
-  filterLabel: { fontSize: 9, fontWeight: '700', marginBottom: 7 }, strategyFilterChip: { minHeight: 36, borderWidth: 1, borderRadius: 18, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center' }, strategyFilterText: { fontSize: 10, fontWeight: '800' },
+  filterLabel: { fontSize: 9, fontWeight: '700', marginBottom: 7 },
+  floatingStrategyButton: { position: 'absolute', right: 16, bottom: 18, maxWidth: '72%', minHeight: 48, borderWidth: StyleSheet.hairlineWidth, borderRadius: 24, paddingHorizontal: 15, flexDirection: 'row', alignItems: 'center', gap: 8, shadowColor: '#000000', shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 5 }, elevation: 8 },
+  floatingStrategyText: { flexShrink: 1, fontSize: 12, fontWeight: '900' },
+  strategySheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.62)', justifyContent: 'flex-end' },
+  strategySheet: { maxHeight: '82%', borderWidth: StyleSheet.hairlineWidth, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 34 },
+  strategySheetHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 18 },
+  strategySheetTitle: { fontSize: 20, fontWeight: '900' }, strategySheetHint: { fontSize: 11, marginTop: 4 },
+  strategySheetClose: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  strategySheetList: { flexShrink: 1 }, strategySheetGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  strategySheetOption: { width: '48.5%', minHeight: 92, borderWidth: 1, borderRadius: 15, paddingHorizontal: 12, paddingVertical: 11 },
+  strategySheetOptionTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6 },
+  strategySheetOptionLabel: { flex: 1, fontSize: 12, fontWeight: '900' }, strategySheetOptionHint: { fontSize: 9, lineHeight: 14, marginTop: 8 },
   institutionalFilter: { minHeight: 54, borderWidth: 1, borderRadius: 14, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 9 }, institutionalFilterTitle: { fontSize: 11, fontWeight: '800' }, institutionalFilterSub: { fontSize: 8, marginTop: 3 }, institutionalFilterState: { fontSize: 9, fontWeight: '900' },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }, sectionTitle: { fontSize: 19, fontWeight: '800' }, sectionSub: { fontSize: 10, marginTop: 3 }, refresh: { width: 36, height: 36, borderWidth: 1, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   card: { borderWidth: 1, borderRadius: 17, padding: 13, gap: 10 }, cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 }, symbolRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }, symbol: { fontSize: 18, fontWeight: '900' }, sourceBadge: { borderWidth: 1, borderRadius: 7, paddingHorizontal: 6, paddingVertical: 3 }, sourceBadgeText: { fontSize: 8, fontWeight: '900' }, name: { fontSize: 11, marginTop: 2 }, badge: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 6 }, badgeText: { fontSize: 9, fontWeight: '800' },

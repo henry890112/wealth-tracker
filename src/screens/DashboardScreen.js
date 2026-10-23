@@ -1,14 +1,19 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
-  RefreshControl, ActivityIndicator, useWindowDimensions,
+  RefreshControl, ActivityIndicator, useWindowDimensions, Alert, Modal,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Wallet, TrendingUp, Home, DollarSign, CreditCard, Plus, RefreshCw, Eye, EyeOff } from 'lucide-react-native';
+import {
+  Wallet, TrendingUp, Home, DollarSign, CreditCard, Plus, RefreshCw,
+  Eye, EyeOff, Check, SlidersHorizontal, X,
+} from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Circle, Polyline } from 'react-native-svg';
 import { supabase } from '../lib/supabase';
 import { getTaipeiDateString, getTaipeiMonthStart } from '../lib/date';
+import { getDayPnlPresentation } from '../lib/marketPnl';
+import { applyCompleteFifoPositionCosts } from '../lib/positionAccounting';
 import { fetchExchangeRatesBatch } from '../services/api';
 import {
   calculatePortfolioTotals,
@@ -20,7 +25,18 @@ import {
 } from '../services/portfolio';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../lib/ThemeContext';
-import { describeQuote, getQuoteStatusColor } from '../lib/quoteMetadata';
+import {
+  buildCurrentFifoPerformanceContext,
+  buildInvestmentTransactionFlows,
+  calculateTradePerformance,
+  fetchInvestmentTransactions,
+  getInvestmentPerformanceIdentity,
+  normalizePerformanceMarket,
+  setAssetPerformanceExclusion,
+} from '../services/investmentPerformance';
+import { analyzeTechnicalData, fetchMarketTechnicalContext } from '../services/technicalAnalysis';
+import { calculateTradePlan, getTradePlanDisplayStatus } from '../services/tradePlanCalculator';
+import { loadActiveTradePlanStops, loadTradePlanSettings, saveTradePlanStops } from '../services/tradePlans';
 
 const DASHBOARD_CACHE_KEY = '@wt_dashboard_cache';
 
@@ -47,6 +63,61 @@ const getAllocationColors = (palette) => ({
 });
 
 const formatAmount = (amount) => Math.round(amount).toLocaleString('zh-TW');
+
+const getAssetRenderKey = (asset) => [
+  asset.id,
+  asset.category,
+  asset.market_type || '',
+  asset.symbol || asset.name || '',
+  asset.currency || '',
+].join(':');
+
+const getTradePlanKey = (asset) => [
+  String(asset?.market_type || '').trim().toUpperCase() === 'CRYPTO'
+    ? 'CRYPTO'
+    : String(asset?.market_type || '').trim().toUpperCase(),
+  String(asset?.symbol || '').trim().toUpperCase(),
+].join(':');
+
+const aggregateInvestmentAssets = (items = []) => {
+  const map = new Map();
+  for (const asset of items) {
+    if (asset?.category !== 'investment' || !asset?.symbol || !(Number(asset.current_shares) > 0)) continue;
+    const key = getTradePlanKey(asset);
+    const shares = Number(asset.current_shares) || 0;
+    const nativeCost = shares * (Number(asset.average_cost) || 0);
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, { ...asset, current_shares: shares, _nativeCost: nativeCost });
+      continue;
+    }
+    existing.current_shares += shares;
+    existing._nativeCost += nativeCost;
+    if (Number(asset.live_price) > 0) existing.live_price = Number(asset.live_price);
+  }
+  return [...map.values()].map(asset => ({
+    ...asset,
+    average_cost: asset.current_shares > 0 ? asset._nativeCost / asset.current_shares : 0,
+  }));
+};
+
+const runWithConcurrency = async (items, limit, worker) => {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      try {
+        results[index] = await worker(items[index]);
+      } catch (error) {
+        results[index] = { error };
+      }
+    }
+  });
+  await Promise.all(runners);
+  return results;
+};
 
 // ─── Sparkline ───────────────────────────────────────────────────────────────
 const Sparkline = ({ data, width, height = 40, color = GREEN }) => {
@@ -129,6 +200,85 @@ const DonutChart = ({ data, size = 110, strokeWidth = 18, bgColor = '#2A3A61' })
   );
 };
 
+const PnlExclusionModal = ({ visible, onClose, assets, savingAssetId, onToggle, colors }) => (
+  <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <View style={styles.pnlScopeOverlay}>
+      <TouchableOpacity
+        style={StyleSheet.absoluteFill}
+        activeOpacity={1}
+        onPress={onClose}
+        accessibilityRole="button"
+        accessibilityLabel="關閉投資損益計算範圍"
+      />
+      <View style={[styles.pnlScopeModal, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <View style={styles.pnlScopeHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.pnlScopeTitle, { color: colors.text }]}>投資損益計算範圍</Text>
+            <Text style={[styles.pnlScopeHint, { color: colors.textMuted }]}>排除公司配股等不屬於個人投資的部位</Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.pnlScopeClose, { backgroundColor: colors.cardAlt }]}
+            onPress={onClose}
+            accessibilityRole="button"
+            accessibilityLabel="關閉"
+          >
+            <X size={20} color={colors.textSub} />
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView style={styles.pnlScopeList} showsVerticalScrollIndicator={false}>
+          {assets.map(asset => {
+            const excluded = Boolean(asset.exclude_from_performance);
+            const saving = savingAssetId === asset.id;
+            return (
+              <TouchableOpacity
+                key={asset.id}
+                style={[styles.pnlScopeRow, { borderBottomColor: colors.border }]}
+                onPress={() => onToggle(asset)}
+                disabled={Boolean(savingAssetId)}
+                activeOpacity={0.7}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: !excluded, disabled: Boolean(savingAssetId) }}
+                accessibilityLabel={`${asset.name || asset.symbol}，${excluded ? '已排除' : '已納入'}`}
+              >
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={[styles.pnlScopeAssetName, { color: colors.text }]} numberOfLines={1}>
+                    {asset.name || asset.symbol}
+                  </Text>
+                  <Text style={[styles.pnlScopeAssetMeta, { color: colors.textMuted }]} numberOfLines={1}>
+                    {asset.symbol}{asset.market_type ? ` · ${MARKET_TYPE_CONFIG[asset.market_type]?.label || asset.market_type}` : ''}
+                  </Text>
+                </View>
+                <View style={[
+                  styles.pnlScopeToggle,
+                  {
+                    backgroundColor: excluded ? colors.cardAlt : colors.accentSoft,
+                    borderColor: excluded ? colors.border : colors.accent,
+                  },
+                ]}>
+                  {saving
+                    ? <ActivityIndicator size="small" color={colors.accent} />
+                    : !excluded && <Check size={14} color={colors.accent} strokeWidth={3} />}
+                  {!saving && (
+                    <Text style={[styles.pnlScopeToggleText, { color: excluded ? colors.textMuted : colors.accent }]}>
+                      {excluded ? '已排除' : '納入'}
+                    </Text>
+                  )}
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+
+        <Text style={[styles.pnlScopeFooter, { color: colors.textMuted }]}>此設定也會套用到「股票交易報酬」，不影響淨資產、資產配置與持倉。</Text>
+        <TouchableOpacity style={[styles.pnlScopeDone, { backgroundColor: colors.accent }]} onPress={onClose}>
+          <Text style={[styles.pnlScopeDoneText, { color: colors.accentContrast }]}>完成</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  </Modal>
+);
+
 // ─── Main Screen ─────────────────────────────────────────────────────────────
 export default function DashboardScreen() {
   const navigation          = useNavigation();
@@ -153,13 +303,21 @@ export default function DashboardScreen() {
   const [hidden,             setHidden]             = useState(false);
   const [sortOrder,          setSortOrder]          = useState('default');
   const [isRefreshing,       setIsRefreshing]       = useState(false);
-  const [categorySnapshots,  setCategorySnapshots]  = useState({});
+  const [categorySnapshots,  setCategorySnapshots]  = useState([]);
   const [loadError,          setLoadError]          = useState(null);
   const [hasWatchlist,       setHasWatchlist]       = useState(false);
   const [selectedPnlMarket,  setSelectedPnlMarket]  = useState('ALL');
+  const [positionCostNotice, setPositionCostNotice] = useState(null);
+  const [fifoTransactionFlows, setFifoTransactionFlows] = useState(null);
+  const [pnlScopeVisible,    setPnlScopeVisible]    = useState(false);
+  const [savingPnlAssetId,   setSavingPnlAssetId]   = useState(null);
+  const [tradePlanStatuses,  setTradePlanStatuses]  = useState({});
+  const [tradePlanLoading,   setTradePlanLoading]   = useState(false);
+  const [selectedTradePlanState, setSelectedTradePlanState] = useState(null);
   const CONCENTRATION_THRESHOLD = 0.30; // warn when single asset > 30% of portfolio
 
   const lastLoadedRef = useRef(0);
+  const tradePlanRequestRef = useRef(0);
 
   // ── theme tokens ─────────────────────────────────────────────────────────
   const C = {
@@ -183,6 +341,9 @@ export default function DashboardScreen() {
           const { assets: ca, netWorth: cnw } = JSON.parse(cached);
           setAssets(ca);
           setNetWorth(cnw);
+          if (ca.some(asset => asset.category === 'investment' && Number(asset.current_shares) > 0)) {
+            setPositionCostNotice('正在核對交易紀錄；目前先顯示上次計算結果。');
+          }
           setLoading(false);
           setIsRefreshing(true);
         }
@@ -208,12 +369,19 @@ export default function DashboardScreen() {
         ? `inv:${asset.symbol}:${asset.market_type || ''}:${asset.currency || ''}:${asset.category}`
         : `${asset.category}:${asset.name}:${asset.currency || ''}`;
       if (!map.has(key)) {
-        map.set(key, { ...asset, _allIds: [asset.id] });
+        const shares = Number(asset.current_shares) || 0;
+        map.set(key, {
+          ...asset,
+          _allIds: [asset.id],
+          _nativeCost: shares * (Number(asset.average_cost) || 0),
+        });
       } else {
         const ex = map.get(key);
+        const shares = Number(asset.current_shares) || 0;
         ex._allIds.push(asset.id);
         ex.converted_amount = (ex.converted_amount || 0) + (asset.converted_amount || 0);
-        ex.current_shares = (ex.current_shares || 0) + (asset.current_shares || 0);
+        ex.current_shares = (ex.current_shares || 0) + shares;
+        ex._nativeCost = (ex._nativeCost || 0) + shares * (Number(asset.average_cost) || 0);
         if (ex.pnl !== null && asset.pnl !== null) {
           ex.pnl += asset.pnl;
           ex.converted_cost = (ex.converted_cost || 0) + (asset.converted_cost || 0);
@@ -229,23 +397,51 @@ export default function DashboardScreen() {
           ex.day_pnl = asset.day_pnl;
           ex.day_pnl_pct = asset.day_pnl_pct;
         }
+        ex.exclude_from_performance = Boolean(ex.exclude_from_performance) || Boolean(asset.exclude_from_performance);
       }
     }
-    return Array.from(map.values());
+    return Array.from(map.values()).map(asset => {
+      if (asset.category !== 'investment' || !(Number(asset.current_shares) > 0)) return asset;
+      return {
+        ...asset,
+        average_cost: Number(asset._nativeCost) > 0
+          ? Number(asset._nativeCost) / Number(asset.current_shares)
+          : Number(asset.average_cost) || 0,
+      };
+    });
   }, [assets]);
 
   const categoryTotals = useMemo(() => {
     const totals = {};
     for (const cat of [...ASSET_CATEGORIES, 'liability']) {
-      const list = mergedAssets.filter(a => a.category === cat);
+      const list = mergedAssets.filter(a => a.category === cat && !(cat === 'investment' && Number(a.current_shares || 0) <= 0));
       totals[cat] = { total: list.reduce((s, a) => s + a.converted_amount, 0), count: list.length };
     }
     return totals;
   }, [mergedAssets]);
 
+  const tradePlanSummary = useMemo(() => {
+    const holdings = mergedAssets.filter(asset => (
+      asset.category === 'investment' && asset.symbol && Number(asset.current_shares) > 0
+    ));
+    const counts = { normal: 0, warning: 0, invalid: 0, unset: 0, missing: 0, pending: 0 };
+    holdings.forEach(asset => {
+      const state = tradePlanStatuses[getTradePlanKey(asset)]?.state || 'pending';
+      counts[state] = (counts[state] || 0) + 1;
+    });
+    return { total: holdings.length, ...counts };
+  }, [mergedAssets, tradePlanStatuses]);
+
   const filteredAssets = useMemo(() =>
-    selectedCategory ? mergedAssets.filter(a => a.category === selectedCategory) : mergedAssets,
-  [mergedAssets, selectedCategory]);
+    mergedAssets.filter(a =>
+      !(a.category === 'investment' && Number(a.current_shares || 0) <= 0) &&
+      (!selectedCategory || a.category === selectedCategory) &&
+      (!selectedTradePlanState || (
+        a.category === 'investment' &&
+        tradePlanStatuses[getTradePlanKey(a)]?.state === selectedTradePlanState
+      ))
+    ),
+  [mergedAssets, selectedCategory, selectedTradePlanState, tradePlanStatuses]);
 
   const sortedFilteredAssets = useMemo(() => {
     if (sortOrder === 'default') return filteredAssets;
@@ -286,7 +482,7 @@ export default function DashboardScreen() {
 
   const pnlMarketOptions = useMemo(() => {
     const available = [...new Set(mergedAssets
-      .filter(asset => asset.category === 'investment' && asset.market_type)
+      .filter(asset => asset.category === 'investment' && Number(asset.current_shares || 0) > 0 && !asset.exclude_from_performance && asset.market_type)
       .map(asset => asset.market_type))];
     return ['ALL', ...['TW', 'US', 'Crypto', 'other'].filter(market => available.includes(market))];
   }, [mergedAssets]);
@@ -295,40 +491,82 @@ export default function DashboardScreen() {
     if (!pnlMarketOptions.includes(selectedPnlMarket)) setSelectedPnlMarket('ALL');
   }, [pnlMarketOptions, selectedPnlMarket]);
 
+  const fifoPnlByMarket = useMemo(() => {
+    if (fifoTransactionFlows === null) return null;
+    const context = buildCurrentFifoPerformanceContext(assets, fifoTransactionFlows);
+    const summaries = {
+      ALL: calculateTradePerformance(context, 'ALL', 'ALL'),
+    };
+    for (const market of context.markets) {
+      summaries[market] = calculateTradePerformance(context, market, 'ALL');
+    }
+    return summaries;
+  }, [assets, fifoTransactionFlows]);
+
   const investmentPnl = useMemo(() => {
     const investments = mergedAssets.filter(asset =>
       asset.category === 'investment' &&
+      Number(asset.current_shares || 0) > 0 &&
+      !asset.exclude_from_performance &&
       (selectedPnlMarket === 'ALL' || (asset.market_type || 'other') === selectedPnlMarket)
     );
     const dayAssets = investments
+      .filter(asset => asset.day_pnl !== null && asset.day_pnl !== undefined)
       .map(asset => ({ ...asset, _dayPnl: Number(asset.day_pnl) }))
       .filter(asset => Number.isFinite(asset._dayPnl));
-    const cumulativeAssets = investments
-      .map(asset => ({ ...asset, _pnl: Number(asset.pnl) }))
-      .filter(asset => Number.isFinite(asset._pnl));
     const day = dayAssets.reduce((sum, asset) => sum + asset._dayPnl, 0);
+    const dayPresentation = getDayPnlPresentation(dayAssets, selectedPnlMarket);
     const previousValue = dayAssets.reduce((sum, asset) => sum + Number(asset.converted_amount) - asset._dayPnl, 0);
-    const cumulative = cumulativeAssets.reduce((sum, asset) => sum + asset._pnl, 0);
-    const cost = cumulativeAssets.reduce((sum, asset) => sum + (asset.converted_cost || 0), 0);
+    const marketKey = selectedPnlMarket === 'ALL' ? 'ALL' : normalizePerformanceMarket(selectedPnlMarket);
+    const fifoSummary = fifoPnlByMarket?.[marketKey] || null;
+    const cumulative = Number(fifoSummary?.unrealizedPnl) || 0;
+    const cost = Number(fifoSummary?.openCost) || 0;
     return {
       day,
+      dayLabel: dayPresentation.label,
+      dayQuoteDateLabel: dayPresentation.quoteDateLabel,
+      isPreviousSession: dayPresentation.isPreviousSession,
       dayPct: previousValue !== 0 ? (day / Math.abs(previousValue)) * 100 : null,
       hasDay: dayAssets.length > 0,
       cumulative,
       cumulativePct: cost > 0 ? (cumulative / cost) * 100 : null,
-      hasCumulative: cumulativeAssets.length > 0,
+      hasCumulative: cost > 0,
       count: investments.length,
     };
-  }, [mergedAssets, selectedPnlMarket]);
+  }, [mergedAssets, selectedPnlMarket, fifoPnlByMarket]);
 
-  const liquidSparkline     = categorySnapshots['liquid'] || [];
+  const pnlScopeAssets = useMemo(() => {
+    const marketOrder = { TW: 0, US: 1, Crypto: 2, other: 3 };
+    return mergedAssets
+      .filter(asset => asset.category === 'investment' && Number(asset.current_shares || 0) > 0)
+      .sort((a, b) => {
+        const marketDiff = (marketOrder[a.market_type || 'other'] ?? 9) - (marketOrder[b.market_type || 'other'] ?? 9);
+        if (marketDiff !== 0) return marketDiff;
+        return String(a.symbol || a.name || '').localeCompare(String(b.symbol || b.name || ''), 'zh-TW');
+      });
+  }, [mergedAssets]);
+
+  const excludedPnlCount = useMemo(
+    () => pnlScopeAssets.filter(asset => asset.exclude_from_performance).length,
+    [pnlScopeAssets]
+  );
+
+  const liquidSparkline = useMemo(() => (categorySnapshots || [])
+    .filter(row => row?.category === 'liquid' && row?.date)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+    .map(row => Number(row.value))
+    .filter(Number.isFinite), [categorySnapshots]);
   const investmentSparkline = useMemo(() => {
-    const tw     = categorySnapshots['TW']     || [];
-    const us     = categorySnapshots['US']     || [];
-    const crypto = categorySnapshots['Crypto'] || [];
-    const maxLen = Math.max(tw.length, us.length, crypto.length);
-    if (maxLen === 0) return [];
-    return Array.from({ length: maxLen }, (_, i) => (tw[i] || 0) + (us[i] || 0) + (crypto[i] || 0));
+    const totalsByDate = new Map();
+    for (const row of categorySnapshots || []) {
+      if (!row?.date || !['TW', 'US', 'Crypto'].includes(row.category)) continue;
+      const value = Number(row.value);
+      if (!Number.isFinite(value)) continue;
+      totalsByDate.set(row.date, (totalsByDate.get(row.date) || 0) + value);
+    }
+    return [...totalsByDate.entries()]
+      .sort(([first], [second]) => String(first).localeCompare(String(second)))
+      .map(([, value]) => value);
   }, [categorySnapshots]);
 
   // ── focus effect ─────────────────────────────────────────────────────────
@@ -441,9 +679,155 @@ export default function DashboardScreen() {
     return next;
   };
 
+  const refreshTradePlanStatuses = async (assetsData) => {
+    const requestId = ++tradePlanRequestRef.current;
+    const holdings = aggregateInvestmentAssets(assetsData);
+    if (!holdings.length) {
+      setTradePlanStatuses({});
+      setTradePlanLoading(false);
+      return;
+    }
+
+    setTradePlanLoading(true);
+    try {
+      const [settings, activeStops] = await Promise.all([
+        loadTradePlanSettings(),
+        loadActiveTradePlanStops(),
+      ]);
+      if (requestId !== tradePlanRequestRef.current) return;
+
+      if (!settings.saved) {
+        setTradePlanStatuses(Object.fromEntries(holdings.map(asset => [
+          getTradePlanKey(asset),
+          { state: 'unset', label: '未設定' },
+        ])));
+        return;
+      }
+
+      const stopMap = new Map((activeStops || []).map(stop => [
+        getTradePlanKey({ symbol: stop.symbol, market_type: stop.market_type }),
+        stop,
+      ]));
+      const results = await runWithConcurrency(holdings, 3, async asset => {
+        const savedStop = stopMap.get(getTradePlanKey(asset));
+        const context = await fetchMarketTechnicalContext(
+          asset.symbol,
+          asset.market_type,
+          1095,
+          false,
+          true,
+        );
+        const rows = Array.isArray(context?.rows) ? context.rows : [];
+        if (rows.length < 60) throw new Error('歷史資料不足');
+        const analysis = analyzeTechnicalData(rows, Math.min(130, rows.length), context);
+        const currentPrice = Number(context?.quote?.price)
+          || Number(asset.live_price)
+          || Number(analysis?.latest?.close);
+        const calculation = calculateTradePlan({
+          entryPrice: Number(asset.average_cost),
+          savedEntryPrice: savedStop?.entry_price,
+          atr: analysis?.latest?.atr14 || analysis?.atr,
+          positionSize: Number(asset.current_shares),
+          currentPrice,
+          isIntraday: Boolean(context?.isIntraday),
+          analysis,
+          effectiveStop: savedStop?.last_effective_stop,
+          effectiveStopSource: savedStop?.last_stop_source,
+          initialStop: savedStop?.initial_stop_price,
+          initialRiskPerShare: savedStop?.initial_risk_per_share,
+          highestPriceSinceEntry: savedStop?.highest_price_since_entry,
+          effectiveStopEvaluatedAt: savedStop?.last_evaluated_at,
+          confirmedInvalidAt: savedStop?.invalidated_at,
+          confirmedInvalidPrice: savedStop?.invalidation_price,
+          confirmedInvalidSessionDate: savedStop?.invalidation_session_date,
+          marketType: asset.market_type,
+          atrMultiplier: settings.atr_multiplier,
+        });
+        if (!calculation.valid || !(Number(calculation.stopPrice) > 0) || !(currentPrice > 0)) {
+          throw new Error(calculation.errors?.[0] || '交易計畫資料不足');
+        }
+        const displayStatus = getTradePlanDisplayStatus(calculation);
+        const referenceStopPrice = calculation.confirmedInvalid
+          ? Number(calculation.invalidationStopPrice || calculation.stopPrice)
+          : Number(calculation.stopPrice);
+        const distancePct = (currentPrice - referenceStopPrice) / referenceStopPrice * 100;
+        const intradayStopStatus = displayStatus.state === 'warning'
+          && Boolean(context?.isIntraday)
+          && currentPrice <= referenceStopPrice
+          ? currentPrice < referenceStopPrice ? '盤中跌破停損' : '盤中觸及停損'
+          : null;
+        const shouldPersist = calculation.rebaseRequired
+          || !savedStop
+          || Number(calculation.stopPrice) > Number(savedStop.last_effective_stop || 0) + 1e-8
+          || savedStop.last_stop_source !== calculation.stopSource
+          || !(Number(savedStop.initial_stop_price) > 0)
+          || !(Number(savedStop.initial_risk_per_share) > 0)
+          || (calculation.confirmedInvalid && !savedStop.invalidated_at);
+        return {
+          key: getTradePlanKey(asset),
+          state: displayStatus.state,
+          label: displayStatus.label,
+          stopPrice: calculation.stopPrice,
+          referenceStopPrice,
+          currentPrice,
+          distancePct,
+          intradayStopStatus,
+          rewardMultiple: calculation.rewardMultiple,
+          recoveredAfterInvalidation: calculation.recoveredAfterInvalidation,
+          persist: shouldPersist ? {
+            symbol: asset.symbol,
+            marketType: asset.market_type,
+            entryPrice: calculation.entryPrice,
+            effectiveStop: calculation.stopPrice,
+            initialStop: calculation.initialStopPrice,
+            initialRiskPerShare: calculation.initialRiskPerShare,
+            highestPriceSinceEntry: calculation.highestPriceSinceEntry,
+            stopSource: calculation.stopSource,
+            rebaseExisting: Boolean(calculation.rebaseRequired),
+            invalidatedAt: calculation.invalidatedAt,
+            invalidationPrice: calculation.invalidationPrice,
+            invalidationSessionDate: calculation.invalidationSessionDate,
+          } : null,
+        };
+      });
+      if (requestId !== tradePlanRequestRef.current) return;
+      const plansToPersist = results
+        .filter(result => !result?.error && result?.persist)
+        .map(result => result.persist);
+      if (plansToPersist.length) {
+        try {
+          await saveTradePlanStops(plansToPersist);
+        } catch (saveError) {
+          console.warn('Trade plan overview save error:', saveError?.message || saveError);
+        }
+      }
+      if (requestId !== tradePlanRequestRef.current) return;
+      const nextStatuses = {};
+      results.forEach((result, index) => {
+        const key = getTradePlanKey(holdings[index]);
+        nextStatuses[key] = result?.error
+          ? { state: 'missing', label: '資料不足' }
+          : result;
+      });
+      setTradePlanStatuses(nextStatuses);
+    } catch (error) {
+      if (requestId === tradePlanRequestRef.current) {
+        console.warn('Trade plan overview load error:', error?.message || error);
+        setTradePlanStatuses(Object.fromEntries(holdings.map(asset => [
+          getTradePlanKey(asset),
+          { state: 'missing', label: '資料不足' },
+        ])));
+      }
+    } finally {
+      if (requestId === tradePlanRequestRef.current) setTradePlanLoading(false);
+    }
+  };
+
   // ── load data ────────────────────────────────────────────────────────────
   const loadData = async () => {
     try {
+      setFifoTransactionFlows(null);
+      setPositionCostNotice(null);
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
@@ -458,11 +842,78 @@ export default function DashboardScreen() {
 
       const baseCurrency     = profileData?.base_currency || 'TWD';
       const uniqueCurrencies = [...new Set(assetsData.map(a => getAssetCurrency(a, baseCurrency)).filter(Boolean))];
-      const ratesMap         = await fetchExchangeRatesBatch(uniqueCurrencies, baseCurrency);
+      const activePerformanceIdentities = new Set(assetsData
+        .filter(asset => asset.category === 'investment' && Number(asset.current_shares) > 0)
+        .map(getInvestmentPerformanceIdentity));
+      const investmentAssetIds = assetsData
+        .filter(asset => asset.category === 'investment' && activePerformanceIdentities.has(getInvestmentPerformanceIdentity(asset)))
+        .map(asset => asset.id)
+        .filter(Boolean);
+      setPositionCostNotice(investmentAssetIds.length > 0 ? '正在核對交易紀錄…' : null);
+      const transactionsPromise = investmentAssetIds.length > 0
+        ? fetchInvestmentTransactions(user.id, investmentAssetIds).catch(error => {
+            console.warn('FIFO cost-basis load error; using saved average cost:', error?.message || error);
+            return null;
+          })
+        : Promise.resolve([]);
+      const [ratesMap, positionTransactions] = await Promise.all([
+        fetchExchangeRatesBatch(uniqueCurrencies, baseCurrency),
+        transactionsPromise,
+      ]);
 
-      const converted = await valueAssets(assetsData, baseCurrency, { ratesMap });
+      let loadedFifoTransactionFlows = null;
+      if (positionTransactions) {
+        try {
+          const flowResult = await buildInvestmentTransactionFlows({
+            transactions: positionTransactions,
+            baseCurrency,
+            rates: ratesMap,
+            respectAssetExclusion: false,
+          });
+          loadedFifoTransactionFlows = flowResult.transactionFlows;
+        } catch (flowError) {
+          console.warn('FIFO P&L transaction conversion error:', flowError?.message || flowError);
+          setFifoTransactionFlows(null);
+          setPositionCostNotice('FIFO 損益換算失敗；本次累積損益暫不顯示，請重新整理。');
+        }
+      }
+
+      const assetsWithFifoCosts = positionTransactions
+        ? applyCompleteFifoPositionCosts(assetsData, positionTransactions)
+        : assetsData;
+      let fifoPositionFallbackCount = 0;
+      if (!positionTransactions && investmentAssetIds.length > 0) {
+        setFifoTransactionFlows(null);
+        setPositionCostNotice('交易紀錄載入失敗；本次 FIFO 累積損益暫不顯示，請重新整理。');
+      } else {
+        fifoPositionFallbackCount = assetsWithFifoCosts.filter(asset =>
+          asset.category === 'investment' &&
+          Number(asset.current_shares) > 0 &&
+          asset.position_cost_source !== 'fifo'
+        ).length;
+      }
+      const converted = await valueAssets(assetsWithFifoCosts, baseCurrency, { ratesMap });
       setAssets(converted);
       const finalAssets = await refreshLivePrices(converted, baseCurrency, ratesMap, user.id);
+      setAssets(finalAssets);
+      if (loadedFifoTransactionFlows !== null) {
+        const fifoContext = buildCurrentFifoPerformanceContext(finalAssets, loadedFifoTransactionFlows);
+        const fifoSummary = calculateTradePerformance(fifoContext, 'ALL', 'ALL');
+        setFifoTransactionFlows(loadedFifoTransactionFlows);
+        const notices = [];
+        if (fifoPositionFallbackCount > 0) {
+          notices.push(`${fifoPositionFallbackCount} 檔持倉與交易股數未完全核對，損益只計入可配對的 FIFO 批次`);
+        }
+        if (fifoSummary.ignoredIncompleteSymbols?.length > 0) {
+          notices.push(`${fifoSummary.ignoredIncompleteSymbols.length} 檔缺少可配對買入紀錄，已排除於損益`);
+        }
+        setPositionCostNotice(notices.length
+          ? `${notices.join('；')}；未納入損益的持倉市值仍計入淨資產。`
+          : null);
+      }
+      refreshTradePlanStatuses(finalAssets).catch(error => {
+        console.warn('Trade plan overview refresh error:', error?.message || error);
+      });
 
       const { netWorth: currentNetWorth } = calculatePortfolioTotals(finalAssets);
       setNetWorth(currentNetWorth);
@@ -521,11 +972,7 @@ export default function DashboardScreen() {
           .from('category_snapshots').select('date, category, value')
           .eq('user_id', user.id).gte('date', ago.toISOString().split('T')[0])
           .order('date', { ascending: true });
-        if (snapData) {
-          const grouped = {};
-          snapData.forEach(r => { if (!grouped[r.category]) grouped[r.category] = []; grouped[r.category].push(Number(r.value)); });
-          setCategorySnapshots(grouped);
-        }
+        setCategorySnapshots(snapData || []);
       } catch (e) { console.log('category snapshots read error:', e); }
 
       setLoadError(null); // clear any previous error on success
@@ -547,6 +994,34 @@ export default function DashboardScreen() {
     setRefreshing(false);
   }, []);
 
+  const togglePnlExclusion = async (asset) => {
+    const nextExcluded = !asset.exclude_from_performance;
+    const assetIds = asset._allIds?.length ? asset._allIds : [asset.id];
+    setSavingPnlAssetId(asset.id);
+    try {
+      await setAssetPerformanceExclusion(assetIds, nextExcluded);
+      setAssets(currentAssets => {
+        const idSet = new Set(assetIds);
+        const nextAssets = currentAssets.map(item => (
+          idSet.has(item.id)
+            ? { ...item, exclude_from_performance: nextExcluded }
+            : item
+        ));
+        AsyncStorage.setItem(DASHBOARD_CACHE_KEY, JSON.stringify({
+          assets: nextAssets,
+          netWorth,
+          lastUpdated: Date.now(),
+        })).catch(error => console.warn('dashboard exclusion cache write:', error?.message || error));
+        return nextAssets;
+      });
+      await AsyncStorage.setItem('@wt_needs_refresh', '1');
+    } catch (error) {
+      Alert.alert('無法更新計算範圍', error?.message || '請稍後再試');
+    } finally {
+      setSavingPnlAssetId(null);
+    }
+  };
+
   const currency = profile?.base_currency || 'TWD';
   const fmt  = (v) => formatAmount(v);
   const mask = (v) => hidden ? '****' : fmt(v);
@@ -566,7 +1041,13 @@ export default function DashboardScreen() {
         style={styles.container}
         contentContainerStyle={{ paddingTop: insets.top + 8, paddingBottom: 160 }}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={GREEN} colors={[GREEN]} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={primary}
+            colors={[primary]}
+            progressViewOffset={insets.top + 8}
+          />
         }
       >
 
@@ -645,7 +1126,18 @@ export default function DashboardScreen() {
               <Text style={[styles.sectionTitle, { color: C.text, marginBottom: 3 }]}>投資損益</Text>
               <Text style={[styles.pnlSubtitle, { color: C.textMuted }]}>目前報價 · 換算 {currency}</Text>
             </View>
-            <Text style={[styles.pnlCount, { color: C.textSub }]}>{investmentPnl.count} 檔</Text>
+            <TouchableOpacity
+              style={[styles.pnlScopeButton, { backgroundColor: C.cardAlt, borderColor: C.border }]}
+              onPress={() => setPnlScopeVisible(true)}
+              activeOpacity={0.75}
+              accessibilityRole="button"
+              accessibilityLabel={`設定投資損益計算範圍，目前排除 ${excludedPnlCount} 項`}
+            >
+              <SlidersHorizontal size={13} color={primary} />
+              <Text style={[styles.pnlScopeButtonText, { color: excludedPnlCount > 0 ? primary : C.textSub }]}>
+                {investmentPnl.count} 檔{excludedPnlCount > 0 ? ` · 排除 ${excludedPnlCount}` : ''}
+              </Text>
+            </TouchableOpacity>
           </View>
 
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pnlMarketRow}>
@@ -667,12 +1159,12 @@ export default function DashboardScreen() {
 
           <View style={[styles.pnlMetrics, { borderTopColor: C.border }]}>
             <View style={styles.pnlMetric}>
-              <Text style={[styles.pnlMetricLabel, { color: C.textSub }]}>今日損益</Text>
+              <Text style={[styles.pnlMetricLabel, { color: C.textSub }]}>{investmentPnl.dayLabel}</Text>
               <Text style={[styles.pnlMetricValue, { color: investmentPnl.day >= 0 ? colors.positive : colors.negative }]} numberOfLines={1} adjustsFontSizeToFit>
                 {hidden ? '****' : investmentPnl.hasDay ? `${investmentPnl.day >= 0 ? '+' : ''}${fmt(investmentPnl.day)}` : '—'}
               </Text>
               <Text style={[styles.pnlMetricPct, { color: investmentPnl.day >= 0 ? colors.positive : colors.negative }]}>
-                {investmentPnl.hasDay && investmentPnl.dayPct !== null ? `${investmentPnl.dayPct >= 0 ? '+' : ''}${investmentPnl.dayPct.toFixed(2)}%` : '尚無今日報價'}
+                {investmentPnl.hasDay && investmentPnl.dayPct !== null ? `${investmentPnl.dayPct >= 0 ? '+' : ''}${investmentPnl.dayPct.toFixed(2)}%` : '尚無單日報價'}
               </Text>
             </View>
             <View style={[styles.pnlMetricDivider, { backgroundColor: C.border }]} />
@@ -682,11 +1174,18 @@ export default function DashboardScreen() {
                 {hidden ? '****' : investmentPnl.hasCumulative ? `${investmentPnl.cumulative >= 0 ? '+' : ''}${fmt(investmentPnl.cumulative)}` : '—'}
               </Text>
               <Text style={[styles.pnlMetricPct, { color: investmentPnl.cumulative >= 0 ? colors.positive : colors.negative }]}>
-                {investmentPnl.hasCumulative && investmentPnl.cumulativePct !== null ? `${investmentPnl.cumulativePct >= 0 ? '+' : ''}${investmentPnl.cumulativePct.toFixed(2)}%` : '尚無平均成本'}
+                {investmentPnl.hasCumulative && investmentPnl.cumulativePct !== null
+                  ? `${investmentPnl.cumulativePct >= 0 ? '+' : ''}${investmentPnl.cumulativePct.toFixed(2)}%`
+                  : fifoTransactionFlows === null ? 'FIFO 計算中' : '尚無可用 FIFO 買入批次'}
               </Text>
             </View>
           </View>
-          <Text style={[styles.pnlFootnote, { color: C.textMuted }]}>今日損益：股票依昨收、加密貨幣依近 24 小時報價估算；累積損益依平均成本計算，不含已實現損益。</Text>
+          <Text style={[styles.pnlFootnote, { color: C.textMuted }]}>單日損益依目前報價估算；累積未實現損益改採與「股票交易報酬」相同的 FIFO 買入批次、費用與匯率計算，不含已實現損益。缺少買入紀錄或無法配對的批次不列入損益，但持倉市值仍計入淨資產。</Text>
+          {positionCostNotice && (
+            <Text style={[styles.pnlFootnote, { color: colors.warning, marginTop: 4 }]}>
+              {positionCostNotice}
+            </Text>
+          )}
         </View>
 
         {/* ── ALLOCATION CARD ───────────────────────────────────────────── */}
@@ -737,7 +1236,7 @@ export default function DashboardScreen() {
               {overweight.map(a => {
                 const pct = ((a.converted_amount / netWorth) * 100).toFixed(1);
                 return (
-                  <View key={a.id} style={{
+                  <View key={getAssetRenderKey(a)} style={{
                     flexDirection: 'row', alignItems: 'center', gap: 8,
                     backgroundColor: C.card,
                     borderLeftWidth: 3, borderLeftColor: primary,
@@ -876,12 +1375,17 @@ export default function DashboardScreen() {
 
         {/* ── FILTER BAR ────────────────────────────────────────────────── */}
         <View style={[styles.filterBar, { backgroundColor: C.card }]}>
-          {selectedCategory ? (
+          {(selectedCategory || selectedTradePlanState) ? (
             <>
-              <Text style={[styles.filterText, { color: C.textSub }]}>
-                篩選：{CATEGORY_CONFIG[selectedCategory]?.label}
+              <Text style={[styles.filterText, { color: C.textSub }]} numberOfLines={1}>
+                篩選：{[
+                  selectedCategory ? CATEGORY_CONFIG[selectedCategory]?.label : null,
+                  selectedTradePlanState ? ({
+                    normal: '正常', warning: '警戒', invalid: '失效', unset: '未設定', missing: '資料不足',
+                  })[selectedTradePlanState] : null,
+                ].filter(Boolean).join(' · ')}
               </Text>
-              <TouchableOpacity onPress={() => setSelectedCategory(null)} style={styles.clearBtn}>
+              <TouchableOpacity onPress={() => { setSelectedCategory(null); setSelectedTradePlanState(null); }} style={styles.clearBtn}>
                 <Text style={[styles.clearText, { color: primary }]}>清除</Text>
               </TouchableOpacity>
             </>
@@ -921,12 +1425,52 @@ export default function DashboardScreen() {
           </TouchableOpacity>
         )}
 
+        {tradePlanSummary.total > 0 && (
+          <View style={[styles.tradePlanOverview, { backgroundColor: C.card, borderColor: C.border }]}>
+            <View style={styles.tradePlanOverviewHeader}>
+              <Text style={[styles.tradePlanOverviewTitle, { color: C.text }]}>交易計畫風控</Text>
+              {tradePlanLoading && <ActivityIndicator size="small" color={primary} />}
+              <Text style={[styles.tradePlanOverviewMeta, { color: C.textMuted }]}>
+                {tradePlanLoading ? '更新中' : `${tradePlanSummary.total} 檔`}
+              </Text>
+            </View>
+            <View style={styles.tradePlanOverviewPills}>
+              {[
+                ['normal', '正常', colors.positive],
+                ['warning', '警戒', colors.warning],
+                ['invalid', '失效', colors.negative],
+                ['unset', '未設定', C.textMuted],
+                ['missing', '資料不足', C.textMuted],
+              ].filter(([key]) => tradePlanSummary[key] > 0).map(([key, label, color]) => (
+                <TouchableOpacity
+                  key={key}
+                  style={[
+                    styles.tradePlanSummaryPill,
+                    {
+                      borderColor: selectedTradePlanState === key ? color : `${color}66`,
+                      backgroundColor: selectedTradePlanState === key ? `${color}2E` : `${color}14`,
+                    },
+                  ]}
+                  onPress={() => setSelectedTradePlanState(current => current === key ? null : key)}
+                  activeOpacity={0.72}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: selectedTradePlanState === key }}
+                  accessibilityLabel={`只顯示${label}的標的，共 ${tradePlanSummary[key]} 檔`}
+                >
+                  <View style={[styles.tradePlanSummaryDot, { backgroundColor: color }]} />
+                  <Text style={[styles.tradePlanSummaryText, { color }]}>{label} {tradePlanSummary[key]}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        )}
+
         {/* ── ASSET LIST ────────────────────────────────────────────────── */}
         {sortedFilteredAssets.length > 0 ? (
           (() => {
             const renderAssetRows = (list) => list.map((asset, idx) => (
               <TouchableOpacity
-                key={asset.id}
+                key={getAssetRenderKey(asset)}
                 style={[
                   styles.assetRow,
                   { borderBottomColor: C.border },
@@ -936,30 +1480,41 @@ export default function DashboardScreen() {
                 activeOpacity={0.7}
               >
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.assetName, { color: C.text }]}>{asset.name}</Text>
+                  <View style={styles.assetNameRow}>
+                    <Text style={[styles.assetName, { color: C.text }]} numberOfLines={1}>{asset.name}</Text>
+                    {asset.category === 'investment' && tradePlanStatuses[getTradePlanKey(asset)] && (() => {
+                      const plan = tradePlanStatuses[getTradePlanKey(asset)];
+                      const stateColor = plan.state === 'normal'
+                        ? colors.positive
+                        : plan.state === 'warning'
+                          ? colors.warning
+                          : plan.state === 'invalid'
+                            ? colors.negative
+                            : C.textMuted;
+                      return (
+                        <View style={[styles.tradePlanBadge, { borderColor: `${stateColor}66`, backgroundColor: `${stateColor}14` }]}>
+                          <Text style={[styles.tradePlanBadgeText, { color: stateColor }]}>{plan.label}</Text>
+                        </View>
+                      );
+                    })()}
+                  </View>
                   <Text style={[styles.assetMeta, { color: C.textMuted }]}>{asset.currency}</Text>
-                  {asset.category === 'investment' && asset.price_source_time && (
-                    <Text
-                      style={[
-                        styles.assetQuoteMeta,
-                        {
-                          color: getQuoteStatusColor(
-                            asset.price_quote_status,
-                            asset.price_is_stale,
-                            colors,
-                          ),
-                        },
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {describeQuote({
-                        source: asset.price_source,
-                        source_time: asset.price_source_time,
-                        quote_status: asset.price_quote_status,
-                        is_stale: asset.price_is_stale,
-                      })}
-                    </Text>
-                  )}
+                  {asset.category === 'investment' && (() => {
+                    const plan = tradePlanStatuses[getTradePlanKey(asset)];
+                    if (!plan || !['warning', 'invalid'].includes(plan.state) || !Number.isFinite(plan.distancePct)) return null;
+                    const text = plan.state === 'invalid'
+                      ? plan.recoveredAfterInvalidation
+                        ? `曾收盤跌破停損・現價已收復 ${Math.max(0, plan.distancePct).toFixed(1)}%`
+                        : `低於停損價 ${Math.abs(plan.distancePct).toFixed(1)}%`
+                      : plan.intradayStopStatus || (() => {
+                        const distance = Math.max(0, plan.distancePct);
+                        const formattedDistance = distance > 0 && distance < 0.01
+                          ? '<0.01'
+                          : distance < 0.1 ? distance.toFixed(2) : distance.toFixed(1);
+                        return `距停損 ${formattedDistance}%`;
+                      })();
+                    return <Text style={[styles.tradePlanDistance, { color: plan.state === 'invalid' ? colors.negative : colors.warning }]}>{text}</Text>;
+                  })()}
                 </View>
                 <View style={{ alignItems: 'flex-end' }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -1048,6 +1603,14 @@ export default function DashboardScreen() {
         )}
 
       </ScrollView>
+      <PnlExclusionModal
+        visible={pnlScopeVisible}
+        onClose={() => setPnlScopeVisible(false)}
+        assets={pnlScopeAssets}
+        savingAssetId={savingPnlAssetId}
+        onToggle={togglePnlExclusion}
+        colors={colors}
+      />
     </View>
   );
 }
@@ -1078,6 +1641,8 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 15, fontWeight: '700', marginBottom: 14 },
   pnlHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 11 },
   pnlSubtitle: { fontSize: 9 }, pnlCount: { fontSize: 10, fontWeight: '700', marginTop: 2 },
+  pnlScopeButton: { minHeight: 30, borderWidth: 1, borderRadius: 15, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 5 },
+  pnlScopeButtonText: { fontSize: 9, fontWeight: '800' },
   pnlMarketRow: { gap: 7, paddingRight: 4, marginBottom: 12 },
   pnlMarketChip: { minHeight: 31, paddingHorizontal: 12, borderWidth: 1, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   pnlMarketText: { fontSize: 10, fontWeight: '800' },
@@ -1085,6 +1650,23 @@ const styles = StyleSheet.create({
   pnlMetric: { flex: 1, minWidth: 0 }, pnlMetricDivider: { width: StyleSheet.hairlineWidth, marginHorizontal: 13 },
   pnlMetricLabel: { fontSize: 10, marginBottom: 6 }, pnlMetricValue: { fontSize: 20, fontWeight: '800', letterSpacing: -0.4 },
   pnlMetricPct: { fontSize: 10, fontWeight: '700', marginTop: 4 }, pnlFootnote: { fontSize: 8, lineHeight: 13, marginTop: 12 },
+
+  // Investment P&L calculation scope
+  pnlScopeOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.58)' },
+  pnlScopeModal: { maxHeight: '78%', borderTopLeftRadius: 24, borderTopRightRadius: 24, borderWidth: 1, paddingTop: 18, paddingHorizontal: 18, paddingBottom: 28 },
+  pnlScopeHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 12 },
+  pnlScopeTitle: { fontSize: 19, fontWeight: '800', marginBottom: 5 },
+  pnlScopeHint: { fontSize: 11, lineHeight: 16 },
+  pnlScopeClose: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  pnlScopeList: { flexGrow: 0, marginBottom: 12 },
+  pnlScopeRow: { minHeight: 66, flexDirection: 'row', alignItems: 'center', gap: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  pnlScopeAssetName: { fontSize: 14, fontWeight: '800', marginBottom: 3 },
+  pnlScopeAssetMeta: { fontSize: 10 },
+  pnlScopeToggle: { minWidth: 76, height: 32, paddingHorizontal: 10, borderWidth: 1, borderRadius: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
+  pnlScopeToggleText: { fontSize: 10, fontWeight: '800' },
+  pnlScopeFooter: { fontSize: 9, lineHeight: 14, marginBottom: 13 },
+  pnlScopeDone: { minHeight: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  pnlScopeDoneText: { fontSize: 14, fontWeight: '800' },
 
   // Donut legend
   legendLabel: { fontSize: 13 },
@@ -1149,6 +1731,14 @@ const styles = StyleSheet.create({
   holdingSignalsButton: { marginHorizontal: 16, marginTop: 7, marginBottom: 7, minHeight: 58, borderWidth: 1, borderRadius: 14, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10 },
   holdingSignalsIcon: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   holdingSignalsTitle: { fontSize: 13, fontWeight: '800' }, holdingSignalsSub: { fontSize: 9, marginTop: 3 }, holdingSignalsArrow: { fontSize: 25, fontWeight: '500' },
+  tradePlanOverview: { marginHorizontal: 16, marginTop: 2, marginBottom: 7, borderWidth: 1, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 10 },
+  tradePlanOverviewHeader: { minHeight: 20, flexDirection: 'row', alignItems: 'center', gap: 7 },
+  tradePlanOverviewTitle: { flex: 1, fontSize: 13, fontWeight: '800' },
+  tradePlanOverviewMeta: { fontSize: 10, fontWeight: '600' },
+  tradePlanOverviewPills: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+  tradePlanSummaryPill: { minHeight: 24, borderWidth: 1, borderRadius: 12, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 5 },
+  tradePlanSummaryDot: { width: 6, height: 6, borderRadius: 3 },
+  tradePlanSummaryText: { fontSize: 10, fontWeight: '800' },
 
   // Asset list
   groupHeader: {
@@ -1165,11 +1755,14 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2,
   },
   assetRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1 },
-  assetName:   { fontSize: 15, fontWeight: '500', marginBottom: 2 },
+  assetNameRow: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingRight: 8 },
+  assetName:   { flexShrink: 1, fontSize: 15, fontWeight: '500', marginBottom: 2 },
   assetMeta:   { fontSize: 12 },
-  assetQuoteMeta: { fontSize: 10, fontWeight: '600', marginTop: 3 },
   assetAmount: { fontSize: 16, fontWeight: '600' },
   assetShares: { fontSize: 12, marginTop: 2 },
+  tradePlanBadge: { minHeight: 20, borderWidth: 1, borderRadius: 10, paddingHorizontal: 7, alignItems: 'center', justifyContent: 'center' },
+  tradePlanBadgeText: { fontSize: 9, fontWeight: '800' },
+  tradePlanDistance: { fontSize: 10, fontWeight: '700', marginTop: 3 },
 
   empty:     { alignItems: 'center', padding: 48 },
   emptyText: { fontSize: 16, fontWeight: '600', marginBottom: 8 },

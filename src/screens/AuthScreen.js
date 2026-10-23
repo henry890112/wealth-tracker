@@ -1,8 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
   Alert,
@@ -11,6 +10,56 @@ import {
 } from 'react-native';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '../lib/ThemeContext';
+import WebSafeTextInput from '../components/WebSafeTextInput';
+
+const SIGN_UP_COOLDOWN_SECONDS = 60;
+
+function getAuthErrorCopy(error) {
+  const message = String(error?.message || '').toLowerCase();
+  const status = Number(error?.status || 0);
+
+  if (status === 429 || message.includes('rate limit') || message.includes('too many requests')) {
+    return {
+      title: '確認信寄送過於頻繁',
+      message:
+        '系統目前的確認信寄送額度已達上限，請稍後再試。若剛才已收到確認信，請直接使用原信件，不要重複註冊。',
+      shouldCooldown: true,
+    };
+  }
+
+  if (message.includes('already registered') || message.includes('already been registered')) {
+    return {
+      title: '帳號已存在',
+      message: '這個電子郵件已註冊，請切換到登入。',
+    };
+  }
+
+  if (message.includes('invalid login credentials')) {
+    return {
+      title: '登入失敗',
+      message: '電子郵件或密碼不正確。',
+    };
+  }
+
+  if (message.includes('email not confirmed')) {
+    return {
+      title: '尚未完成驗證',
+      message: '請先開啟確認信完成電子郵件驗證，再回來登入。',
+    };
+  }
+
+  if (message.includes('password') && (message.includes('least') || message.includes('weak'))) {
+    return {
+      title: '密碼不符合規則',
+      message: '密碼至少需要 6 個字元。',
+    };
+  }
+
+  return {
+    title: '操作失敗',
+    message: '目前無法完成操作，請稍後再試。',
+  };
+}
 
 export default function AuthScreen() {
   const { colors } = useTheme();
@@ -19,6 +68,17 @@ export default function AuthScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
+  const [signUpCooldown, setSignUpCooldown] = useState(0);
+
+  useEffect(() => {
+    if (signUpCooldown <= 0) return undefined;
+
+    const timer = setInterval(() => {
+      setSignUpCooldown((seconds) => Math.max(0, seconds - 1));
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [signUpCooldown]);
 
   const bg = colors.bg;
   const cardBg = colors.card;
@@ -28,23 +88,50 @@ export default function AuthScreen() {
   const inputBg = colors.input;
 
   const handleAuth = async () => {
-    if (!email || !password) {
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (!normalizedEmail || !password) {
       Alert.alert('錯誤', '請輸入電子郵件和密碼');
       return;
     }
+    if (!/^\S+@\S+\.\S+$/.test(normalizedEmail)) {
+      Alert.alert('電子郵件格式錯誤', '請輸入有效的電子郵件地址。');
+      return;
+    }
+    if (isSignUp && password.length < 6) {
+      Alert.alert('密碼不符合規則', '密碼至少需要 6 個字元。');
+      return;
+    }
+    if (isSignUp && signUpCooldown > 0) return;
+
     setLoading(true);
     try {
       if (isSignUp) {
-        const { error } = await supabase.auth.signUp({ email, password });
+        const { data, error } = await supabase.auth.signUp({
+          email: normalizedEmail,
+          password,
+        });
         if (error) throw error;
-        Alert.alert('成功', '註冊成功！請登入。');
-        setIsSignUp(false);
+
+        setSignUpCooldown(SIGN_UP_COOLDOWN_SECONDS);
+        if (!data?.session) {
+          Alert.alert(
+            '確認信已寄出',
+            '請至信箱開啟確認連結，完成驗證後再登入。若沒有看到信件，也請檢查垃圾郵件。',
+          );
+          setIsSignUp(false);
+        }
       } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        const { error } = await supabase.auth.signInWithPassword({
+          email: normalizedEmail,
+          password,
+        });
         if (error) throw error;
       }
     } catch (error) {
-      Alert.alert('錯誤', error.message);
+      const copy = getAuthErrorCopy(error);
+      if (copy.shouldCooldown) setSignUpCooldown(SIGN_UP_COOLDOWN_SECONDS);
+      Alert.alert(copy.title, copy.message);
     } finally {
       setLoading(false);
     }
@@ -52,7 +139,7 @@ export default function AuthScreen() {
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      behavior={Platform.OS === 'web' ? undefined : Platform.OS === 'ios' ? 'padding' : 'height'}
       style={[styles.container, { backgroundColor: bg }]}
     >
       <View style={styles.content}>
@@ -71,7 +158,7 @@ export default function AuthScreen() {
             {isSignUp ? '建立帳號' : '歡迎回來'}
           </Text>
 
-          <TextInput
+          <WebSafeTextInput
             style={[styles.input, { backgroundColor: inputBg, borderColor: border, color: textMain }]}
             placeholder="電子郵件"
             placeholderTextColor={textSub}
@@ -82,7 +169,7 @@ export default function AuthScreen() {
             editable={!loading}
           />
 
-          <TextInput
+          <WebSafeTextInput
             style={[styles.input, { backgroundColor: inputBg, borderColor: border, color: textMain }]}
             placeholder="密碼"
             placeholderTextColor={textSub}
@@ -93,14 +180,28 @@ export default function AuthScreen() {
           />
 
           <TouchableOpacity
-            style={[styles.button, { backgroundColor: colors.accent, shadowColor: colors.accent }, loading && styles.buttonDisabled]}
+            style={[
+              styles.button,
+              { backgroundColor: colors.accent, shadowColor: colors.accent },
+              (loading || (isSignUp && signUpCooldown > 0)) && styles.buttonDisabled,
+            ]}
             onPress={handleAuth}
-            disabled={loading}
+            disabled={loading || (isSignUp && signUpCooldown > 0)}
           >
             <Text style={[styles.buttonText, { color: colors.accentContrast }]}>
-              {loading ? '處理中...' : isSignUp ? '註冊' : '登入'}
+              {loading
+                ? '處理中...'
+                : isSignUp && signUpCooldown > 0
+                  ? `請稍候 ${signUpCooldown} 秒`
+                  : isSignUp
+                    ? '註冊'
+                    : '登入'}
             </Text>
           </TouchableOpacity>
+
+          {isSignUp ? (
+            <Text style={[styles.signUpHint, { color: textSub }]}>註冊後會寄送確認信，請勿重複點擊。</Text>
+          ) : null}
 
           <TouchableOpacity
             style={styles.linkButton}
@@ -196,6 +297,12 @@ const styles = StyleSheet.create({
   linkButton: {
     marginTop: 16,
     alignItems: 'center',
+  },
+  signUpHint: {
+    marginTop: 10,
+    textAlign: 'center',
+    fontSize: 12,
+    lineHeight: 18,
   },
   linkText: {
     fontSize: 14,

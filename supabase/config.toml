@@ -142,10 +142,50 @@ enabled = true
 verify_jwt = true
 entrypoint = "./functions/market-history/index.ts"
 
+[functions.institutional-distribution]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/institutional-distribution/index.ts"
+
+[functions.margin-trading-history]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/margin-trading-history/index.ts"
+
+[functions.valuation-history]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/valuation-history/index.ts"
+
+[functions.corporate-actions]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/corporate-actions/index.ts"
+
+[functions.financial-reports]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/financial-reports/index.ts"
+
+[functions.dcf-fundamentals]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/dcf-fundamentals/index.ts"
+
 [functions.market-data]
 enabled = true
 verify_jwt = true
 entrypoint = "./functions/market-data/index.ts"
+
+[functions.market-overview]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/market-overview/index.ts"
+
+[functions.options-analysis]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/options-analysis/index.ts"
 
 [functions.signal-notifications]
 enabled = true
