@@ -2,6 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Svg, { Circle, Line, Path, Rect, Text as SvgText } from 'react-native-svg';
 import { RefreshCw } from 'lucide-react-native';
+import CompactDataTable from './CompactDataTable';
 
 const finite = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
 const numberText = (value, digits = 2) => finite(value) ? Number(value).toFixed(digits) : '—';
@@ -18,12 +19,13 @@ const compactNumber = (value, currency = '') => {
   const absolute = Math.abs(number);
   const suffix = absolute >= 1e9 ? 'B' : absolute >= 1e6 ? 'M' : absolute >= 1e3 ? 'K' : '';
   const divisor = suffix === 'B' ? 1e9 : suffix === 'M' ? 1e6 : suffix === 'K' ? 1e3 : 1;
-  return `${currency}${(number / divisor).toFixed(suffix ? 2 : 0)}${suffix}`;
+  return `${number < 0 ? '-' : ''}${currency}${(absolute / divisor).toFixed(suffix ? 2 : 0)}${suffix}`;
 };
 
 const FINANCIAL_CHART_METRICS = [
   { key: 'eps', label: '每股收益', kind: 'number', digits: 2 },
   { key: 'revenue', label: '營業收入', kind: 'money' },
+  { key: 'netIncome', label: '淨利潤', kind: 'money' },
   { key: 'freeCashFlow', label: '自由現金流', kind: 'money' },
   { key: 'grossMargin', label: '毛利率', kind: 'percent' },
   { key: 'operatingMargin', label: '營益率', kind: 'percent' },
@@ -165,8 +167,8 @@ function FinancialTrendChart({ rows, metric, currency, colors }) {
   </View>;
 }
 
-function Metric({ label, value, colors, tone = 'text' }) {
-  return <View style={[styles.metric, { backgroundColor: colors.cardAlt, borderColor: colors.border }]}>
+function Metric({ label, value, colors, tone = 'text', index }) {
+  return <View style={[styles.metric, styles.metricCompact, { borderRightColor: colors.borderLight, borderBottomColor: colors.borderLight }, index % 2 === 0 && styles.metricLeft, index < 4 && styles.metricUpper]}>
     <Text style={[styles.metricLabel, { color: colors.textMuted }]}>{label}</Text>
     <Text style={[styles.metricValue, { color: colors[tone] || colors.text }]}>{value}</Text>
   </View>;
@@ -240,27 +242,27 @@ export default function FinancialReportsCard({ data, calendarEvent = null, loadi
             <Text style={[styles.releaseNoticeText, { color: colors.textSub }]}>{latestRelease.source || '公司公告'} 已公布業績；下方季度資料目前截至 {latest.label || dateText(latest.periodEnd)}。</Text>
             {/^https:\/\/www\.sec\.gov\/Archives\//.test(latestRelease.url || '') && <TouchableOpacity accessibilityRole="link" onPress={() => Linking.openURL(latestRelease.url).catch(() => {})}><Text style={[styles.releaseNoticeLink, { color: colors.accent }]}>查看 SEC 官方公告 ›</Text></TouchableOpacity>}
           </View>}
-          <View style={styles.latestTitle}><Text style={[styles.sectionTitle, { color: colors.text }]}>最新季度 {latest.label || dateText(latest.periodEnd)}</Text><Text style={[styles.sectionMeta, { color: colors.textMuted }]}>{latest.sourceLabel || (latest.filedAt ? `申報 ${dateText(latest.filedAt)}` : '申報日期未提供')}</Text></View>
-          <View style={styles.metricGrid}>
-            <Metric label="營收" value={compactNumber(latest.revenue, currency)} colors={colors} />
-            <Metric label="稀釋 EPS" value={numberText(latest.eps)} colors={colors} tone={finite(latest.eps) && Number(latest.eps) >= 0 ? 'positive' : 'negative'} />
-            <Metric label="營益率" value={percentText(latest.operatingMargin)} colors={colors} />
-            <Metric label="淨利率" value={percentText(latest.netMargin)} colors={colors} />
-            <Metric label="自由現金流" value={compactNumber(latest.freeCashFlow, currency)} colors={colors} tone={finite(latest.freeCashFlow) && Number(latest.freeCashFlow) >= 0 ? 'positive' : 'negative'} />
+          <View style={[styles.latestTitle, styles.latestTitleCompact]}><Text style={[styles.sectionTitle, { color: colors.text }]}>最新季度 {latest.label || dateText(latest.periodEnd)}</Text><Text style={[styles.sectionMeta, { color: colors.textMuted, textAlign: 'right', flexShrink: 1 }]}>{latest.sourceLabel ? `${latest.sourceLabel} · ${dateText(latest.filedAt)}` : (latest.filedAt ? `申報 ${dateText(latest.filedAt)}` : '申報日期未提供')}</Text></View>
+          <View style={[styles.metricGrid, styles.metricGridCompact, { backgroundColor: colors.cardAlt, borderColor: colors.border }]}>
+            <Metric index={0} label="營收" value={compactNumber(latest.revenue, currency)} colors={colors} />
+            <Metric index={1} label="淨利潤" value={compactNumber(latest.netIncome, currency)} colors={colors} tone={finite(latest.netIncome) ? Number(latest.netIncome) < 0 ? 'negative' : 'positive' : 'text'} />
+            <Metric index={2} label="稀釋 EPS" value={numberText(latest.eps)} colors={colors} tone={finite(latest.eps) ? Number(latest.eps) < 0 ? 'negative' : 'positive' : 'text'} />
+            <Metric index={3} label="自由現金流" value={compactNumber(latest.freeCashFlow, currency)} colors={colors} tone={finite(latest.freeCashFlow) ? Number(latest.freeCashFlow) < 0 ? 'negative' : 'positive' : 'text'} />
+            <Metric index={4} label="營益率" value={percentText(latest.operatingMargin)} colors={colors} />
+            <Metric index={5} label="淨利率" value={percentText(latest.netMargin)} colors={colors} />
           </View>
           {latest.sourceLabel && <Text style={[styles.warning, { color: colors.textMuted }]}>以上為{latest.sourceLabel}中的季度數字；公告未提供的欄位保持空白，不沿用舊季數值。</Text>}
-          <View style={styles.calendarRow}>
-            <View style={[styles.calendarBox, { backgroundColor: colors.accentSoft, borderColor: colors.accent }]}><Text style={[styles.calendarLabel, { color: colors.accent }]}>下一次預計公布</Text><Text style={[styles.calendarValue, { color: colors.text }]}>{nextDate ? dateText(nextDate) : '暫無預估日期'}</Text><Text style={[styles.calendarMeta, { color: colors.textSub }]}>{nextDateMeta}</Text></View>
-            <View style={[styles.calendarBox, { backgroundColor: colors.cardAlt, borderColor: colors.border }]}><Text style={[styles.calendarLabel, { color: colors.textMuted }]}>最近公布</Text><Text style={[styles.calendarValue, { color: colors.text }]}>{recentReleaseDate ? dateText(recentReleaseDate) : '尚未提供'}</Text><Text style={[styles.calendarMeta, { color: colors.textSub }]}>{data?.earningsCalendar?.previousSource || '公司公告日期未提供'}</Text></View>
+          <View style={[styles.calendarRow, styles.calendarRowCompact]}>
+            <View style={[styles.calendarBox, styles.calendarBoxCompact, { backgroundColor: colors.accentSoft, borderColor: colors.accent }]}><Text style={[styles.calendarLabel, { color: colors.accent }]}>下一次預計公布</Text><Text style={[styles.calendarValue, styles.calendarValueCompact, { color: colors.text }]}>{nextDate ? dateText(nextDate) : '暫無預估日期'}</Text><Text style={[styles.calendarMeta, { color: colors.textSub }]}>{nextDateMeta}</Text></View>
+            <View style={[styles.calendarBox, styles.calendarBoxCompact, { backgroundColor: colors.cardAlt, borderColor: colors.border }]}><Text style={[styles.calendarLabel, { color: colors.textMuted }]}>最近公布</Text><Text style={[styles.calendarValue, styles.calendarValueCompact, { color: colors.text }]}>{recentReleaseDate ? dateText(recentReleaseDate) : '尚未提供'}</Text><Text style={[styles.calendarMeta, { color: colors.textSub }]}>{data?.earningsCalendar?.previousSource || '公司公告日期未提供'}</Text></View>
           </View>
-          <View style={[styles.filingMeta, { backgroundColor: colors.cardAlt, borderColor: colors.border }]}><Text style={[styles.filingLabel, { color: colors.textMuted }]}>{latest.sourceLabel ? '公告日期' : '季度數值申報日'}</Text><Text style={[styles.filingValue, { color: colors.text }]}>{latest.filedAt ? dateText(latest.filedAt) : '尚未提供'}</Text><Text style={[styles.filingHint, { color: colors.textSub }]}>{latest.sourceLabel ? `${latest.sourceLabel}；未公告項目留白` : '與最近公告日期分開計算'}</Text></View>
           {!!chartMetric && <View style={styles.financialChartSection}><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.financialMetricRow}>{chartMetrics.map(metric => <TouchableOpacity key={metric.key} accessibilityRole="button" accessibilityState={{ selected: chartMetric.key === metric.key }} onPress={() => setChartMetricKey(metric.key)} style={[styles.financialMetricChip, { backgroundColor: chartMetric.key === metric.key ? colors.accentSoft : colors.cardAlt, borderColor: chartMetric.key === metric.key ? colors.accent : colors.border }]}><Text style={[styles.financialMetricChipText, { color: chartMetric.key === metric.key ? colors.accent : colors.textSub }]}>{metric.label}</Text></TouchableOpacity>)}</ScrollView><FinancialTrendChart rows={quarters} metric={chartMetric} currency={currency} colors={colors} /></View>}
           <View style={styles.sectionHeader}><Text style={[styles.sectionTitle, { color: colors.text }]}>季度趨勢</Text><Text style={[styles.sectionMeta, { color: colors.textMuted }]}>年增優先，缺資料時保留空白</Text></View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.quarterRow}>{visibleQuarters.map(row => <QuarterCard key={row.periodEnd} row={row} currency={currency} colors={colors} />)}</ScrollView>
           {quarters.length > 4 && <TouchableOpacity onPress={() => setExpanded(value => !value)} style={[styles.expand, { borderColor: colors.border, backgroundColor: colors.cardAlt }]}><Text style={[styles.expandText, { color: colors.accent }]}>{expanded ? '收合季度資料' : `查看全部 ${quarters.length} 季`}</Text></TouchableOpacity>}
           {!!data?.monthlyRevenue?.length && <>
             <View style={styles.sectionHeader}><Text style={[styles.sectionTitle, { color: colors.text }]}>台股月營收</Text><Text style={[styles.sectionMeta, { color: colors.textMuted }]}>近 {data.monthlyRevenue.length} 個月</Text></View>
-            <View style={[styles.monthlyTable, { borderColor: colors.border }]}>{data.monthlyRevenue.slice(-6).reverse().map(row => <View key={row.month} style={[styles.monthlyRow, { borderBottomColor: colors.borderLight }]}><Text style={[styles.monthlyMonth, { color: colors.textSub }]}>{dateText(row.month).slice(0, 7)}</Text><Text style={[styles.monthlyRevenue, { color: colors.text }]}>{compactNumber(row.revenue, currency)}</Text><Text style={[styles.monthlyYoy, { color: finite(row.yoy) ? Number(row.yoy) < 0 ? colors.negative : colors.positive : colors.textMuted }]}>{finite(row.yoy) ? `年增 ${percentText(row.yoy)}` : '年增 —'}</Text></View>)}</View>
+            <CompactDataTable style={{ marginTop: 7 }} rows={data.monthlyRevenue.slice(-6).reverse()} rowKey={row => row.month} colors={colors} fixedColumn={{ header: '月份', width: 78, render: row => dateText(row.month).slice(0, 7) }} columns={[{ key: 'revenue', header: '營收', width: 120, render: row => compactNumber(row.revenue, currency) }, { key: 'yoy', header: '年增率', width: 100, render: row => percentText(row.yoy), color: row => finite(row.yoy) ? Number(row.yoy) < 0 ? colors.negative : colors.positive : colors.textMuted }]} />
             <View style={[styles.monthlyGrowthBox, { backgroundColor: colors.cardAlt, borderColor: monthlyGrowth.consecutivePositive >= 3 ? colors.positive : colors.border }]}>
               <View style={styles.monthlyGrowthHeader}><View style={styles.flex}><Text style={[styles.monthlyGrowthTitle, { color: colors.text }]}>月營收成長趨勢</Text><Text style={[styles.monthlyGrowthHint, { color: colors.textMuted }]}>以實際營收月份比較去年同月</Text></View><Text style={[styles.monthlyGrowthBadge, { color: monthlyGrowth.consecutivePositive >= 3 ? colors.positive : colors.warning }]}>{monthlyGrowth.consecutivePositive >= 3 ? '連續正成長' : '尚未連三月'}</Text></View>
               <View style={styles.monthlyGrowthStats}><View style={styles.monthlyGrowthStat}><Text style={[styles.monthlyGrowthLabel, { color: colors.textMuted }]}>目前連續正成長</Text><Text style={[styles.monthlyGrowthValue, { color: monthlyGrowth.consecutivePositive >= 3 ? colors.positive : colors.text }]}>{monthlyGrowth.consecutivePositive} 個月</Text></View><View style={styles.monthlyGrowthStat}><Text style={[styles.monthlyGrowthLabel, { color: colors.textMuted }]}>最新月營收年增</Text><Text style={[styles.monthlyGrowthValue, { color: finite(monthlyGrowth.latest?.yoy) && Number(monthlyGrowth.latest.yoy) >= 0 ? colors.positive : colors.text }]}>{finite(monthlyGrowth.latest?.yoy) ? percentText(monthlyGrowth.latest.yoy) : '—'}</Text></View></View>
@@ -279,6 +281,14 @@ export default function FinancialReportsCard({ data, calendarEvent = null, loadi
 }
 
 const styles = StyleSheet.create({
+  latestTitleCompact: { marginTop: 9, gap: 8 },
+  metricGridCompact: { gap: 0, marginTop: 7, borderWidth: 1, borderRadius: 11, overflow: 'hidden' },
+  metricCompact: { width: '50%', minHeight: 49, paddingHorizontal: 10, paddingVertical: 6, borderWidth: 0, borderRadius: 0 },
+  metricLeft: { borderRightWidth: StyleSheet.hairlineWidth },
+  metricUpper: { borderBottomWidth: StyleSheet.hairlineWidth },
+  calendarRowCompact: { marginTop: 7 },
+  calendarBoxCompact: { minHeight: 64, paddingHorizontal: 8, paddingVertical: 7, borderRadius: 11 },
+  calendarValueCompact: { fontSize: 13, marginTop: 2 },
   card: { borderWidth: 1, borderRadius: 18, padding: 14, overflow: 'hidden' }, flex: { flex: 1, minWidth: 0 }, header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 }, title: { fontSize: 17, fontWeight: '900' }, subtitle: { fontSize: 9, marginTop: 3 }, refresh: { width: 34, height: 34, borderRadius: 11, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   releaseNotice: { borderWidth: 1, borderRadius: 12, padding: 11, marginTop: 13, gap: 5 }, releaseNoticeTitle: { fontSize: 12, fontWeight: '900' }, releaseNoticeText: { fontSize: 9, lineHeight: 14 }, releaseNoticeLink: { fontSize: 10, fontWeight: '900', marginTop: 3 },
   latestTitle: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 13 }, sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 14, marginBottom: 8 }, sectionTitle: { fontSize: 13, fontWeight: '900' }, sectionMeta: { fontSize: 9 }, metricGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 9 }, metric: { width: '48%', borderWidth: 1, borderRadius: 12, padding: 10, minHeight: 64 }, metricLabel: { fontSize: 9 }, metricValue: { fontSize: 16, fontWeight: '900', marginTop: 6 },

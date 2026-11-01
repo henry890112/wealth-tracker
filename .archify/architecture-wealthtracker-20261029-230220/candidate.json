@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "WealthTracker｜目前程式架構",
+    "locale": "zh-TW",
+    "output": ".archify/architecture-wealthtracker-20261029-230220/wealthtracker.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:henry890112/wealth-tracker.git",
+      "revision": "3ff4d4cc070ea1cc052230fd3ed3cc70812f5324",
+      "link_mode": "local-only"
+    },
+    "views": [
+      { "id": "portfolio", "label": "資產與交易計畫", "focus": ["portfolio-ui", "portfolio-core", "supabase-api", "postgres"], "note": "資產、交易、快照與停損資料的讀寫。" },
+      { "id": "market", "label": "行情與技術分析", "focus": ["research-ui", "market-core", "edge", "market-feeds"], "note": "看 Edge 主要路徑與 App 端直接來源後備路徑。" },
+      { "id": "reports", "label": "財報與研究", "focus": ["research-ui", "edge", "research-feeds"], "note": "財報、估值、選擇權與市場總覽。" },
+      { "id": "ai", "label": "AI 與通知", "focus": ["assistant-ui", "edge", "ai-delivery"], "note": "後端保管供應商憑證；通知依設定或排程執行。" },
+      { "id": "esun", "label": "玉山同步", "focus": ["esun-ui", "bridge", "broker", "supabase-api"], "note": "本機唯讀橋接查詢，再由 App 匯入資產與交易。" }
+    ]
+  },
+  "components": [
+    { "id": "user", "type": "external", "label": "使用者", "sublabel": "iOS／Web", "pos": [40, 408], "size": [104, 66], "sources": [{ "path": "App.js", "line": 39, "end_line": 45 }] },
+    { "id": "app", "type": "frontend", "label": "Expo App", "sublabel": "導覽與登入狀態", "pos": [218, 408], "size": [130, 66], "sources": [{ "path": "App.js", "line": 1, "end_line": 32 }, { "path": "App.js", "line": 34, "end_line": 45 }] },
+    { "id": "portfolio-ui", "type": "frontend", "label": "資產／趨勢畫面", "sublabel": "總覽・詳情・紀錄・績效", "pos": [415, 92], "size": [155, 72], "sources": [{ "path": "src/screens/DashboardScreen.js", "line": 13, "end_line": 39 }, { "path": "src/screens/TrendsScreen.js", "line": 19, "end_line": 36 }, { "path": "src/screens/AssetDetailScreen.js", "line": 23, "end_line": 37 }] },
+    { "id": "research-ui", "type": "frontend", "label": "搜尋／分析畫面", "sublabel": "K 線・總體・財報・期權", "pos": [415, 340], "size": [155, 72], "sources": [{ "path": "src/screens/TechnicalAnalysisScreen.js", "line": 7, "end_line": 42 }, { "path": "src/screens/MarketOverviewScreen.js", "line": 16, "end_line": 22 }, { "path": "src/screens/SearchScreen.js", "line": 26, "end_line": 41 }] },
+    { "id": "assistant-ui", "type": "frontend", "label": "AI／訊號畫面", "sublabel": "問答・持倉訊號・通知", "pos": [415, 606], "size": [155, 72], "sources": [{ "path": "src/screens/AIAnalysisScreen.js", "line": 13, "end_line": 22 }, { "path": "src/screens/PortfolioSignalsScreen.js", "line": 480, "end_line": 491 }, { "path": "src/screens/SignalNotificationSettingsScreen.js", "line": 177, "end_line": 190 }] },
+    { "id": "esun-ui", "type": "frontend", "label": "玉山同步畫面", "sublabel": "持倉・餘額・成交", "pos": [415, 852], "size": [155, 72], "sources": [{ "path": "src/screens/EsunSyncScreen.js", "line": 118, "end_line": 118 }, { "path": "src/services/esunSync.js", "line": 30, "end_line": 67 }] },
+    { "id": "portfolio-core", "type": "backend", "label": "資產／停損模組", "sublabel": "績效計算・交易計畫", "pos": [622, 92], "size": [155, 72], "sources": [{ "path": "src/services/portfolio.js", "line": 1, "end_line": 34 }, { "path": "src/services/investmentPerformance.js", "line": 1287, "end_line": 1305 }, { "path": "src/features/tradePlan/tradePlans.js", "line": 11, "end_line": 70 }] },
+    { "id": "market-core", "type": "backend", "label": "行情／技術模組", "sublabel": "marketData・technical", "pos": [622, 340], "size": [155, 72], "sources": [{ "path": "src/services/api.js", "line": 1, "end_line": 8 }, { "path": "src/features/marketData/quotes.js", "line": 141, "end_line": 164 }, { "path": "src/services/technicalAnalysis.js", "line": 1460, "end_line": 1490 }] },
+    { "id": "supabase-api", "type": "security", "label": "Supabase Auth／API", "sublabel": "登入・Data API・RPC", "pos": [838, 92], "size": [160, 72], "sources": [{ "path": "src/lib/supabase.js", "line": 1, "end_line": 19 }, { "path": "src/features/tradePlan/tradePlans.js", "line": 4, "end_line": 17 }, { "path": "src/services/esunSync.js", "line": 272, "end_line": 278 }] },
+    { "id": "postgres", "type": "database", "label": "Postgres 資料表", "sublabel": "資產・交易・快照・快取", "pos": [1045, 92], "size": [145, 72], "sources": [{ "path": "supabase/migrations/20240101000000_initial_schema.sql", "line": 9, "end_line": 76 }, { "path": "src/features/tradePlan/tradePlans.js", "line": 46, "end_line": 69 }, { "path": "supabase/functions/market-data/index.ts", "line": 61, "end_line": 87 }] },
+    { "id": "edge", "type": "cloud", "label": "Edge Functions", "sublabel": "行情・財報・AI・通知", "pos": [838, 340], "size": [160, 72], "sources": [{ "path": "supabase/functions/market-data/index.ts", "line": 45, "end_line": 59 }, { "path": "supabase/functions/financial-reports/index.ts", "line": 698, "end_line": 733 }, { "path": "supabase/functions/ai-chat/index.ts", "line": 147, "end_line": 199 }] },
+    { "id": "market-feeds", "type": "external", "label": "市場報價來源", "sublabel": "TWSE・FinMind・Yahoo 等", "pos": [1045, 340], "size": [145, 72], "sources": [{ "path": "supabase/functions/_shared/marketData.ts", "line": 135, "end_line": 186 }, { "path": "supabase/functions/_shared/marketData.ts", "line": 238, "end_line": 318 }, { "path": "src/features/marketData/history.js", "line": 18, "end_line": 65 }] },
+    { "id": "research-feeds", "type": "external", "label": "財報／期權來源", "sublabel": "SEC・FinMind・Tradier 等", "pos": [1045, 522], "size": [145, 72], "sources": [{ "path": "supabase/functions/financial-reports/index.ts", "line": 624, "end_line": 693 }, { "path": "supabase/functions/options-analysis/index.ts", "line": 269, "end_line": 335 }, { "path": "supabase/functions/market-overview/index.ts", "line": 9, "end_line": 19 }] },
+    { "id": "ai-delivery", "type": "external", "label": "AI／通知供應商", "sublabel": "Gemini・Resend・LINE 等", "pos": [1045, 704], "size": [145, 72], "sources": [{ "path": "supabase/functions/ai-chat/index.ts", "line": 180, "end_line": 193 }, { "path": "supabase/functions/market-event-notifications/index.ts", "line": 314, "end_line": 323 }] },
+    { "id": "bridge", "type": "backend", "label": "E.Sun Bridge", "sublabel": "唯讀 GET・本機 SDK", "pos": [838, 852], "size": [160, 72], "sources": [{ "path": "src/services/esunSync.js", "line": 30, "end_line": 67 }, { "path": "esun-bridge/src/server.mjs", "line": 142, "end_line": 163 }] },
+    { "id": "broker", "type": "external", "label": "玉山證券介面", "sublabel": "持倉・餘額・成交", "pos": [1045, 852], "size": [145, 72], "sources": [{ "path": "esun-bridge/src/server.mjs", "line": 149, "end_line": 163 }, { "path": "esun-bridge/src/holdings.mjs", "line": 1, "end_line": 20 }] }
+  ],
+  "connections": [
+    { "id": "use-app", "from": "user", "to": "app", "label": "操作" },
+    { "id": "open-portfolio", "from": "app", "to": "portfolio-ui", "label": "總覽" },
+    { "id": "open-research", "from": "app", "to": "research-ui", "label": "分析" },
+    { "id": "open-ai", "from": "app", "to": "assistant-ui", "label": "AI" },
+    { "id": "open-esun", "from": "app", "to": "esun-ui", "label": "同步" },
+    { "id": "portfolio-calc", "from": "portfolio-ui", "to": "portfolio-core", "label": "計算" },
+    { "id": "portfolio-db", "from": "portfolio-core", "to": "supabase-api", "label": "讀寫" },
+    { "id": "auth-db", "from": "supabase-api", "to": "postgres", "label": "Data API" },
+    { "id": "research-calc", "from": "research-ui", "to": "market-core", "label": "分析" },
+    { "id": "research-edge", "from": "market-core", "to": "edge", "label": "invoke" },
+    { "id": "edge-market", "from": "edge", "to": "market-feeds", "label": "行情" },
+    { "id": "edge-research", "from": "edge", "to": "research-feeds", "label": "財報" },
+    { "id": "edge-ai", "from": "edge", "to": "ai-delivery", "label": "AI／通知" },
+    { "id": "assistant-edge", "from": "assistant-ui", "to": "edge", "label": "invoke" },
+    { "id": "esun-bridge", "from": "esun-ui", "to": "bridge", "label": "GET" },
+    { "id": "bridge-broker", "from": "bridge", "to": "broker", "label": "查詢" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "行情路徑", "items": ["App marketData/quotes.js 優先 invoke market-data，回傳 quotes／errors／fetchedAt；失敗時才直連資料來源。", "技術 K 線 invoke market-history，回傳 rows、benchmarkRows、comparisonRows、quote 等；依台股／美股／幣種切換來源。", "行情來源包含 TWSE MIS、FinMind、Yahoo、Nasdaq、Binance、CoinGecko；不是每次都全部呼叫。"] },
+    { "dot": "violet", "title": "財報、估值與期權", "items": ["financial-reports 查台股 FinMind 或美股 SEC，搭配 Yahoo 補充；回傳 quarters、monthlyRevenue、earningsCalendar、warnings。", "財報日曆對持倉／自選分台股與美股呼叫：台股申報事件、美股 Nasdaq 預估／已公告事件。", "options-analysis 台股取 TAIFEX；美股有 Tradier token 用 Tradier，否則 Cboe 延遲快照。", "另有 valuation-history、dcf-fundamentals、corporate-actions、market-overview 函式。"] },
+    { "dot": "emerald", "title": "資產與持久資料", "items": ["資產、交易、自選、日快照由 Supabase Data API 讀寫；停損計畫使用 trade_plan_settings 與 trade_plan_dynamic_stops。", "market-data 以 price_cache 查詢、更新報價；financial-reports 使用 financial_reports_cache。", "此圖是本機工作目錄快照，不代表 Edge Functions 已部署到線上。"] },
+    { "dot": "amber", "title": "AI、通知與玉山", "items": ["ai-chat 先用 Gemini，生成失敗時可用 OpenRouter 後備；密鑰留在後端。", "通知函式可依設定／排程透過 Resend 與 LINE 發送；不代表每次開 App 都會發送。", "E.Sun Bridge 提供 GET /v1/holdings、/v1/balance、/v1/transactions；App 另將匯入結果寫回 Supabase。"] },
+    { "dot": "slate", "title": "重構狀態與證據", "items": ["features/trends、technical、tradePlan、marketData 已拆出；screens 與 services 仍有組裝與相容入口。", "節點的來源卡以目前本機工作目錄建立唯讀證據快照；快照未推送，與 GitHub HEAD 不同。", "本圖示意主要呼叫路徑；非每個畫面、表格、提供者與條件分支的完整清單。"] }
+  ]
+}

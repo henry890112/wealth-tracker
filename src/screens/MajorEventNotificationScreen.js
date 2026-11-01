@@ -117,7 +117,7 @@ export default function MajorEventNotificationScreen() {
   const displayableEvents = (report?.events || []).filter(isCompleteEvent);
   const incompleteEventCount = Math.max(Number(report?.discardedCount) || 0, (report?.events || []).length - displayableEvents.length);
 
-  return <ScrollView style={{ backgroundColor: colors.bg }} contentContainerStyle={styles.content}>
+  return <ScrollView style={{ backgroundColor: colors.bg }} contentContainerStyle={styles.content} contentInsetAdjustmentBehavior="automatic">
     <View style={[styles.hero, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={[styles.heroIcon, { backgroundColor: colors.accentSoft }]}><Newspaper size={24} color={colors.accent} /></View><View style={styles.flex}><Text style={[styles.heroTitle, { color: colors.text }]}>重大事件通知</Text><Text style={[styles.heroSub, { color: colors.textSub }]}>AI 以 Web Search 尋找當日與持倉、自選相關的重大事件，並附上可開啟的來源連結。</Text></View><Switch value={form.enabled} onValueChange={value => update({ enabled: value })} trackColor={{ false: colors.border, true: colors.accentSoft }} thumbColor={form.enabled ? colors.accent : colors.textMuted} /></View>
 
     <Section title="搜尋範圍" colors={colors} Icon={Search}>

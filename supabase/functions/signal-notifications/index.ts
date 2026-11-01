@@ -75,6 +75,7 @@ const STRATEGY_NAMES: Record<string, string> = {
   "volume-mfi-cmf": "MFI／CMF 資金流", "volume-profile": "Volume Profile POC／價值區", "volume-wyckoff": "威科夫吸籌／派發",
   "stats-zscore": "Z-Score 均值回歸", "stats-pairs": "配對交易／價差回歸", "stats-momentum-ranking": "動能排名",
   "stats-atr-breakout": "ATR 波動突破", "stats-volatility-contraction": "波動率收縮／擴張",
+  "price-sr-touch": "接近支撐／壓力",
 };
 const MARKET_NAMES: Record<string, string> = { TW: "台股", US: "美股", CRYPTO: "加密貨幣" };
 const strategyName = (strategy: string, market = "") => strategy === "institutional"
@@ -677,7 +678,9 @@ function completedDailyRows(rows: PriceRow[], market: string) {
 function isDue(preference: Preference, now = new Date()) {
   if (!preference.last_notification_run_at) return true;
   const last = new Date(preference.last_notification_run_at);
-  if (preference.schedule_frequency === "hourly") return now.getTime() - last.getTime() >= 55 * 60_000;
+  // The hourly scan is split into minute-sized batches; compare the completed
+  // hour, not elapsed minutes since the final batch at HH:09.
+  if (preference.schedule_frequency === "hourly") return now.toISOString().slice(0, 13) !== last.toISOString().slice(0, 13);
   const currentLocal = localParts(now, preference.timezone); const lastLocal = localParts(last, preference.timezone);
   return currentLocal.hour >= preference.daily_hour && currentLocal.date !== lastLocal.date;
 }
@@ -735,10 +738,11 @@ function alertBreakdown(alerts: AlertItem[]) {
   return Object.fromEntries(MARKET_ORDER.map(market => [market, alerts.filter(item => item.market === market).length]));
 }
 
-function sharedSignals(marketData: MarketData, market: string, symbol: string, strategySettings: Record<string, unknown> | null = null): Signal[] {
+function sharedSignals(marketData: MarketData, market: string, symbol: string, strategySettings: Record<string, unknown> | null = null, selectedStrategies: string[] = []): Signal[] {
+  const analysisRows = marketData.rows.slice(-320);
   const analysis = analyzeSharedTechnicalData(
-    marketData.rows,
-    Math.min(260, marketData.rows.length),
+    analysisRows,
+    Math.min(260, analysisRows.length),
     {
       marketType: market,
       symbol,
@@ -747,6 +751,7 @@ function sharedSignals(marketData: MarketData, market: string, symbol: string, s
       relativeStrengthRows: marketData.relativeStrengthRows || [],
       relativeStrengthBenchmark: marketData.relativeStrengthBenchmark || "",
       strategySettings: strategySettings || {},
+      notificationStrategies: selectedStrategies,
     },
   );
   const candidates = [...(analysis?.strategies || []), ...(analysis?.hybrid ? [analysis.hybrid] : [])];
@@ -1313,14 +1318,16 @@ async function recordDelivery(admin: ReturnType<typeof createClient>, preference
   await admin.from("signal_notification_deliveries").upsert({ user_id: preference.user_id, channel, fingerprint, destination_hint: destination, status, provider_message_id: providerId || null, error_message: error.slice(0, 500) || null, created_at: new Date().toISOString() }, { onConflict: "user_id,channel,fingerprint" });
 }
 
-type ScanOptions = { persistHybrid?: boolean; includeIntraday?: boolean };
+type ScanOptions = { persistHybrid?: boolean; includeIntraday?: boolean; batchIndex?: number; batchSize?: number };
 
 async function scanPreference(
   admin: ReturnType<typeof createClient>, preference: Preference, cache: Map<string, Promise<MarketData>>,
   diagnostics?: ScanDiagnostic[], options: ScanOptions = {},
 ) {
   const finmindToken = Deno.env.get("FINMIND_API_TOKEN") || "";
-  const targets = await targetsForUser(admin, preference);
+  const allTargets = await targetsForUser(admin, preference);
+  const targets = options.batchIndex === undefined ? allTargets
+    : allTargets.slice(options.batchIndex * (options.batchSize || 5), (options.batchIndex + 1) * (options.batchSize || 5));
   const intradayCache = new Map<string, Promise<{ row: PriceRow; quoteTime: string } | null>>();
   const analyzed = await mapWithConcurrency(targets, 4, async target => {
     const key = `${target.market}:${target.symbol}`;
@@ -1341,7 +1348,7 @@ async function scanPreference(
       const namedTarget = marketData.name && marketData.name.toUpperCase() !== target.symbol.toUpperCase()
         ? { ...target, name: marketData.name }
         : target;
-      let signals = sharedSignals(marketData, target.market, target.symbol, preference.strategy_settings);
+      let signals = sharedSignals(marketData, target.market, target.symbol, preference.strategy_settings, preference.strategies);
       if (options.persistHybrid && preference.strategies.includes("hybrid")) {
         const completedMarketData = {
           ...marketData,
@@ -1354,7 +1361,9 @@ async function scanPreference(
         if (hybridState.exitSignal) signals.push(hybridState.exitSignal);
       }
       const matched = signals
-        .filter(signal => preference.strategies.includes(signal.strategy) && preference.signal_statuses.includes(signal.status) && preference.signal_directions.includes(signal.direction))
+        .filter(signal => preference.strategies.includes(signal.strategy)
+          && (signal.strategy === "price-sr-touch" || preference.signal_statuses.includes(signal.status))
+          && preference.signal_directions.includes(signal.direction))
         .map(signal => ({
           ...namedTarget, close: latest.close, candleDate: latest.time, signal,
           isIntraday: primarySnapshot.isIntraday,
@@ -1545,7 +1554,8 @@ async function refreshIntradayForUser(request: Request, admin: ReturnType<typeof
   return json({ states: [...(states || []), ...normalizedHybrid], monitoredSignals: alerts.filter(item => item.signal.status === "confirmed").length });
 }
 
-async function runScheduled(admin: ReturnType<typeof createClient>) {
+async function runScheduled(admin: ReturnType<typeof createClient>, batchIndex: number) {
+  if (batchIndex < 0 || batchIndex >= 10) return { checkedUsers: 0, alertsFound: 0, sent: 0, failed: 0, skipped: true };
   const { data, error } = await admin.from("investment_signal_preferences").select("user_id,enabled,schedule_frequency,daily_hour,timezone,email_enabled,notification_email,line_enabled,line_user_id,include_holdings,include_watchlist,markets,strategies,signal_statuses,signal_directions,strategy_settings,max_symbols,last_notification_run_at").eq("enabled", true);
   if (error) throw error;
   const due = ((data || []) as Preference[]).filter(preference => isDue(preference));
@@ -1556,10 +1566,12 @@ async function runScheduled(admin: ReturnType<typeof createClient>) {
       const alerts = await scanPreference(admin, preference, cache, undefined, {
         persistHybrid: true,
         includeIntraday: true,
+        batchIndex,
+        batchSize: 5,
       });
       alertsFound += alerts.length;
       await seedIntradayStates(admin, preference.user_id, alerts);
-      const intradayEvents = preference.schedule_frequency === "hourly"
+      const intradayEvents = batchIndex === 9 && preference.schedule_frequency === "hourly"
         ? [...await monitorIntradayRisk(admin, preference), ...await monitorHybridRisk(admin, preference)]
         : [];
       if (intradayEvents.length && preference.email_enabled) {
@@ -1589,9 +1601,9 @@ async function runScheduled(admin: ReturnType<typeof createClient>) {
         }
       }
     } catch (userError) { console.error("notification-user", preference.user_id, userError); failed += 1; }
-    await admin.from("investment_signal_preferences").update({ last_notification_run_at: new Date().toISOString() }).eq("user_id", preference.user_id);
+    if (batchIndex === 9) await admin.from("investment_signal_preferences").update({ last_notification_run_at: new Date().toISOString() }).eq("user_id", preference.user_id);
   }
-  return { checkedUsers: due.length, alertsFound, sent, failed };
+  return { checkedUsers: due.length, batchIndex, alertsFound, sent, failed };
 }
 
 Deno.serve(async request => {
@@ -1610,9 +1622,12 @@ Deno.serve(async request => {
     if (body.action !== "run") return json({ error: "Unknown action" }, 400);
     const supplied = request.headers.get("x-signal-cron-secret") || ""; const expected = Deno.env.get("SIGNAL_CRON_SECRET") || "";
     if (!expected || supplied !== expected) return json({ error: "Unauthorized scheduler" }, 401);
-    const signals = await runScheduled(admin);
+    const requestedBatch = Number(body.batchIndex);
+    const batchIndex = Number.isInteger(requestedBatch) && requestedBatch >= 0 && requestedBatch < 10
+      ? requestedBatch : new Date().getUTCMinutes();
+    const signals = await runScheduled(admin, batchIndex);
     let marketEvents: unknown = { skipped: true };
-    try {
+    if (batchIndex === 9) try {
       const response = await fetch(`${supabaseUrl}/functions/v1/market-event-notifications`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-event-cron-secret": supplied },

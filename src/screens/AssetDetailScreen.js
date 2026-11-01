@@ -303,7 +303,8 @@ export default function AssetDetailScreen() {
       || !tradePlan?.dynamic_stop
       || next > previous + 1e-8
       || tradePlan.dynamic_stop.last_stop_source !== tradePlanEvaluation?.stopSource
-      || (tradePlanEvaluation?.confirmedInvalid && !tradePlan.dynamic_stop.invalidated_at);
+      || (tradePlanEvaluation?.newlyConfirmedInvalid
+        && tradePlanEvaluation.invalidationSessionDate !== tradePlan?.dynamic_stop?.invalidation_session_date);
     if (!tradePlan?.saved || tradePlan.dynamic_stop_ready !== true || !hasPosition || !tradePlanEvaluation?.valid || !(next > 0) || !needsSave) return undefined;
     let active = true;
     saveTradePlanStop({
@@ -801,6 +802,7 @@ export default function AssetDetailScreen() {
       <ScrollView
         style={[styles.container, { backgroundColor: colors.bg }]}
         contentContainerStyle={{ paddingBottom: 80 }}
+        contentInsetAdjustmentBehavior="automatic"
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
@@ -976,7 +978,7 @@ export default function AssetDetailScreen() {
           const stopDataUnavailable = tradePlan?.dynamic_stop_ready === false;
           const stateColor = state === 'invalid'
             ? colors.negative
-            : state === 'warning' || !hasSavedRule || !canCalculate || stopDataUnavailable
+            : state === 'warning' || state === 'recovered' || !hasSavedRule || !canCalculate || stopDataUnavailable
               ? colors.warning
               : state === 'normal' ? colors.positive : colors.accent;
           const issueLabel = !hasSavedRule ? '尚未設定'
@@ -1045,9 +1047,9 @@ export default function AssetDetailScreen() {
                 {!hasConfirmedInvalidation && hasStopOutcome && <View style={styles.tradePlanMetric}><Text style={[styles.tradePlanMetricLabel, { color: colors.textMuted }]}>停損價預估損益</Text><Text style={[styles.tradePlanMetricValue, { color: stopOutcomeColor }]}>{stopOutcomeText}</Text></View>}
               </View>
               <Text style={[styles.tradePlanReason, { color: colors.textMuted }]}>{hasConfirmedInvalidation
-                ? `原停損來源：${tradePlanEvaluation?.stopSourceLabel || '—'}；${tradePlanEvaluation?.recoveredAfterInvalidation ? '最新價格已收復原停損，但狀態仍列為失效。' : '原停損價僅保留作為計畫基準。'}失效確認與目前損益分別依正式收盤價及最新價格計算，未含滑價、手續費與交易稅。`
+                ? `原停損來源：${tradePlanEvaluation?.stopSourceLabel || '—'}；${tradePlanEvaluation?.recoveredAfterInvalidation ? '最新價格已收復原停損；待後續正式收盤確認後恢復正常。' : '原停損價僅保留作為計畫基準。'}失效確認與目前損益分別依正式收盤價及最新價格計算，未含滑價、手續費與交易稅。`
                 : `目前停損來源：${tradePlanEvaluation?.stopSourceLabel || '—'}；預估損益假設能在停損價附近出場，未含滑價、手續費與交易稅。`}</Text>
-            </> : <Text style={[styles.tradePlanReason, { color: colors.textSub }]}>新建立計畫時會依 MA20／MA40／MA60 支撐或 ATR 設定停損，建立後固定不自動移動；狀態分為正常、警戒、失效。</Text>}
+            </> : <Text style={[styles.tradePlanReason, { color: colors.textSub }]}>新建立計畫時會依 MA20／MA40／MA60 支撐或 ATR 設定停損，建立後固定不自動移動；失效後盤中收復先列「已收復」，後續正式收盤站上停損才恢復正常。</Text>}
             <TouchableOpacity style={[styles.tradePlanAction, { borderColor: colors.accent, backgroundColor: colors.accentSoft }]} onPress={() => navigation.navigate('TechnicalAnalysis', { symbol: asset.symbol, name: asset.name, averageCost: asset.average_cost || 0, currentShares: asset.current_shares || 0, marketType: asset.market_type, currency: asset.currency, analysisKey: 'tradePlan' })}><Text style={[styles.tradePlanActionText, { color: colors.accent }]}>{hasSavedRule ? '查看共用規則' : '設定共用規則'}</Text></TouchableOpacity>
             </>}
           </View>;

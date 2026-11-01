@@ -561,7 +561,7 @@ export default function OptionsAnalysisScreen({ route }) {
   const { colors } = useTheme();
   const routeSymbol = route?.params?.symbol || '';
   const routeMarket = route?.params?.market || (/^\d+$/.test(String(routeSymbol)) ? 'TW' : 'US');
-  return <ScrollView style={[styles.screen, { backgroundColor: colors.bg }]} keyboardShouldPersistTaps="handled"><OptionsAnalysisContent initialMarket={routeMarket} initialSymbol={routeSymbol} /></ScrollView>;
+  return <ScrollView style={[styles.screen, { backgroundColor: colors.bg }]} contentInsetAdjustmentBehavior="automatic" keyboardShouldPersistTaps="handled"><OptionsAnalysisContent initialMarket={routeMarket} initialSymbol={routeSymbol} /></ScrollView>;
 }
 
 const styles = StyleSheet.create({

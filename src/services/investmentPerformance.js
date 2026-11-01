@@ -912,7 +912,10 @@ export const calculateTradePerformance = (context, market = 'ALL', requestedDays
       const value = Math.abs(finite(flow.amount));
       if (!(shares > 0) || !(value > 0)) continue;
       if (flow.type === 'BUY') {
-        lots.push({ shares, remaining: shares, cost: value, unitCost: value / shares, boughtAt: dateMs(flow.date) });
+        const nativeAmount = flow.amountNative == null ? null : Number(flow.amountNative);
+        lots.push({ shares, remaining: shares, cost: value, unitCost: value / shares,
+          nativeUnitCost: Number.isFinite(nativeAmount) && nativeAmount > 0 ? nativeAmount / shares : null,
+          boughtAt: dateMs(flow.date) });
         continue;
       }
       if (flow.type !== 'SELL') continue;
@@ -949,11 +952,15 @@ export const calculateTradePerformance = (context, market = 'ALL', requestedDays
     const openShares = Math.min(availableOpenShares, currentShares);
     let sharesToValue = openShares;
     let openCost = 0;
+    let openCostNative = 0;
+    let hasCompleteNativeCost = true;
     for (const lot of eligibleOpenLots) {
       if (sharesToValue <= 1e-8) break;
       if (lot.remaining <= 1e-8) continue;
       const used = Math.min(lot.remaining, sharesToValue);
       openCost += used * lot.unitCost;
+      if (lot.nativeUnitCost == null) hasCompleteNativeCost = false;
+      else openCostNative += used * lot.nativeUnitCost;
       sharesToValue -= used;
     }
     const currentUnitValue = currentShares > 0 ? finite(valuation.currentValue) / currentShares : 0;
@@ -961,6 +968,7 @@ export const calculateTradePerformance = (context, market = 'ALL', requestedDays
     const realizedPnl = sellProceeds - realizedCost;
     const unrealizedPnl = currentValue - openCost;
     const totalPnl = realizedPnl + unrealizedPnl;
+    const assetTotalCost = realizedCost + openCost;
     if (realizedCost > 0 || openCost > 0 || ignoredSellShares > 0) {
       assetRows.push({
         assetId,
@@ -973,9 +981,14 @@ export const calculateTradePerformance = (context, market = 'ALL', requestedDays
         matchedSellCount,
         openShares,
         openCost,
+        averageCostPrice: openShares > 0 && hasCompleteNativeCost ? openCostNative / openShares : null,
+        costCurrency: first.currency || valuation.currency || null,
         currentValue,
         unrealizedPnl,
         totalPnl,
+        totalReturn: assetTotalCost > 0 ? totalPnl / assetTotalCost : null,
+        realizedReturn: realizedCost > 0 ? realizedPnl / realizedCost : null,
+        unrealizedReturn: openCost > 0 ? unrealizedPnl / openCost : null,
         ignoredSellShares,
       });
     }
@@ -992,6 +1005,24 @@ export const calculateTradePerformance = (context, market = 'ALL', requestedDays
   }), { realizedCost: 0, sellProceeds: 0, realizedPnl: 0, openCost: 0, currentValue: 0, unrealizedPnl: 0, totalPnl: 0 });
   const totalCost = totals.realizedCost + totals.openCost;
   const firstDate = periodFlows.length ? periodFlows[0].date : null;
+  const includedAssetIds = new Set(assetRows.map(row => row.assetId));
+  const toTradeEvent = flow => ({
+    id: flow.id,
+    assetId: performanceIdentity(flow),
+    date: dateKey(flow.date),
+    type: flow.type,
+    symbol: flow.symbol || flow.assetName || '未識別標的',
+    shares: Math.abs(finite(flow.shares)),
+    amount: Math.abs(finite(flow.amount)),
+  });
+  const tradeHistory = completeFlows
+    .filter(flow => includedAssetIds.has(performanceIdentity(flow)))
+    .map(toTradeEvent)
+    .sort((a, b) => b.date.localeCompare(a.date));
+  const timeline = periodFlows
+    .filter(flow => includedAssetIds.has(performanceIdentity(flow)))
+    .map(toTradeEvent)
+    .sort((a, b) => b.date.localeCompare(a.date));
 
   return {
     market,
@@ -1001,6 +1032,8 @@ export const calculateTradePerformance = (context, market = 'ALL', requestedDays
       : (requested || (firstDate ? Math.max(0, Math.floor((now.getTime() - dateMs(firstDate)) / 86_400_000)) : 0)),
     firstDate,
     transactionCount: periodFlows.length,
+    timeline,
+    tradeHistory,
     assetRows: assetRows.sort((a, b) => Math.abs(b.totalPnl) - Math.abs(a.totalPnl)),
     ignoredSellCount,
     ignoredSymbols: [...ignoredSymbols],

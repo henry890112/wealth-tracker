@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "51ce1dba-7b79-4bed-81b3-6ea83f64e66a",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/api-candidate.json",
+  "output": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/api-data-flow.html",
+  "specification": {
+    "sha256": "5db25547afd44fa7e988d213e554af72a507bd9917d6c8e831cc979e010924a6",
+    "bytes": 14368
+  },
+  "artifact": {
+    "sha256": "c4040de1e8cefc96d95428b36af9af87ff3b5bca372ce67a3f6396f325c8abad",
+    "bytes": 883316
+  }
+}

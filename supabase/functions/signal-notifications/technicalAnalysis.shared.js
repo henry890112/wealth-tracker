@@ -239,6 +239,56 @@ function clusterLevels(rows, indexes, field, latestClose, atr) {
     }));
 }
 
+function supportResistanceLevels(rows) {
+  if (!Array.isArray(rows) || !rows.length) return { supports: [], resistances: [], atr: 0 };
+  const latest = rows.at(-1);
+  const atr = averageTrueRange(rows);
+  const lookback = rows.slice(-260);
+  const offset = rows.length - lookback.length;
+  const lowPivots = pivotIndexes(lookback.map(row => row.low), 'low').map(index => index + offset);
+  const highPivots = pivotIndexes(lookback.map(row => row.high), 'high').map(index => index + offset);
+  return {
+    supports: clusterLevels(rows, lowPivots, 'low', latest.close, atr)
+      .filter(level => level.lower <= latest.close)
+      .sort((a, b) => b.price - a.price)
+      .slice(0, 2),
+    resistances: clusterLevels(rows, highPivots, 'high', latest.close, atr)
+      .filter(level => level.upper >= latest.close)
+      .sort((a, b) => a.price - b.price)
+      .slice(0, 2),
+    atr,
+  };
+}
+
+// Use exactly the S1/S2 and R1/R2 zones shown on the technical chart.
+export function supportResistanceTouchSignal(rows, levels = supportResistanceLevels(rows)) {
+  if (!Array.isArray(rows) || rows.length < 60) return [];
+  const latest = rows.at(-1);
+  if (!(latest?.close > 0)) return [];
+  const buffer = Math.max(latest.close * 0.003, levels.atr * 0.1);
+  const resistanceApproachBuffer = Math.min(latest.close * 0.02, Math.max(latest.close * 0.01, levels.atr * 0.5));
+  const candidates = [
+    ...levels.supports.map((level, index) => ({ level, direction: 'bullish', label: `S${index + 1} 支撐`, side: '買入觀察' })),
+    ...levels.resistances.map((level, index) => ({ level, direction: 'bearish', label: `R${index + 1} 壓力`, side: '賣出／減碼觀察' })),
+  ];
+  return candidates.filter(item => item.direction === 'bullish'
+    ? latest.close >= item.level.lower && latest.close <= item.level.upper + buffer
+    : latest.close >= item.level.lower - resistanceApproachBuffer && latest.close <= item.level.upper)
+    .map(item => {
+      const entered = latest.close >= item.level.lower && latest.close <= item.level.upper;
+      const distance = item.direction === 'bullish'
+        ? Math.max(0, latest.close - item.level.upper)
+        : Math.max(0, item.level.lower - latest.close);
+      return {
+        key: 'price-sr-touch', label: '接近支撐／壓力', status: 'watch', direction: item.direction,
+        reason: `現價 ${latest.close.toFixed(2)} ${entered ? '已進入' : '接近'}${item.label}區 ${item.level.lower.toFixed(2)}–${item.level.upper.toFixed(2)}${entered ? '' : `，距區間 ${distance.toFixed(2)}（${(distance / latest.close * 100).toFixed(2)}%）`}（${item.level.touches} 次歷史測試），列為${item.side}；尚未出現反轉或突破確認。`,
+        level: item.level.price,
+        signal: { price: item.level.price },
+        zone: item.level,
+      };
+    });
+}
+
 function volumeRatioAt(rows, index) {
   const baseline = average(rows.slice(Math.max(0, index - 20), index).map(item => item.volume));
   return baseline > 0 ? rows[index].volume / baseline : 0;
@@ -1414,8 +1464,15 @@ function evaluateStrategies(rows, supports, resistances, divergences, context = 
     resistances,
     strategies: coreStrategies,
     hybrid,
+    selectedKeys: context.notificationStrategies,
   });
-  const strategies = [...coreStrategies, ...libraryStrategies];
+  const includeLevelStrategy = !Array.isArray(context.notificationStrategies) || context.notificationStrategies.includes('price-sr-touch');
+  const activeLevelStrategies = includeLevelStrategy ? supportResistanceTouchSignal(rows, { supports, resistances, atr: averageTrueRange(rows) }) : [];
+  const levelStrategies = !includeLevelStrategy ? [] : activeLevelStrategies.length ? activeLevelStrategies : [{
+    key: 'price-sr-touch', label: '接近支撐／壓力', status: 'none', direction: 'neutral',
+    reason: '目前價格尚未接近圖上的 S1／S2 或 R1／R2 區域。',
+  }];
+  const strategies = [...coreStrategies, ...libraryStrategies, ...levelStrategies];
   const confirmed = strategies.filter(item => item.status === 'confirmed');
   const watch = strategies.filter(item => item.status === 'watch');
   const bullish = strategies.filter(item => item.direction === 'bullish' && item.status !== 'none').length;
@@ -1696,19 +1753,7 @@ export function analyzeTechnicalData(rawRows, displayCount = rawRows.length, con
   }));
   const enriched = enrichedAll.slice(-Math.min(displayCount, enrichedAll.length));
   const latest = enriched.at(-1);
-  const atr = averageTrueRange(enriched);
-  const lookback = enriched.slice(-260);
-  const offset = enriched.length - lookback.length;
-  const lowPivots = pivotIndexes(lookback.map(row => row.low), 'low').map(index => index + offset);
-  const highPivots = pivotIndexes(lookback.map(row => row.high), 'high').map(index => index + offset);
-  const supports = clusterLevels(enriched, lowPivots, 'low', latest.close, atr)
-    .filter(level => level.price < latest.close)
-    .sort((a, b) => b.price - a.price)
-    .slice(0, 2);
-  const resistances = clusterLevels(enriched, highPivots, 'high', latest.close, atr)
-    .filter(level => level.price > latest.close)
-    .sort((a, b) => a.price - b.price)
-    .slice(0, 2);
+  const { supports, resistances, atr } = supportResistanceLevels(enriched);
   const volumeSpikes = enriched.map((row, index) => {
     const baseline = average(enriched.slice(Math.max(0, index - 20), index).map(item => item.volume));
     return baseline > 0 && row.volume >= baseline * 1.8 ? { time: row.time, volume: row.volume, ratio: row.volume / baseline, close: row.close } : null;

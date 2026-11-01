@@ -2969,8 +2969,10 @@ const STRATEGY_EVALUATORS = {
 };
 
 export function evaluateStrategyLibrary(rows, context = {}, options = {}) {
-  if (!Array.isArray(rows) || !rows.length) return STRATEGY_LIBRARY.map(def => makeResult(def, 'unavailable', 'neutral', '尚未取得 K 線資料。'));
-  return STRATEGY_LIBRARY.map(def => {
+  const selectedKeys = Array.isArray(options.selectedKeys) ? new Set(options.selectedKeys) : null;
+  const definitions = selectedKeys ? STRATEGY_LIBRARY.filter(def => selectedKeys.has(def.key)) : STRATEGY_LIBRARY;
+  if (!Array.isArray(rows) || !rows.length) return definitions.map(def => makeResult(def, 'unavailable', 'neutral', '尚未取得 K 線資料。'));
+  return definitions.map(def => {
     const evaluator = STRATEGY_EVALUATORS[def.key];
     try {
       const result = evaluator ? evaluator(def, rows, context, options) : makeResult(def, 'unavailable', 'neutral', '此策略尚未配置計算引擎。');

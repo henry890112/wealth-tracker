@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/candidate.json",
+    "sha256": "c7867eb3bf108b9afb18f9d39be81e66d43921598e8689d8dfd55018e74e242f",
+    "bytes": 10883
+  },
+  "artifact": {
+    "path": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/wealthtracker.html",
+    "sha256": "45da07ce15b05ebfb65c67089aaa1b55612d16fccb100c324b258b46cd82e10c",
+    "bytes": 867356
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/overview-final/wealthtracker.finalize.json",
+    "summaryReceipt": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/overview-final/wealthtracker.finalize-summary.json",
+    "browserCheckReceipt": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/overview-final/wealthtracker.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-29T15:09:44.719Z",
+    "source": "network",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 2553,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}

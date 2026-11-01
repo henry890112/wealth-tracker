@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "WealthTracker｜模組、API 與資料來源",
+    "locale": "zh-TW",
+    "output": ".archify/architecture-wealthtracker-20261029-230220/api-data-flow.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:henry890112/wealth-tracker.git",
+      "revision": "3ff4d4cc070ea1cc052230fd3ed3cc70812f5324",
+      "link_mode": "local-only"
+    },
+    "views": [
+      { "id": "prices", "label": "報價與 K 線", "focus": ["quotes", "market-data", "quote-sources", "technical", "market-history", "history-sources"] },
+      { "id": "fundamentals", "label": "財報、總體與期權", "focus": ["reports", "financial-reports", "report-sources", "overview", "market-overview", "macro-sources", "options", "options-analysis", "options-sources"] },
+      { "id": "ai-notify", "label": "AI 與通知", "focus": ["ai-client", "ai-chat", "ai-sources", "signal-client", "signal-edge", "delivery-sources"] },
+      { "id": "esun", "label": "玉山同步", "focus": ["esun-client", "esun-bridge", "esun-sdk"] },
+      { "id": "plans", "label": "交易計畫資料", "focus": ["tradeplan-client", "data-api", "tradeplan-db"] }
+    ]
+  },
+  "components": [
+    { "id": "quotes", "type": "backend", "label": "marketData/quotes", "sublabel": "App：最新報價與批次報價", "pos": [40, 54], "size": [190, 76], "sources": [{ "path": "src/features/marketData/quotes.js", "line": 141, "end_line": 164 }, { "path": "src/features/marketData/quotes.js", "line": 226, "end_line": 242 }] },
+    { "id": "market-data", "type": "cloud", "label": "market-data", "sublabel": "quotes・errors・fetchedAt", "pos": [340, 54], "size": [195, 76], "sources": [{ "path": "supabase/functions/market-data/index.ts", "line": 45, "end_line": 99 }] },
+    { "id": "quote-sources", "type": "external", "label": "報價供應商", "sublabel": "TWSE・Yahoo・Nasdaq・幣市", "pos": [675, 54], "size": [190, 76], "sources": [{ "path": "supabase/functions/_shared/marketData.ts", "line": 135, "end_line": 186 }, { "path": "supabase/functions/_shared/marketData.ts", "line": 238, "end_line": 318 }] },
+
+    { "id": "technical", "type": "backend", "label": "technicalAnalysis", "sublabel": "K 線・比較・即時報價", "pos": [40, 216], "size": [190, 76], "sources": [{ "path": "src/services/technicalAnalysis.js", "line": 1563, "end_line": 1584 }] },
+    { "id": "market-history", "type": "cloud", "label": "market-history", "sublabel": "rows・benchmark・quote", "pos": [340, 216], "size": [195, 76], "sources": [{ "path": "supabase/functions/market-history/index.ts", "line": 398, "end_line": 495 }] },
+    { "id": "history-sources", "type": "external", "label": "歷史資料來源", "sublabel": "FinMind・Yahoo・Binance", "pos": [675, 216], "size": [190, 76], "sources": [{ "path": "supabase/functions/market-history/index.ts", "line": 429, "end_line": 456 }] },
+
+    { "id": "reports", "type": "backend", "label": "financialReports", "sublabel": "財報卡與財報日曆", "pos": [40, 378], "size": [190, 76], "sources": [{ "path": "src/services/financialReports.js", "line": 7, "end_line": 27 }, { "path": "src/features/trends/hooks/useEarningsCalendar.js", "line": 153, "end_line": 160 }] },
+    { "id": "financial-reports", "type": "cloud", "label": "financial-reports", "sublabel": "quarters・calendar・events", "pos": [340, 378], "size": [195, 76], "sources": [{ "path": "supabase/functions/financial-reports/index.ts", "line": 698, "end_line": 733 }, { "path": "supabase/functions/financial-reports/index.ts", "line": 672, "end_line": 694 }] },
+    { "id": "report-sources", "type": "external", "label": "財報來源", "sublabel": "FinMind・SEC・Yahoo・Nasdaq", "pos": [675, 378], "size": [190, 76], "sources": [{ "path": "supabase/functions/financial-reports/index.ts", "line": 596, "end_line": 603 }, { "path": "supabase/functions/financial-reports/index.ts", "line": 624, "end_line": 629 }, { "path": "supabase/functions/financial-reports/index.ts", "line": 83, "end_line": 95 }] },
+
+    { "id": "overview", "type": "backend", "label": "marketOverview", "sublabel": "指數・資金・融資・本益比", "pos": [40, 540], "size": [190, 76], "sources": [{ "path": "src/services/marketOverview.js", "line": 603, "end_line": 623 }, { "path": "src/services/marketOverview.js", "line": 94, "end_line": 108 }] },
+    { "id": "market-overview", "type": "cloud", "label": "market-overview", "sublabel": "action 分支回傳資料", "pos": [340, 540], "size": [195, 76], "sources": [{ "path": "supabase/functions/market-overview/index.ts", "line": 600, "end_line": 655 }] },
+    { "id": "macro-sources", "type": "external", "label": "交易所／總體來源", "sublabel": "TWSE・TPEx・Multpl", "pos": [675, 540], "size": [190, 76], "sources": [{ "path": "supabase/functions/market-overview/index.ts", "line": 9, "end_line": 19 }, { "path": "supabase/functions/market-overview/index.ts", "line": 605, "end_line": 655 }] },
+
+    { "id": "options", "type": "backend", "label": "optionsAnalytics", "sublabel": "到期日・選擇權鏈", "pos": [40, 702], "size": [190, 76], "sources": [{ "path": "src/services/optionsAnalytics.js", "line": 192, "end_line": 207 }] },
+    { "id": "options-analysis", "type": "cloud", "label": "options-analysis", "sublabel": "expirations・contracts", "pos": [340, 702], "size": [195, 76], "sources": [{ "path": "supabase/functions/options-analysis/index.ts", "line": 247, "end_line": 335 }] },
+    { "id": "options-sources", "type": "external", "label": "期權資料來源", "sublabel": "TAIFEX・Tradier／Cboe", "pos": [675, 702], "size": [190, 76], "sources": [{ "path": "supabase/functions/options-analysis/index.ts", "line": 9, "end_line": 12 }, { "path": "supabase/functions/options-analysis/index.ts", "line": 269, "end_line": 335 }] },
+
+    { "id": "ai-client", "type": "backend", "label": "services/ai", "sublabel": "問答・語音轉文字", "pos": [40, 864], "size": [190, 76], "sources": [{ "path": "src/services/ai.js", "line": 41, "end_line": 49 }, { "path": "src/screens/AIAnalysisScreen.js", "line": 13, "end_line": 22 }] },
+    { "id": "ai-chat", "type": "cloud", "label": "ai-chat", "sublabel": "content・model・sources", "pos": [340, 864], "size": [195, 76], "sources": [{ "path": "supabase/functions/ai-chat/index.ts", "line": 147, "end_line": 199 }] },
+    { "id": "ai-sources", "type": "external", "label": "模型供應商", "sublabel": "Gemini；OpenRouter 後備", "pos": [675, 864], "size": [190, 76], "sources": [{ "path": "supabase/functions/ai-chat/index.ts", "line": 7, "end_line": 8 }, { "path": "supabase/functions/ai-chat/index.ts", "line": 180, "end_line": 193 }] },
+
+    { "id": "signal-client", "type": "backend", "label": "訊號與通知設定", "sublabel": "手動測試・LINE 綁定", "pos": [40, 1026], "size": [190, 76], "sources": [{ "path": "src/screens/SignalNotificationSettingsScreen.js", "line": 188, "end_line": 236 }, { "path": "src/services/investmentSignals.js", "line": 121, "end_line": 141 }] },
+    { "id": "signal-edge", "type": "cloud", "label": "signal-notifications", "sublabel": "訊號掃描・通知發送", "pos": [340, 1026], "size": [195, 76], "sources": [{ "path": "supabase/functions/signal-notifications/index.ts", "line": 1218, "end_line": 1250 }] },
+    { "id": "delivery-sources", "type": "external", "label": "訊息發送", "sublabel": "Resend・LINE・Expo Push", "pos": [675, 1026], "size": [190, 76], "sources": [{ "path": "supabase/functions/signal-notifications/index.ts", "line": 1187, "end_line": 1192 }, { "path": "supabase/functions/signal-notifications/index.ts", "line": 1239, "end_line": 1250 }, { "path": "supabase/functions/daily-investment-signals/index.ts", "line": 178, "end_line": 191 }] },
+
+    { "id": "esun-client", "type": "backend", "label": "services/esunSync", "sublabel": "讀取並匯入帳務資料", "pos": [40, 1188], "size": [190, 76], "sources": [{ "path": "src/services/esunSync.js", "line": 30, "end_line": 67 }, { "path": "src/services/esunSync.js", "line": 272, "end_line": 278 }] },
+    { "id": "esun-bridge", "type": "backend", "label": "E.Sun Bridge", "sublabel": "唯讀 GET /v1/*", "pos": [340, 1188], "size": [195, 76], "sources": [{ "path": "esun-bridge/src/server.mjs", "line": 142, "end_line": 163 }] },
+    { "id": "esun-sdk", "type": "external", "label": "玉山 SDK", "sublabel": "持倉・餘額・成交", "pos": [675, 1188], "size": [190, 76], "sources": [{ "path": "esun-bridge/src/server.mjs", "line": 149, "end_line": 163 }, { "path": "esun-bridge/src/holdings.mjs", "line": 1, "end_line": 20 }] },
+
+    { "id": "tradeplan-client", "type": "backend", "label": "features/tradePlan", "sublabel": "停損設定・狀態・重設", "pos": [40, 1350], "size": [190, 76], "sources": [{ "path": "src/features/tradePlan/tradePlans.js", "line": 11, "end_line": 70 }, { "path": "src/features/tradePlan/tradePlans.js", "line": 123, "end_line": 145 }] },
+    { "id": "data-api", "type": "security", "label": "Supabase Data API", "sublabel": "登入使用者讀寫／RPC", "pos": [340, 1350], "size": [195, 76], "sources": [{ "path": "src/lib/supabase.js", "line": 12, "end_line": 19 }, { "path": "src/features/tradePlan/tradePlans.js", "line": 4, "end_line": 17 }, { "path": "src/features/tradePlan/tradePlans.js", "line": 123, "end_line": 145 }] },
+    { "id": "tradeplan-db", "type": "database", "label": "交易計畫資料表", "sublabel": "settings・dynamic_stops", "pos": [675, 1350], "size": [190, 76], "sources": [{ "path": "src/features/tradePlan/tradePlans.js", "line": 11, "end_line": 70 }, { "path": "supabase/migrations/20261003125916_add_trade_plan_dynamic_stops.sql", "line": 1, "end_line": 30 }] }
+  ],
+  "connections": [
+    { "id": "quotes-call", "from": "quotes", "to": "market-data", "label": "invoke" },
+    { "id": "quotes-feed", "from": "market-data", "to": "quote-sources", "label": "價格" },
+    { "id": "technical-call", "from": "technical", "to": "market-history", "label": "invoke" },
+    { "id": "history-feed", "from": "market-history", "to": "history-sources", "label": "OHLCV" },
+    { "id": "reports-call", "from": "reports", "to": "financial-reports", "label": "invoke" },
+    { "id": "reports-feed", "from": "financial-reports", "to": "report-sources", "label": "申報" },
+    { "id": "overview-call", "from": "overview", "to": "market-overview", "label": "invoke" },
+    { "id": "overview-feed", "from": "market-overview", "to": "macro-sources", "label": "指標" },
+    { "id": "options-call", "from": "options", "to": "options-analysis", "label": "invoke" },
+    { "id": "options-feed", "from": "options-analysis", "to": "options-sources", "label": "合約" },
+    { "id": "ai-call", "from": "ai-client", "to": "ai-chat", "label": "invoke" },
+    { "id": "ai-feed", "from": "ai-chat", "to": "ai-sources", "label": "生成" },
+    { "id": "signal-call", "from": "signal-client", "to": "signal-edge", "label": "invoke" },
+    { "id": "signal-send", "from": "signal-edge", "to": "delivery-sources", "label": "發送" },
+    { "id": "esun-call", "from": "esun-client", "to": "esun-bridge", "label": "GET" },
+    { "id": "esun-read", "from": "esun-bridge", "to": "esun-sdk", "label": "查詢" },
+    { "id": "plan-call", "from": "tradeplan-client", "to": "data-api", "label": "CRUD／RPC" },
+    { "id": "plan-store", "from": "data-api", "to": "tradeplan-db", "label": "讀寫" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "market-data｜最新報價", "items": ["請求：{ symbols: [{ symbol, market }], forceRefresh }；回應：quotes、errors、fetchedAt。", "先查 price_cache，失效後取 TWSE MIS／Yahoo／Nasdaq／Binance／CoinGecko；失敗可退回舊快取。", "App 的部分報價函式在 Edge 失敗時才直連來源；並非所有取得報價的入口都有同一個後備路徑。"] },
+    { "dot": "cyan", "title": "market-history｜技術 K 線", "items": ["請求：symbol、marketType、days、includeIntraday、comparisonSymbols。", "回應：rows、benchmarkRows、relativeStrengthRows、comparisonRows、quote、quoteStatus 等。", "台股主要 FinMind，美股 Yahoo，幣種 Binance；盤中報價與完成日 K 有條件合併。"] },
+    { "dot": "violet", "title": "financial-reports｜季報與日曆", "items": ["單股請求：symbol、marketType、forceRefresh；回應 quarters、monthlyRevenue、earningsCalendar、warnings。", "月曆請求：calendarMonth、marketType、symbols；台股回傳申報事件，美股回傳 Nasdaq 財報事件。", "台股季報來自 FinMind；美股正式數字來自 SEC；Yahoo 補充日曆與預估。"] },
+    { "dot": "amber", "title": "market-overview｜市場總覽", "items": ["以 action 區分 tpex-index、tw-market-flow、tw-margin-history、tw-foreign-history、tpex-index-history、sp500-pe 等。", "資料來源包含 TWSE、TPEx、Multpl；部分 App 路徑有直接請求後備。"] },
+    { "dot": "orange", "title": "options-analysis｜選擇權", "items": ["請求：market、symbol、action=expirations 或 chain，chain 另帶 expiration。", "台股由 TAIFEX；美股有 Tradier token 用 Tradier，否則用 Cboe 延遲快照。", "回應包含 expirations 或 contracts，並標示 provider、priceDelay、greeksDelay。"] },
+    { "dot": "emerald", "title": "ai-chat｜AI", "items": ["請求：mode=generate／transcribe；生成回應 content、model、sources。", "後端先用 Gemini，生成無內容時才嘗試 OpenRouter；密鑰不放在 App bundle。"] },
+    { "dot": "rose", "title": "通知與訊號", "items": ["signal-notifications 依 action 測試 Email／LINE 或產生綁定碼；排程掃描另走後端路徑。", "Resend 發 Email、LINE Messaging API 發訊息；daily-investment-signals 可向 Expo Push API 發送摘要。", "通知依設定、排程與條件觸發，不是每次開啟畫面必發。"] },
+    { "dot": "slate", "title": "玉山與交易計畫", "items": ["E.Sun Bridge 只接受 GET /v1/holdings、/v1/balance、/v1/transactions；App 取回後再匯入 Supabase。", "tradePlan 透過 Supabase Data API 讀寫 trade_plan_settings、trade_plan_dynamic_stops，並使用 rebase_trade_plan_dynamic_stop RPC。", "此圖依本機尚未提交的工作目錄快照建立；不能據此判定線上部署版本。"] }
+  ]
+}

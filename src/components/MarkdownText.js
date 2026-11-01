@@ -1,5 +1,6 @@
 import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import CompactDataTable from './CompactDataTable';
 
 function renderInline(text, color, fontSize = 14, lineHeight = 22) {
   const parts = String(text || '').split(/(\*\*.*?\*\*|`.*?`)/);
@@ -23,32 +24,10 @@ function parseTableCells(line) {
 }
 
 function MarkdownTable({ headers, rows, color, colors }) {
-  const columns = Math.max(headers.length, 1);
-  const tableWidth = Math.max(300, columns * 112);
-  const cellStyle = { width: tableWidth / columns };
-
-  return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tableScroller} contentContainerStyle={{ minWidth: tableWidth }}>
-      <View style={[styles.table, { width: tableWidth, borderColor: colors.border }]}> 
-        <View style={[styles.tableRow, styles.tableHeader, { backgroundColor: colors.cardAlt }]}> 
-          {headers.map((header, index) => (
-            <View key={`${header}-${index}`} style={[styles.tableCell, cellStyle]}>
-              <Text style={[styles.tableHeaderText, { color }]}>{header.replace(/\*\*/g, '')}</Text>
-            </View>
-          ))}
-        </View>
-        {rows.map((row, rowIndex) => (
-          <View key={`${row.join('-')}-${rowIndex}`} style={[styles.tableRow, { borderTopColor: colors.border }]}> 
-            {headers.map((_, columnIndex) => (
-              <View key={columnIndex} style={[styles.tableCell, cellStyle]}>
-                {renderInline(row[columnIndex] || '—', color, 12, 18)}
-              </View>
-            ))}
-          </View>
-        ))}
-      </View>
-    </ScrollView>
-  );
+  const cell = value => <Text numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.8} style={{ color, fontSize: 11, lineHeight: 15, textAlign: 'center' }}>{renderInline(value || '—', color, 11, 15)}</Text>;
+  return <CompactDataTable style={{ marginVertical: 6 }} rows={rows} rowKey={(_, index) => index} colors={colors} rowHeight={48}
+    fixedColumn={{ header: (headers[0] || '項目').replace(/\*\*/g, ''), width: 92, render: row => cell(row[0]) }}
+    columns={headers.slice(1).map((header, index) => ({ key: `${index}-${header}`, header: header.replace(/\*\*/g, ''), width: 112, render: row => cell(row[index + 1]) }))} />;
 }
 
 export default function MarkdownText({ text, color, colors, compact = false }) {

@@ -13,6 +13,7 @@ export const CORE_STRATEGY_OPTIONS = [
   { key: 'boundary', label: '雙軌邊界', category: '價格行為／SMC' },
   { key: 'smc', label: 'SMC', category: '價格行為／SMC' },
   { key: 'institutional', label: '籌碼／資金動能', category: '量價與資金流' },
+  { key: 'price-sr-touch', label: '接近支撐／壓力', category: '價格行為／SMC' },
 ];
 
 export const STRATEGY_SELECTION_CATEGORIES = ['整合策略', ...STRATEGY_LIBRARY_GROUPS];

@@ -25,7 +25,22 @@ import {
   withDailyMovingAverages,
   parseTwseMarketMaintenanceHistory,
   isTaiwanMarginHistoryCacheFresh,
+  isTaiwanForeignHistoryCacheFresh,
 } from '../src/services/marketOverview.js';
+
+test('foreign history cache keeps older pages for a day but refreshes recent pages', () => {
+  const originalNow = Date.now;
+  const now = Date.parse('2026-10-20T12:00:00Z');
+  Date.now = () => now;
+  try {
+    assert.equal(isTaiwanForeignHistoryCacheFresh({ cachedAt: now - 20 * 60_000, data: { asOf: '2026-10-19' } }), false);
+    assert.equal(isTaiwanForeignHistoryCacheFresh({ cachedAt: now - 23 * 60 * 60_000, data: { asOf: '2026-09-01' } }), true);
+    assert.equal(isTaiwanForeignHistoryCacheFresh({ cachedAt: now - 25 * 60 * 60_000, data: { asOf: '2026-09-01' } }), false);
+    assert.equal(isTaiwanForeignHistoryCacheFresh(null), false);
+  } finally {
+    Date.now = originalNow;
+  }
+});
 
 test('margin history cache refreshes recent data frequently but retains historical pages for a day', () => {
   const originalNow = Date.now;

@@ -655,7 +655,7 @@ export default function PortfolioSignalsScreen({ navigation }) {
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.bg }]}>
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={colors.accent} />}>
+    <ScrollView style={styles.scroll} contentContainerStyle={styles.content} contentInsetAdjustmentBehavior="automatic" refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={colors.accent} />}>
       <View style={[styles.hero, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={[styles.heroIcon, { backgroundColor: colors.accentSoft }]}><ShieldCheck size={22} color={colors.accent} /></View><View style={styles.flex}><Text style={[styles.heroTitle, { color: colors.text }]}>持倉與自選進出場訊號</Text><Text style={[styles.heroSub, { color: colors.textSub }]}>多頭趨勢過濾後，等待突破或回檔，再確認量能與相對強弱。</Text></View><TouchableOpacity accessibilityRole="button" accessibilityLabel="立即檢查盤中" disabled={checkingIntraday} onPress={refreshIntraday} style={[styles.intradayRefresh, { backgroundColor: colors.accentSoft, borderColor: colors.accent, opacity: checkingIntraday ? 0.6 : 1 }]}>{checkingIntraday ? <ActivityIndicator size="small" color={colors.accent} /> : <RefreshCw size={15} color={colors.accent} />}<Text style={[styles.intradayRefreshText, { color: colors.accent }]}>{checkingIntraday ? '檢查中' : '盤中檢查'}</Text></TouchableOpacity></View>
 
       <View style={[styles.rules, { backgroundColor: colors.cardAlt, borderColor: colors.border }]}> 

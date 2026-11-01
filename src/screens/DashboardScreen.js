@@ -424,7 +424,7 @@ export default function DashboardScreen() {
     const holdings = mergedAssets.filter(asset => (
       asset.category === 'investment' && asset.symbol && Number(asset.current_shares) > 0
     ));
-    const counts = { normal: 0, warning: 0, invalid: 0, unset: 0, missing: 0, pending: 0 };
+    const counts = { normal: 0, warning: 0, invalid: 0, recovered: 0, unset: 0, missing: 0, pending: 0 };
     holdings.forEach(asset => {
       const state = tradePlanStatuses[getTradePlanKey(asset)]?.state || 'pending';
       counts[state] = (counts[state] || 0) + 1;
@@ -762,7 +762,8 @@ export default function DashboardScreen() {
           || savedStop.last_stop_source !== calculation.stopSource
           || !(Number(savedStop.initial_stop_price) > 0)
           || !(Number(savedStop.initial_risk_per_share) > 0)
-          || (calculation.confirmedInvalid && !savedStop.invalidated_at);
+          || (calculation.newlyConfirmedInvalid
+            && calculation.invalidationSessionDate !== savedStop?.invalidation_session_date);
         return {
           key: getTradePlanKey(asset),
           state: displayStatus.state,
@@ -1381,7 +1382,7 @@ export default function DashboardScreen() {
                 篩選：{[
                   selectedCategory ? CATEGORY_CONFIG[selectedCategory]?.label : null,
                   selectedTradePlanState ? ({
-                    normal: '正常', warning: '警戒', invalid: '失效', unset: '未設定', missing: '資料不足',
+                    normal: '正常', warning: '警戒', invalid: '失效', recovered: '已收復', unset: '未設定', missing: '資料不足',
                   })[selectedTradePlanState] : null,
                 ].filter(Boolean).join(' · ')}
               </Text>
@@ -1439,6 +1440,7 @@ export default function DashboardScreen() {
                 ['normal', '正常', colors.positive],
                 ['warning', '警戒', colors.warning],
                 ['invalid', '失效', colors.negative],
+                ['recovered', '已收復', colors.warning],
                 ['unset', '未設定', C.textMuted],
                 ['missing', '資料不足', C.textMuted],
               ].filter(([key]) => tradePlanSummary[key] > 0).map(([key, label, color]) => (
@@ -1486,7 +1488,7 @@ export default function DashboardScreen() {
                       const plan = tradePlanStatuses[getTradePlanKey(asset)];
                       const stateColor = plan.state === 'normal'
                         ? colors.positive
-                        : plan.state === 'warning'
+                        : plan.state === 'warning' || plan.state === 'recovered'
                           ? colors.warning
                           : plan.state === 'invalid'
                             ? colors.negative
@@ -1501,11 +1503,11 @@ export default function DashboardScreen() {
                   <Text style={[styles.assetMeta, { color: C.textMuted }]}>{asset.currency}</Text>
                   {asset.category === 'investment' && (() => {
                     const plan = tradePlanStatuses[getTradePlanKey(asset)];
-                    if (!plan || !['warning', 'invalid'].includes(plan.state) || !Number.isFinite(plan.distancePct)) return null;
-                    const text = plan.state === 'invalid'
-                      ? plan.recoveredAfterInvalidation
-                        ? `曾收盤跌破停損・現價已收復 ${Math.max(0, plan.distancePct).toFixed(1)}%`
-                        : `低於停損價 ${Math.abs(plan.distancePct).toFixed(1)}%`
+                    if (!plan || !['warning', 'invalid', 'recovered'].includes(plan.state) || !Number.isFinite(plan.distancePct)) return null;
+                    const text = plan.state === 'recovered'
+                      ? `曾收盤觸及／跌破停損・現價已收復 ${Math.max(0, plan.distancePct).toFixed(1)}%・待正式收盤確認`
+                      : plan.state === 'invalid'
+                        ? `低於停損價 ${Math.abs(plan.distancePct).toFixed(1)}%`
                       : plan.intradayStopStatus || (() => {
                         const distance = Math.max(0, plan.distancePct);
                         const formattedDistance = distance > 0 && distance < 0.01

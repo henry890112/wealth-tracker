@@ -4,6 +4,7 @@ import { latestSecEarningsRelease, parseNokia6KEarningsReleaseHtml, parseSecEarn
 import { parseYahooCalendar } from "./earningsCalendar.shared.js";
 import { nasdaqSourceDatesForMonth, taipeiNasdaqEvent } from "./nasdaqCalendar.shared.js";
 import { taiwanFilingEventsForMonth } from "./taiwanFilingCalendar.shared.js";
+import { mergeQuarterSeriesByPriority } from "./quarterSeries.shared.js";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -11,7 +12,7 @@ const CORS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 const FINMIND = "https://api.finmindtrade.com/api/v4/data";
-const CALCULATION_VERSION = 12;
+const CALCULATION_VERSION = 13;
 const CACHE_HOURS = 6;
 const nasdaqDayCache = new Map<string, { rows: Row[]; expiresAt: number }>();
 const VALID_FORMS = new Set(["10-Q", "10-K", "10-Q/A", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"]);
@@ -274,6 +275,10 @@ function secQuarterSeries(rows: Row[], deriveQ4 = true): MetricPoint[] {
   return [...result.values()].sort((a, b) => a.end.localeCompare(b.end)).slice(-12);
 }
 
+function secQuarterSeriesWithFallback(companyFacts: Row, concepts: string[], unit: string): MetricPoint[] {
+  return mergeQuarterSeriesByPriority(concepts.map(concept => secQuarterSeries(secRows(companyFacts, [concept], unit))));
+}
+
 function secInstant(rows: Row[]) {
   return rows
     .filter(item => item.end && item.filed && finite(item.val))
@@ -460,7 +465,7 @@ async function secReports(symbol: string) {
     revenue: secQuarterSeries(secRows(facts, ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues", "SalesRevenueNet"], "USD")),
     grossProfit: secQuarterSeries(secRows(facts, ["GrossProfit"], "USD")),
     operatingIncome: secQuarterSeries(secRows(facts, ["OperatingIncomeLoss"], "USD")),
-    netIncome: secQuarterSeries(secRows(facts, ["NetIncomeLoss", "ProfitLoss"], "USD")),
+    netIncome: secQuarterSeriesWithFallback(facts, ["NetIncomeLoss", "ProfitLoss"], "USD"),
     // SEC often reports AVGO's full-year EPS without a standalone Q4 fact.
     // Derive Q4 from FY EPS minus the three reported quarters so the chart
     // does not lose the fourth bar (the reference provider does the same).

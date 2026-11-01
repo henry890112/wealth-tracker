@@ -19,6 +19,7 @@ import {
   PanResponder,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
+import CompactDataTable from '../components/CompactDataTable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Search as SearchIcon, Plus, X, Flame, LineChart as LineChartIcon, Clock, Calendar, Star, Bell, BellOff } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -1424,48 +1425,11 @@ export default function SearchScreen() {
             ))
           )
         ) : activeTab === 'FX' ? (
-          <View style={[styles.fxTable, { backgroundColor: colors.card }]}>
-            {/* Header row */}
-            <View style={[styles.fxTableHeader, { borderBottomColor: colors.border }]}>
-              <Text style={[styles.fxHeaderCurrency, { color: colors.textMuted, flex: 1 }]}>幣別</Text>
-              <Text style={[styles.fxHeaderRate, { color: colors.textMuted }]}>買外幣</Text>
-              <Text style={[styles.fxHeaderSell, { color: colors.textMuted }]}>賣外幣</Text>
-            </View>
-            {fxRates.length === 0
-              ? <ActivityIndicator style={{ padding: 32 }} color={PRIMARY} />
-              : fxRates.map((fx, i) => {
-                  const fmtRate = (r) => r == null ? '—' : r >= 10 ? r.toFixed(3) : r.toFixed(4);
-                  return (
-                    <TouchableOpacity
-                      key={fx.code}
-                      style={[styles.fxRow, { borderBottomColor: colors.borderLight },
-                        i === fxRates.length - 1 && { borderBottomWidth: 0 }]}
-                      onPress={() => openFxDetailModal(fx)}
-                      activeOpacity={0.7}
-                    >
-                      {/* Left: flag + name + sparkline */}
-                      <View style={styles.fxColCurrency}>
-                        <Text style={styles.fxFlag}>{fx.flag}</Text>
-                        <View style={{ flex: 1 }}>
-                          <Text style={[styles.fxCurrencyName, { color: colors.text }]}>{fx.name}</Text>
-                          <Text style={[styles.fxCurrencyCode, { color: colors.textMuted }]}>{fx.code}</Text>
-                        </View>
-                        <FxSparkline sparkPoints={fx.sparkPoints} todayRate={fx.buyRate} prevRate={fx.prevBuyRate} />
-                      </View>
-                      {/* Middle: buy rate */}
-                      <View style={styles.fxColRate}>
-                        <Text style={[styles.fxRateMain, { color: colors.text }]}>{fmtRate(fx.buyRate)}</Text>
-                      </View>
-                      {/* Right: sell rate + chevron */}
-                      <View style={styles.fxColSell}>
-                        <Text style={[styles.fxRateMain, { color: colors.text }]}>{fmtRate(fx.sellRate)}</Text>
-                        <Text style={[styles.fxChevron, { color: colors.textMuted }]}>›</Text>
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })
-            }
-          </View>
+          fxRates.length === 0 ? <ActivityIndicator style={{ padding: 32 }} color={PRIMARY} /> :
+          <CompactDataTable rows={fxRates} rowKey={fx => fx.code} colors={colors} rowHeight={54}
+            fixedColumn={{ header: '幣別', width: 92, render: fx => <View style={{ alignItems: 'center' }}><Text style={{ color: colors.text, fontSize: 11, fontWeight: '700' }}>{fx.flag} {fx.name}</Text><Text style={{ color: colors.textMuted, fontSize: 10 }}>{fx.code}</Text></View> }}
+            columns={[{ key: 'buy', header: '買外幣', width: 104, render: fx => fx.buyRate == null ? '—' : fx.buyRate >= 10 ? fx.buyRate.toFixed(3) : fx.buyRate.toFixed(4) }, { key: 'sell', header: '賣外幣', width: 104, render: fx => fx.sellRate == null ? '—' : fx.sellRate >= 10 ? fx.sellRate.toFixed(3) : fx.sellRate.toFixed(4) }, { key: 'trend', header: '走勢', width: 104, render: fx => <FxSparkline sparkPoints={fx.sparkPoints} todayRate={fx.buyRate} prevRate={fx.prevBuyRate} /> }]}
+            onRowPress={openFxDetailModal} rowAccessibilityLabel={fx => `${fx.name} ${fx.code}，查看匯率詳情`} />
         ) : (
           <>
             {recentSearches.length > 0 && (

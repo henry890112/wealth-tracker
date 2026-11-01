@@ -235,7 +235,7 @@ function MainStackScreen() {
         component={AIAnalysisScreen}
         options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }}
       />
-      <MainStack.Screen name="FixedExpenses" component={FixedExpensesScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '固定支出' })} />
+      <MainStack.Screen name="FixedExpenses" component={FixedExpensesScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '固定支出', headerTransparent: false })} />
       <MainStack.Screen name="EsunSync" component={EsunSyncScreen} options={{ presentation: 'card', animation: 'slide_from_right' }} />
       <MainStack.Screen name="InvestmentSignals" component={InvestmentSignalsScreen} options={({ navigation }) => ({ ...withAI({ navigation }), title: '研究訊號' })} />
       <MainStack.Screen name="TechnicalAnalysis" component={TechnicalAnalysisScreen} options={({ navigation, route }) => ({ ...withAI({ navigation }), title: `${route.params?.name || route.params?.symbol || ''} 技術分析`, gestureEnabled: false })} />

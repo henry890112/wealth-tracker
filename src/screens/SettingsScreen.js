@@ -425,6 +425,7 @@ export default function SettingsScreen({ route }) {
     <ScrollView
       style={[styles.container, { backgroundColor: colors.bg }]}
       contentContainerStyle={styles.content}
+      contentInsetAdjustmentBehavior="automatic"
       showsVerticalScrollIndicator={false}
     >
       {/* User Info */}

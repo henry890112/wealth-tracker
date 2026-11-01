@@ -265,7 +265,7 @@ WealthTracker/
 
 ### 進出場訊號 Email／LINE 通知
 
-App 的「更多 → 訊號通知」可讓每位登入使用者分別設定持倉／自選、市場、策略、訊號狀態與每日／每小時頻率。台股或美股開盤時，後端會以當日盤中 OHLCV 合成暫估日 K 重新計算策略；收盤後則使用正式日 K。後端只在符合條件且結果改變時寄出摘要，並以 K 棒日期、盤中／收盤快照、標的、策略、方向及狀態去重。
+App 的「更多 → 訊號通知」可讓每位登入使用者分別設定持倉／自選、市場、策略、訊號狀態與每日／每小時頻率。台股或美股開盤時，後端會以當日盤中 OHLCV 合成暫估日 K 重新計算策略；收盤後則使用正式日 K。「接近支撐／壓力」是獨立可選的到價觀察訊號，不會自動下單，也不會開啟其他策略的觀察通知。後端只在符合條件且結果改變時寄出摘要，並以 K 棒日期、盤中／收盤快照、標的、策略、方向及狀態去重。
 
 先套用 migration 並部署通知 Function：
 
@@ -286,7 +286,7 @@ npx supabase@latest secrets set \
   LINE_CHANNEL_ACCESS_TOKEN="LINE Messaging API channel access token"
 ```
 
-在 Supabase Dashboard 的 Cron 建立一條「每小時」工作，對下列網址送出 `POST`：
+套用 `scan_signal_notifications_in_batches` migration 後，Cron 使用每分鐘工作；函式只在每小時前 10 分鐘處理，每分鐘掃描最多 5 檔，避免一次掃描完整清單超出 Edge CPU 限制。既有工作名稱為 `hourly-signal-notifications`，不要再建立第二條重複工作。工作對下列網址送出 `POST`：
 
 ```text
 https://<project-ref>.supabase.co/functions/v1/signal-notifications
@@ -298,7 +298,7 @@ Header 加入 `Content-Type: application/json` 與 `x-signal-cron-secret: <SIGNA
 { "action": "run" }
 ```
 
-Function 會自行判斷每位使用者目前是否到達其每小時或每日排程，不需要為每位使用者建立 Cron。LINE 端請建立 Messaging API channel，將 Webhook URL 設為同一個 Function URL；使用者加入官方帳號後，在聊天室輸入 App 產生的一次性綁定碼即可。Email 由 Resend 發送，正式寄送前必須先完成寄件網域驗證。
+Function 會自行判斷每位使用者目前是否到達其每小時或每日排程；最多 50 檔在該小時前 10 分鐘分批掃描完成，不需要為每位使用者建立 Cron。LINE 端請建立 Messaging API channel，將 Webhook URL 設為同一個 Function URL；使用者加入官方帳號後，在聊天室輸入 App 產生的一次性綁定碼即可。Email 由 Resend 發送，正式寄送前必須先完成寄件網域驗證。
 
 ### AI 重大事件通知
 
@@ -309,7 +309,7 @@ npx supabase@latest db push
 npx supabase@latest functions deploy market-event-notifications --no-verify-jwt
 ```
 
-不需要新增第二條 Cron：現有 `signal-notifications` 每小時排程會呼叫 `market-event-notifications`，後者再依每位使用者設定的每日時間判斷是否執行。需要的 Secrets 與既有通知相同，另外會使用 `GEMINI_API_KEY`。Google Search grounding 可能產生 Gemini API 搜尋用量；搜尋結果可能遺漏或誤判，App 與通知都會保留來源供使用者核對。
+不需要新增第二條 Cron：現有 `signal-notifications` 會在每小時最後一批呼叫一次 `market-event-notifications`，後者再依每位使用者設定的每日時間判斷是否執行。需要的 Secrets 與既有通知相同，另外會使用 `GEMINI_API_KEY`。Google Search grounding 可能產生 Gemini API 搜尋用量；搜尋結果可能遺漏或誤判，App 與通知都會保留來源供使用者核對。
 
 可用下列方式手動測試排程（請勿把 Secret 留在 shell history 或截圖）：
 

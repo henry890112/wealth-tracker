@@ -1,14 +1,9 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, Dimensions, ActivityIndicator,
+  View, Text, ScrollView, StyleSheet, ActivityIndicator,
   TouchableOpacity, Modal, Platform, Alert, RefreshControl, Animated,
-  PanResponder,
 } from 'react-native';
-import Svg, {
-  Path, Circle, Text as SvgText,
-  Defs, LinearGradient, Stop, Line as SvgLine,
-} from 'react-native-svg';
-import { X, Calendar, ChevronLeft, ChevronRight } from 'lucide-react-native';
+import { X, Calendar } from 'lucide-react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
@@ -30,10 +25,17 @@ import {
   setAssetPerformanceExclusion,
 } from '../services/investmentPerformance';
 import { fetchMarketTechnicalContext } from '../services/technicalAnalysis';
-import { fetchFinancialReports } from '../services/financialReports';
-import { loadCloudWatchlist } from '../services/investmentSignals';
+import { DonutChart, TrendLineChart } from '../features/trends/components/TrendsCharts';
+import DayDetailModal from '../features/trends/components/DayDetailModal';
+import PerformanceCalendar from '../features/trends/components/PerformanceCalendar';
+import useEarningsCalendar from '../features/trends/hooks/useEarningsCalendar';
+import { allSettledWithConcurrency } from '../features/trends/concurrency';
+import {
+  PNL_METRICS,
+  buildTradePnlViews,
+  formatAmount,
+} from '../features/trends/tradePnl';
 
-const { width: screenWidth } = Dimensions.get('window');
 const PERIODS = [
   { label: '全部',  days: 'ALL' },
   { label: '7d',   days: 7 },
@@ -55,21 +57,6 @@ const MARKET_TYPE_CONFIG = {
 
 const DRILL_PALETTE = ['#6366f1', '#ec4899', '#14b8a6', '#8092AE', '#8b5cf6', '#06b6d4'];
 const DRILL_LIMIT = 20; // how many items to show in drilldown / donut legend
-const PNL_GAIN_COLOR = '#0DBD8B';
-const PNL_LOSS_COLOR = '#F03030';
-const PNL_GAIN_SOFT = 'rgba(13,189,139,0.13)';
-const PNL_LOSS_SOFT = 'rgba(240,48,48,0.10)';
-const PNL_METRICS = [
-  { key: 'realized', label: '已實現', seriesKey: 'realizedPnl', changeKey: 'realizedChange', pctKey: 'realizedPct', color: PNL_GAIN_COLOR },
-  { key: 'unrealized', label: '未實現', seriesKey: 'unrealizedPnl', changeKey: 'unrealizedChange', pctKey: 'unrealizedPct', color: '#F5A623' },
-  { key: 'total', label: '總損益', seriesKey: 'totalPnl', changeKey: 'totalDiff', pctKey: 'totalPct', color: '#60A5FA' },
-];
-
-const quarterFromPeriodEnd = value => {
-  const match = String(value || '').match(/^(\d{4})-(0[1-9]|1[0-2])-\d{2}$/);
-  return match ? `${match[1]} Q${Math.ceil(Number(match[2]) / 3)}` : null;
-};
-
 const FILTER_OPTIONS = [
   { label: '全部',    key: 'all' },
   { label: '台股',    key: 'TW' },
@@ -103,137 +90,12 @@ const aggregateCategorySnapshotRows = (rows = []) => {
     .map(([date, value]) => ({ snapshot_date: date, net_worth_base: value }));
 };
 
-const allSettledWithConcurrency = async (items, limit, worker) => {
-  const results = new Array(items.length);
-  let cursor = 0;
-  const run = async () => {
-    while (cursor < items.length) {
-      const index = cursor;
-      cursor += 1;
-      try {
-        results[index] = { status: 'fulfilled', value: await worker(items[index], index) };
-      } catch (reason) {
-        results[index] = { status: 'rejected', reason };
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
-  return results;
-};
-
 const performanceMarketForFilter = filter => ({
   all: 'ALL',
   TW: 'TW',
   US: 'US',
   Crypto: 'CRYPTO',
 }[filter] || null);
-
-const buildTradePnlViews = (points = []) => {
-  const usable = points
-    .filter(point => point?.date && Number.isFinite(Number(point.totalPnl)))
-    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
-  const series = usable.map(point => ({
-    date: point.date,
-    realizedPnl: Number(point.realizedPnl) || 0,
-    unrealizedPnl: Number(point.unrealizedPnl) || 0,
-    totalPnl: Number(point.totalPnl) || 0,
-  }));
-  const daily = {};
-  for (let index = 1; index < usable.length; index += 1) {
-    const previous = usable[index - 1];
-    const current = usable[index];
-    const previousCost = Number(previous.totalCost) > 0
-      ? Number(previous.totalCost)
-      : Math.max(Number(previous.currentValue) || 0, 0);
-    const realizedDiff = Number(current.realizedPnl) - Number(previous.realizedPnl);
-    const unrealizedDiff = Number(current.unrealizedPnl) - Number(previous.unrealizedPnl);
-    const totalDiff = Number(current.totalPnl) - Number(previous.totalPnl);
-    const denominator = previousCost > 0 ? previousCost : Math.max(Number(current.totalCost) || 0, 0);
-    daily[current.date] = {
-      diff: totalDiff,
-      realizedDiff,
-      unrealizedDiff,
-      totalDiff,
-      prevValue: previousCost,
-      realizedPnl: Number(current.realizedPnl) || 0,
-      unrealizedPnl: Number(current.unrealizedPnl) || 0,
-      totalPnl: Number(current.totalPnl),
-      realizedPct: denominator > 0 ? (realizedDiff / denominator) * 100 : 0,
-      unrealizedPct: denominator > 0 ? (unrealizedDiff / denominator) * 100 : 0,
-      totalPct: denominator > 0 ? (totalDiff / denominator) * 100 : 0,
-    };
-  }
-
-  const monthStart = getTaipeiMonthStart(23);
-  const monthLast = {};
-  usable
-    .filter(point => point.date >= monthStart)
-    .forEach(point => { monthLast[point.date.slice(0, 7)] = point; });
-  const months = Object.entries(monthLast).sort(([a], [b]) => a.localeCompare(b));
-  const monthly = [];
-  for (let index = 1; index < months.length; index += 1) {
-    const [ym, current] = months[index];
-    const previous = months[index - 1][1];
-    const realizedChange = Number(current.realizedPnl) - Number(previous.realizedPnl);
-    const unrealizedChange = Number(current.unrealizedPnl) - Number(previous.unrealizedPnl);
-    const totalChange = Number(current.totalPnl) - Number(previous.totalPnl);
-    const denominator = Number(previous.totalCost) > 0
-      ? Number(previous.totalCost)
-      : Math.max(Number(current.totalCost) || Number(previous.currentValue) || 0, 0);
-    const [year, month] = ym.split('-');
-    monthly.push({
-      label: `${year}/${parseInt(month, 10)}月`,
-      realizedChange,
-      unrealizedChange,
-      totalChange,
-      // PNL_METRICS uses `totalDiff` for both the daily calendar and the
-      // monthly list. Keep the same key here so the amount, sign, colour and
-      // percentage are all derived from the same monthly P&L change.
-      totalDiff: totalChange,
-      realizedPct: denominator > 0 ? (realizedChange / denominator) * 100 : 0,
-      unrealizedPct: denominator > 0 ? (unrealizedChange / denominator) * 100 : 0,
-      totalPct: denominator > 0 ? (totalChange / denominator) * 100 : 0,
-    });
-  }
-  return { daily, monthly, series };
-};
-
-const filterTradePnlSeries = (series = [], selectedPeriod, customRange) => {
-  if (!series.length) return [];
-  const ordered = [...series].sort((a, b) => String(a.date).localeCompare(String(b.date)));
-  if (customRange?.start && customRange?.end) {
-    return ordered.filter(point => point.date >= customRange.start && point.date <= customRange.end);
-  }
-  const days = Number(selectedPeriod?.days);
-  if (!Number.isFinite(days) || days <= 0) return ordered;
-  const endDate = ordered.at(-1)?.date;
-  if (!endDate) return ordered;
-  const cutoff = new Date(`${endDate}T00:00:00.000Z`);
-  cutoff.setUTCDate(cutoff.getUTCDate() - (Math.floor(days) - 1));
-  const cutoffKey = cutoff.toISOString().slice(0, 10);
-  return ordered.filter(point => point.date >= cutoffKey && point.date <= endDate);
-};
-
-const formatAmount = (amount) => {
-  return Math.round(amount).toLocaleString('zh-TW');
-};
-
-const pnlSign = value => Number(value) > 0 ? '+' : Number(value) < 0 ? '−' : '';
-const pnlColor = (value, neutralColor) => Number(value) > 0
-  ? PNL_GAIN_COLOR
-  : Number(value) < 0 ? PNL_LOSS_COLOR : neutralColor;
-const pnlSoftColor = (value, neutralColor) => Number(value) > 0
-  ? PNL_GAIN_SOFT
-  : Number(value) < 0 ? PNL_LOSS_SOFT : neutralColor;
-const signedPnlAmount = (value, formatter = formatAmount) => {
-  const number = Number(value) || 0;
-  return `${pnlSign(number)}${formatter(Math.abs(number))}`;
-};
-const signedPnlPercent = (value, digits = 2) => {
-  const number = Number(value) || 0;
-  const rounded = Number(number.toFixed(digits));
-  return `${rounded > 0 ? '+' : ''}${rounded.toFixed(digits)}%`;
-};
 
 const buildHoldingRanking = (assets = [], marketFilter = 'all') => {
   const includedInMarket = asset => {
@@ -363,437 +225,6 @@ function WheelColumn({ data, selectedValue, onValueChange, formatLabel, colors, 
   );
 }
 
-// ── Straight Polyline Path ──
-function buildSmoothPath(pts) {
-  if (pts.length === 0) return '';
-  return pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
-}
-
-// ── Amber Gradient Area Chart with Crosshair Tooltip ──
-function TrendLineChart({ snapshots, currency }) {
-  const { isDark, colors } = useTheme();
-  const accent = colors.accent;
-  const CHART_W = screenWidth - 64;
-  const CHART_H = 200;
-  const PAD_TOP = 16;
-  const PAD_BOTTOM = 26;
-  const PAD_H = 6;
-  const plotW = CHART_W - PAD_H * 2;
-  const plotH = CHART_H - PAD_TOP - PAD_BOTTOM;
-
-  const [touchIdx, setTouchIdx] = useState(null);
-  const snapshotsRef = useRef(snapshots);
-  snapshotsRef.current = snapshots;
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: (e) => {
-        const x = e.nativeEvent.locationX;
-        const n = snapshotsRef.current.length;
-        if (n < 2) return;
-        const idx = Math.round(Math.max(0, Math.min(1, (x - PAD_H) / plotW)) * (n - 1));
-        setTouchIdx(idx);
-      },
-      onPanResponderMove: (e) => {
-        const x = e.nativeEvent.locationX;
-        const n = snapshotsRef.current.length;
-        if (n < 2) return;
-        const idx = Math.round(Math.max(0, Math.min(1, (x - PAD_H) / plotW)) * (n - 1));
-        setTouchIdx(idx);
-      },
-      onPanResponderRelease: () => setTouchIdx(null),
-      onPanResponderTerminate: () => setTouchIdx(null),
-    })
-  ).current;
-
-  if (snapshots.length < 2) return null;
-
-  const values = snapshots.map(s => parseFloat(s.net_worth_base));
-  const minVal = Math.min(...values);
-  const maxVal = Math.max(...values);
-  const maxIdx = values.indexOf(maxVal);
-  const minIdx = values.indexOf(minVal);
-  const vRange = maxVal - minVal || Math.abs(minVal) * 0.1 || 1;
-  const vPad = vRange * 0.15;
-  const yMin = minVal - vPad;
-  const yMax = maxVal + vPad;
-
-  const toX = (i) => PAD_H + (i / (snapshots.length - 1)) * plotW;
-  const toY = (val) => PAD_TOP + plotH * (1 - (val - yMin) / (yMax - yMin));
-
-  const pts = snapshots.map((s, i) => ({
-    x: toX(i),
-    y: toY(parseFloat(s.net_worth_base)),
-    date: s.snapshot_date,
-    value: parseFloat(s.net_worth_base),
-  }));
-
-  const linePath = buildSmoothPath(pts);
-  const bottomY = PAD_TOP + plotH;
-  const areaPath = `${linePath} L ${pts[pts.length - 1].x} ${bottomY} L ${pts[0].x} ${bottomY} Z`;
-
-  // 5 evenly spaced X labels
-  const nLabels = Math.min(5, snapshots.length);
-  const xLabels = Array.from({ length: nLabels }, (_, k) => {
-    const idx = Math.round(k / (nLabels - 1) * (snapshots.length - 1));
-    const d = new Date(snapshots[idx].snapshot_date);
-    return {
-      x: toX(idx),
-      label: `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')}`,
-    };
-  });
-
-  const touchPt = touchIdx != null ? pts[touchIdx] : null;
-  const tooltipLeft = touchPt
-    ? Math.min(Math.max(touchPt.x - 55, 4), CHART_W - 116)
-    : 0;
-
-  // ── Theme-dependent colours ──
-  const chartBg        = isDark ? colors.bg : 'transparent';
-  const labelColor     = colors.textSub;
-  const xLabelColor    = colors.textMuted;
-  const crosshairDotBg = isDark ? colors.bg : '#ffffff';
-  const crosshairLine  = isDark ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.18)';
-  const tooltipBg      = isDark ? colors.cardAlt : 'rgba(255,255,255,0.96)';
-  const tooltipBorder  = `${accent}66`;
-  const tooltipDateColor = '#6b7280';
-
-  const gradId = `trendAreaGrad_main`;
-
-  return (
-    <View
-      style={{ borderRadius: 12, overflow: 'hidden', backgroundColor: chartBg, marginTop: 8 }}
-      {...panResponder.panHandlers}
-    >
-      <Svg width={CHART_W} height={CHART_H} style={{ overflow: 'hidden', backgroundColor: 'transparent' }}>
-        <Defs>
-          <LinearGradient id={gradId} x1="0" y1="0" x2="0" y2={CHART_H} gradientUnits="userSpaceOnUse">
-            <Stop offset="0" stopColor={accent} stopOpacity={isDark ? 0.5 : 0.4} />
-            <Stop offset="1" stopColor={isDark ? colors.bg : '#F2F5F9'} stopOpacity={1} />
-          </LinearGradient>
-        </Defs>
-
-        {/* Gradient area fill */}
-        <Path d={areaPath} fill={`url(#${gradId})`} stroke="none" />
-
-        {/* Line */}
-        <Path
-          d={linePath}
-          fill="none"
-          stroke={accent}
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-
-        {/* X-axis date labels */}
-        {xLabels.map((lbl, i) => (
-          <SvgText
-            key={i}
-            x={lbl.x}
-            y={CHART_H - 5}
-            textAnchor="middle"
-            fill={xLabelColor}
-            fontSize="10"
-          >
-            {lbl.label}
-          </SvgText>
-        ))}
-
-        {/* Max / Min value labels */}
-        {(() => {
-          const maxLabelX = Math.max(4, Math.min(toX(maxIdx), CHART_W - 100));
-          const maxLabelY = Math.max(PAD_TOP + 12, toY(maxVal) - 6);
-          const minLabelX = Math.max(4, Math.min(toX(minIdx), CHART_W - 100));
-          const minLabelY = Math.min(PAD_TOP + plotH - 4, toY(minVal) + 14);
-          const fmtLabel = (v) => `${Math.round(v).toLocaleString('zh-TW')} ${currency}`;
-          return (
-            <>
-              <SvgText x={maxLabelX} y={maxLabelY} fill={labelColor} fontSize="11" fontWeight="500">
-                {fmtLabel(maxVal)}
-              </SvgText>
-              <SvgText x={minLabelX} y={minLabelY} fill={labelColor} fontSize="11" fontWeight="500">
-                {fmtLabel(minVal)}
-              </SvgText>
-            </>
-          );
-        })()}
-
-        {/* Crosshair + dot */}
-        {touchPt && (
-          <>
-            <SvgLine
-              x1={touchPt.x} y1={PAD_TOP}
-              x2={touchPt.x} y2={bottomY}
-              stroke={crosshairLine}
-              strokeWidth="1"
-              strokeDasharray="4 4"
-            />
-            <Circle cx={touchPt.x} cy={touchPt.y} r={7} fill={crosshairDotBg} stroke={accent} strokeWidth="2.5" />
-            <Circle cx={touchPt.x} cy={touchPt.y} r={3} fill={accent} />
-          </>
-        )}
-      </Svg>
-
-      {/* Tooltip */}
-      {touchPt && (
-        <View
-          style={{
-            position: 'absolute',
-            top: Math.max(2, touchPt.y - 48),
-            left: tooltipLeft,
-            backgroundColor: tooltipBg,
-            borderRadius: 8,
-            paddingHorizontal: 10,
-            paddingVertical: 6,
-            borderWidth: 1,
-            borderColor: tooltipBorder,
-            minWidth: 112,
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: isDark ? 0 : 0.08,
-            shadowRadius: 6,
-          }}
-          pointerEvents="none"
-        >
-          <Text style={{ color: tooltipDateColor, fontSize: 10, marginBottom: 2 }}>{touchPt.date}</Text>
-          <Text style={{ color: accent, fontSize: 13, fontWeight: '700' }}>
-            {Math.round(touchPt.value).toLocaleString('zh-TW')}
-          </Text>
-        </View>
-      )}
-    </View>
-  );
-}
-
-// ── Realized / unrealized / total P&L line chart ──
-function PnlBreakdownChart({ series, currency, metric = 'total' }) {
-  const { isDark, colors } = useTheme();
-  const CHART_W = screenWidth - 64;
-  const CHART_H = 224;
-  const PAD_TOP = 16;
-  const PAD_BOTTOM = 28;
-  const PAD_H = 8;
-  const plotW = CHART_W - PAD_H * 2;
-  const plotH = CHART_H - PAD_TOP - PAD_BOTTOM;
-  const [touchIdx, setTouchIdx] = useState(null);
-  const seriesRef = useRef(series);
-  seriesRef.current = series;
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: event => {
-        const n = seriesRef.current.length;
-        if (n < 2) return;
-        const x = event.nativeEvent.locationX;
-        setTouchIdx(Math.round(Math.max(0, Math.min(1, (x - PAD_H) / plotW)) * (n - 1)));
-      },
-      onPanResponderMove: event => {
-        const n = seriesRef.current.length;
-        if (n < 2) return;
-        const x = event.nativeEvent.locationX;
-        setTouchIdx(Math.round(Math.max(0, Math.min(1, (x - PAD_H) / plotW)) * (n - 1)));
-      },
-      onPanResponderRelease: () => setTouchIdx(null),
-      onPanResponderTerminate: () => setTouchIdx(null),
-    }),
-  ).current;
-
-  if (!Array.isArray(series) || series.length < 2) return null;
-
-  const metricConfig = PNL_METRICS.find(item => item.key === metric) || PNL_METRICS[2];
-  const values = series.map(point => Number(point[metricConfig.seriesKey]) || 0);
-  const minValue = Math.min(0, ...values);
-  const maxValue = Math.max(0, ...values);
-  const valueRange = maxValue - minValue || 1;
-  const valuePad = valueRange * 0.12;
-  const yMin = minValue - valuePad;
-  const yMax = maxValue + valuePad;
-  const toX = index => PAD_H + (index / (series.length - 1)) * plotW;
-  const toY = value => PAD_TOP + plotH * (1 - (value - yMin) / (yMax - yMin));
-  const pointsFor = key => series.map((point, index) => ({
-    x: toX(index),
-    y: toY(Number(point[key]) || 0),
-    value: Number(point[key]) || 0,
-    date: point.date,
-  }));
-  const activePoints = pointsFor(metricConfig.seriesKey);
-  const zeroY = toY(0);
-  const xLabels = Array.from({ length: Math.min(5, series.length) }, (_, index) => {
-    const count = Math.min(5, series.length);
-    const pointIndex = count === 1 ? 0 : Math.round(index / (count - 1) * (series.length - 1));
-    const date = series[pointIndex].date;
-    return { x: toX(pointIndex), label: String(date).slice(5) };
-  });
-  const touchPoint = touchIdx == null ? null : {
-    x: toX(touchIdx),
-    y: activePoints[touchIdx].y,
-    data: series[touchIdx],
-  };
-  const tooltipLeft = touchPoint
-    ? Math.min(Math.max(touchPoint.x - 70, 4), CHART_W - 148)
-    : 0;
-  const lineColor = metricConfig.color;
-  const touchValue = touchPoint
-    ? Number(touchPoint.data[metricConfig.seriesKey]) || 0
-    : 0;
-
-  return (
-    <View
-      style={{ borderRadius: 12, overflow: 'hidden', backgroundColor: isDark ? colors.bg : 'transparent', marginTop: 8 }}
-      {...panResponder.panHandlers}
-    >
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingTop: 4 }}>
-        <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: lineColor }} />
-        <Text style={{ color: colors.textSub, fontSize: 11 }}>{metricConfig.label}</Text>
-      </View>
-      <Svg width={CHART_W} height={CHART_H} style={{ overflow: 'hidden', backgroundColor: 'transparent' }}>
-        <SvgLine
-          x1={PAD_H}
-          y1={zeroY}
-          x2={CHART_W - PAD_H}
-          y2={zeroY}
-          stroke={isDark ? 'rgba(255,255,255,0.28)' : 'rgba(0,0,0,0.22)'}
-          strokeWidth="1"
-          strokeDasharray="4 4"
-        />
-        <Path d={buildSmoothPath(activePoints)} fill="none" stroke={lineColor} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-        {xLabels.map((label, index) => (
-          <SvgText key={index} x={label.x} y={CHART_H - 6} textAnchor="middle" fill={colors.textMuted} fontSize="10">
-            {label.label}
-          </SvgText>
-        ))}
-        {touchPoint && (
-          <SvgLine
-            x1={touchPoint.x}
-            y1={PAD_TOP}
-            x2={touchPoint.x}
-            y2={PAD_TOP + plotH}
-            stroke={isDark ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.18)'}
-            strokeWidth="1"
-            strokeDasharray="4 4"
-          />
-        )}
-      </Svg>
-      {touchPoint && (
-        <View
-          pointerEvents="none"
-          style={{
-            position: 'absolute',
-            top: Math.max(28, touchPoint.y - 72),
-            left: tooltipLeft,
-            minWidth: 144,
-            backgroundColor: isDark ? colors.cardAlt : 'rgba(255,255,255,0.96)',
-            borderRadius: 8,
-            paddingHorizontal: 9,
-            paddingVertical: 6,
-            borderWidth: 1,
-            borderColor: `${colors.accent}66`,
-          }}
-        >
-          <Text style={{ color: colors.textMuted, fontSize: 10, marginBottom: 2 }}>{touchPoint.data.date}</Text>
-          <Text style={{ color: pnlColor(touchValue, colors.textMuted), fontSize: 11, fontWeight: '800' }}>
-            {metricConfig.label} {signedPnlAmount(touchValue)} {currency}
-          </Text>
-        </View>
-      )}
-    </View>
-  );
-}
-
-function DonutChart({ data, size = 180, strokeWidth = 28, selectedIndex, onSelect }) {
-  const total = data.reduce((s, d) => s + d.value, 0);
-  if (total === 0) return null;
-  const SELECTED_EXTRA = 6;
-  const radius = (size - strokeWidth - SELECTED_EXTRA) / 2;
-  const cx = size / 2;
-  const cy = size / 2;
-  const sel = selectedIndex != null ? data[selectedIndex] : null;
-
-  // Single item: draw a full circle instead of an arc
-  if (data.length === 1) {
-    const isSelected = selectedIndex === 0;
-    const sw = isSelected ? strokeWidth + SELECTED_EXTRA : strokeWidth;
-    return (
-      <Svg width={size} height={size}>
-        <Circle
-          cx={cx} cy={cy} r={radius}
-          fill="none"
-          stroke={data[0].color}
-          strokeWidth={sw}
-          onPress={() => onSelect(isSelected ? null : 0)}
-        />
-        {sel ? (
-          <>
-            <SvgText x={cx} y={cy - 6} textAnchor="middle" fill={sel.color} fontSize="18" fontWeight="bold">100%</SvgText>
-            <SvgText x={cx} y={cy + 12} textAnchor="middle" fill="#94a3b8" fontSize="10">{sel.label}</SvgText>
-          </>
-        ) : (
-          <SvgText x={cx} y={cy + 5} textAnchor="middle" fill="#94a3b8" fontSize="12">資產配置</SvgText>
-        )}
-      </Svg>
-    );
-  }
-
-  const GAP = 0.03;
-  let angle = -Math.PI / 2;
-
-  const arcs = data.map((item) => {
-    const fraction = item.value / total;
-    const sweep = fraction * 2 * Math.PI - GAP;
-    const x1 = cx + radius * Math.cos(angle);
-    const y1 = cy + radius * Math.sin(angle);
-    angle += sweep;
-    const x2 = cx + radius * Math.cos(angle);
-    const y2 = cy + radius * Math.sin(angle);
-    angle += GAP;
-    return {
-      d: `M ${x1} ${y1} A ${radius} ${radius} 0 ${sweep > Math.PI ? 1 : 0} 1 ${x2} ${y2}`,
-      color: item.color,
-      pct: (fraction * 100).toFixed(1),
-    };
-  });
-
-  return (
-    <Svg width={size} height={size}>
-      {arcs.map((arc, i) => {
-        const isSelected = selectedIndex === i;
-        const dimmed = selectedIndex != null && !isSelected;
-        return (
-          <Path
-            key={i}
-            d={arc.d}
-            fill="none"
-            stroke={arc.color}
-            strokeWidth={isSelected ? strokeWidth + SELECTED_EXTRA : strokeWidth}
-            strokeLinecap="butt"
-            opacity={dimmed ? 0.25 : 1}
-            onPress={() => onSelect(isSelected ? null : i)}
-          />
-        );
-      })}
-      {sel ? (
-        <>
-          <SvgText x={cx} y={cy - 6} textAnchor="middle" fill={sel.color} fontSize="18" fontWeight="bold">
-            {arcs[selectedIndex].pct}%
-          </SvgText>
-          <SvgText x={cx} y={cy + 12} textAnchor="middle" fill="#94a3b8" fontSize="10">
-            {sel.label}
-          </SvgText>
-        </>
-      ) : (
-        <SvgText x={cx} y={cy + 5} textAnchor="middle" fill="#94a3b8" fontSize="12">
-          資產配置
-        </SvgText>
-      )}
-    </Svg>
-  );
-}
-
 export default function TrendsScreen() {
   const navigation = useNavigation();
   const { colors, isDark } = useTheme();
@@ -808,6 +239,7 @@ export default function TrendsScreen() {
     Crypto: chartPalette[2], other: chartPalette[4],
   })[marketType] || chartPalette[5];
   const [loading, setLoading] = useState(true);
+  const [chartLoadError, setChartLoadError] = useState('');
   const [snapshots, setSnapshots] = useState([]);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [profile, setProfile] = useState(null);
@@ -821,31 +253,24 @@ export default function TrendsScreen() {
   const [selectedPeriod, setSelectedPeriod] = useState(PERIODS[0]); // default all history
   const [customRange, setCustomRange] = useState(null); // { start, end } strings
   const [monthlyBreakdown, setMonthlyBreakdown] = useState([]); // [{ label, change, pct }]
-  const [performanceMode, setPerformanceMode] = useState('trade'); // default FIFO trading P&L
+  const performanceMode = 'trade'; // FIFO P&L remains available in the calendar.
   const [performanceDataLoading, setPerformanceDataLoading] = useState(false);
   const [performanceDataError, setPerformanceDataError] = useState('');
   const [tradePnlSummary, setTradePnlSummary] = useState(null);
   const [tradePnlSeries, setTradePnlSeries] = useState([]);
+  const [tradePnlDetailSource, setTradePnlDetailSource] = useState(null);
   const [performanceScopeAssets, setPerformanceScopeAssets] = useState([]);
   const [scopeModalVisible, setScopeModalVisible] = useState(false);
   const [scopeSavingAssetId, setScopeSavingAssetId] = useState(null);
   const [selectedPnlMetric, setSelectedPnlMetric] = useState('total');
   const [calendarEarningsOnly, setCalendarEarningsOnly] = useState(false);
-  const [trendChartMode, setTrendChartMode] = useState('pnl');
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const d = new Date();
     return { year: d.getFullYear(), month: d.getMonth() + 1 };
   });
   const [dailyPnlMap, setDailyPnlMap] = useState({}); // { 'YYYY-MM-DD': { diff, prevValue } }
   const [calendarLoading, setCalendarLoading] = useState(false);
-  const [earningsEvents, setEarningsEvents] = useState([]);
-  const [marketCalendarEvents, setMarketCalendarEvents] = useState([]);
-  const [earningsUsSymbols, setEarningsUsSymbols] = useState('');
-  const [earningsTwSymbols, setEarningsTwSymbols] = useState('');
-  const [earningsTargetMeta, setEarningsTargetMeta] = useState({});
-  const [marketCalendarError, setMarketCalendarError] = useState('');
-  const [earningsCalendarLoading, setEarningsCalendarLoading] = useState(false);
-  const [earningsCalendarError, setEarningsCalendarError] = useState('');
+  const { earningsEvents, marketCalendarEvents, marketCalendarError, earningsCalendarLoading, earningsCalendarError, loadEarningsCalendar } = useEarningsCalendar(calendarMonth);
 
   const [selectedFilter, setSelectedFilter] = useState('all');
   const [refreshing, setRefreshing] = useState(false);
@@ -891,179 +316,6 @@ export default function TrendsScreen() {
   const userIdRef = useRef(null);             // always reflects the latest userId
   const calendarMonthRef = useRef(calendarMonth); // always reflects latest calendarMonth
   calendarMonthRef.current = calendarMonth;   // kept current every render
-  const earningsCalendarRequestRef = useRef(0);
-
-  const loadEarningsCalendar = useCallback(async (assetRows = []) => {
-    const requestId = earningsCalendarRequestRef.current + 1;
-    earningsCalendarRequestRef.current = requestId;
-    setEarningsCalendarLoading(true);
-    setEarningsCalendarError('');
-    try {
-      const [cloudWatchlist, localWatchlistRaw] = await Promise.all([
-        loadCloudWatchlist().catch(() => []),
-        AsyncStorage.getItem('watchlist').catch(() => null),
-      ]);
-      if (requestId !== earningsCalendarRequestRef.current) return;
-
-      let localWatchlist = [];
-      try { localWatchlist = JSON.parse(localWatchlistRaw || '[]'); } catch { localWatchlist = []; }
-      const localItems = Array.isArray(localWatchlist) ? localWatchlist : [];
-      const watchlist = [...localItems, ...cloudWatchlist.map(item => ({
-        ...item,
-        name: localItems.find(local => local.symbol === item.symbol && local.market_type === item.market_type)?.name || item.symbol,
-      }))];
-
-      const targets = new Map();
-      const addTarget = (asset, source) => {
-        const symbol = String(asset?.symbol || '').trim().toUpperCase();
-        const marketType = String(asset?.market_type || '').trim().toUpperCase();
-        if (!symbol || !['TW', 'US'].includes(marketType)) return;
-        if (source === 'holding' && (asset?.category !== 'investment' || Number(asset?.current_shares) <= 0)) return;
-        const key = `${marketType}:${symbol}`;
-        const current = targets.get(key) || {
-          key,
-          symbol,
-          marketType,
-          name: asset?.name || symbol,
-          isHolding: false,
-          isWatchlist: false,
-        };
-        current.isHolding ||= source === 'holding';
-        current.isWatchlist ||= source === 'watchlist';
-        if (!current.name || current.name === symbol) current.name = asset?.name || current.name;
-        targets.set(key, current);
-      };
-      assetRows.forEach(asset => addTarget(asset, 'holding'));
-      watchlist.forEach(asset => addTarget(asset, 'watchlist'));
-
-      const targetList = [...targets.values()];
-      setEarningsUsSymbols(targetList.filter(target => target.marketType === 'US').map(target => target.symbol).sort().join(','));
-      setEarningsTwSymbols(targetList
-        .filter(target => target.marketType === 'TW' && !target.symbol.startsWith('00') && !target.symbol.startsWith('^'))
-        .map(target => target.symbol).sort().join(','));
-      setEarningsTargetMeta(Object.fromEntries(targetList.map(target => [target.key, target])));
-      if (!targetList.length) {
-        setEarningsEvents([]);
-        return;
-      }
-
-      const results = await allSettledWithConcurrency(targetList, 3, async target => {
-        const report = await fetchFinancialReports(target.symbol, target.marketType);
-        const nextEstimate = (report?.estimates || []).find(item => item?.period === '0q' && item?.endDate);
-        const upcomingQuarter = quarterFromPeriodEnd(nextEstimate?.endDate);
-        const releaseDate = String(report?.latestEarningsRelease?.date || '');
-        const previousDate = String(report?.earningsCalendar?.previousDate || '');
-        const releaseMatchesPrevious = releaseDate && previousDate
-          && Math.abs(Date.parse(`${releaseDate}T00:00:00Z`) - Date.parse(`${previousDate}T00:00:00Z`)) <= 86400000;
-        const dateCandidates = [
-          previousDate ? {
-            date: previousDate,
-            status: releaseMatchesPrevious ? 'released' : 'recent',
-            quarter: report?.quarters?.find(row => row?.announcementDate === releaseDate)?.label
-              || report?.releaseQuarter?.label || null,
-            source: releaseMatchesPrevious
-              ? report?.latestEarningsRelease?.source
-              : report?.earningsCalendar?.previousSource,
-          } : null,
-          releaseDate && !releaseMatchesPrevious ? {
-            date: releaseDate,
-            status: 'released',
-            quarter: report?.releaseQuarter?.label || report?.quarters?.find(row => row?.announcementDate === releaseDate)?.label || null,
-            source: report?.latestEarningsRelease?.source,
-          } : null,
-          {
-            date: report?.earningsCalendar?.nextDate,
-            status: 'upcoming',
-            quarter: upcomingQuarter,
-            source: report?.earningsCalendar?.nextSource,
-          },
-        ].filter(Boolean);
-        const uniqueDates = new Map();
-        dateCandidates.forEach(candidate => {
-          const date = String(candidate.date || '');
-          if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
-          const existing = uniqueDates.get(date);
-          if (!existing || candidate.status === 'released') uniqueDates.set(date, { ...candidate, date });
-        });
-        return [...uniqueDates.values()].map(event => ({
-          ...target,
-          ...event,
-          key: `${target.key}:${event.date}`,
-        }));
-      });
-      if (requestId !== earningsCalendarRequestRef.current) return;
-      const failedCount = results.filter(result => result.status === 'rejected').length;
-      setEarningsEvents(results
-        .filter(result => result.status === 'fulfilled' && result.value)
-        .flatMap(result => result.value)
-        .sort((left, right) => left.date.localeCompare(right.date) || left.symbol.localeCompare(right.symbol)));
-      setEarningsCalendarError(failedCount ? `${failedCount} 檔標的的財報日期暫時無法取得` : '');
-    } catch (error) {
-      if (requestId === earningsCalendarRequestRef.current) {
-        setEarningsCalendarError(error?.message || '暫時無法取得財報日期');
-      }
-    } finally {
-      if (requestId === earningsCalendarRequestRef.current) setEarningsCalendarLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    const usSymbols = earningsUsSymbols ? earningsUsSymbols.split(',') : [];
-    const twSymbols = earningsTwSymbols ? earningsTwSymbols.split(',') : [];
-    if (!usSymbols.length && !twSymbols.length) {
-      setMarketCalendarEvents([]);
-      setMarketCalendarError('');
-      return;
-    }
-    let active = true;
-    const month = `${calendarMonth.year}-${pad2(calendarMonth.month)}`;
-    setMarketCalendarError('');
-    const load = async () => {
-      const requests = [
-        usSymbols.length && { marketType: 'US', symbols: usSymbols },
-        twSymbols.length && { marketType: 'TW', symbols: twSymbols },
-      ].filter(Boolean);
-      const outcomes = await Promise.all(requests.map(async request => {
-        try {
-          const { data, error } = await supabase.functions.invoke('financial-reports', {
-            body: { calendarMonth: month, marketType: request.marketType, symbols: request.symbols },
-          });
-          if (error || data?.error) throw new Error(data?.error || error?.message || '財報日曆暫時無法取得');
-          return { ...request, data };
-        } catch (error) {
-          return { ...request, error };
-        }
-      }));
-      if (!active) return;
-
-      const events = [];
-      const errors = [];
-      outcomes.forEach(outcome => {
-        if (outcome.error) {
-          errors.push(outcome.marketType === 'US' ? '美股財報日曆暫時無法取得' : '台股申報期限暫時無法取得');
-          console.warn(`${outcome.marketType} earnings calendar:`, outcome.error?.message || outcome.error);
-          return;
-        }
-        if (outcome.marketType === 'US' && outcome.data?.incompleteDays) {
-          errors.push(`${outcome.data.incompleteDays} 天的 Nasdaq 財報資料暫時無法取得`);
-        }
-        (outcome.data?.events || []).forEach(event => {
-          const key = `${outcome.marketType}:${event.symbol}`;
-          events.push({
-            ...earningsTargetMeta[key],
-            ...event,
-            marketType: outcome.marketType,
-            key: `${key}:${event.date}`,
-          });
-        });
-      });
-      setMarketCalendarEvents(events);
-      setMarketCalendarError(errors.join(' · '));
-    };
-    load();
-    return () => { active = false; };
-  }, [calendarMonth, earningsUsSymbols, earningsTwSymbols, earningsTargetMeta]);
-
   // Day-detail modal state
   const [dayDetailVisible, setDayDetailVisible] = useState(false);
   const [dayDetailDate, setDayDetailDate] = useState(null);
@@ -1092,12 +344,6 @@ export default function TrendsScreen() {
       Animated.timing(chartOpacity, { toValue: 1, duration: 300, useNativeDriver: true }),
     ]).start();
   }, [selectedFilter]);
-
-  useEffect(() => {
-    // Keep the chart tab aligned with the calculation mode after a tab or
-    // market-filter change.
-    setTrendChartMode(performanceMode === 'trade' ? 'pnl' : 'assets');
-  }, [performanceMode]);
 
   // Custom date modal
   const [customModalVisible, setCustomModalVisible] = useState(false);
@@ -1149,7 +395,8 @@ export default function TrendsScreen() {
           query = query.gte('snapshot_date', getTaipeiDateString(since));
         }
 
-        const { data } = await query;
+        const { data, error } = await query;
+        if (error) throw error;
         setSnapshots(data || []);
       } else {
         let query = supabase
@@ -1166,7 +413,8 @@ export default function TrendsScreen() {
           query = query.gte('date', getTaipeiDateString(since));
         }
 
-        const { data } = await query;
+        const { data, error } = await query;
+        if (error) throw error;
         setSnapshots(aggregateCategorySnapshotRows(data || []));
       }
     } finally {
@@ -1355,6 +603,7 @@ export default function TrendsScreen() {
       setMonthlyBreakdown(views.monthly);
       setDailyPnlMap(views.daily);
       setTradePnlSeries(views.series);
+      setTradePnlDetailSource({ context: performance.periodContext, market });
       const notes = [];
       if (failures.length) notes.push(`部分標的歷史行情不可用：${failures.join('、')}`);
       if (series.excludedHistorySymbols?.length) notes.push(`${series.excludedHistorySymbols.join('、')} 無官方日線，終點已依交易總損益校正`);
@@ -1369,17 +618,22 @@ export default function TrendsScreen() {
   }, [detailedAssets, profile]);
 
   const loadData = async (filterOverride) => {
+    let stage = '確認登入狀態';
+    let snapshotWarning = '';
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError) throw authError;
       if (!user) return;
       setUserId(user.id);
       userIdRef.current = user.id;
 
+      stage = '讀取個人設定';
       const { data: profileData, error: profileError } = await supabase
         .from('profiles').select('*').eq('id', user.id).single();
       if (profileError) throw profileError;
       setProfile(profileData);
 
+      stage = '讀取資產';
       const { data: assetsData, error: assetsError } = await supabase
         .from('assets')
         .select('id, name, symbol, category, current_amount, currency, market_type, average_cost, current_shares, leverage, created_at, exclude_from_performance')
@@ -1395,6 +649,7 @@ export default function TrendsScreen() {
         const invAssets = assetsData.filter(
           a => a.category === 'investment' && a.current_shares > 0 && a.symbol
         );
+        stage = '更新行情與匯率';
         const [priceMap, ratesMap] = await Promise.all([
           fetchLiveAssetPrices(invAssets),
           fetchExchangeRatesBatch(
@@ -1413,22 +668,37 @@ export default function TrendsScreen() {
         const { netWorth: totalValue } = calculatePortfolioTotals(converted);
 
         // Upsert today's snapshot with live-price-accurate total
-        const { error: snapshotError } = await supabase.from('daily_snapshots').upsert(
-          { user_id: user.id, snapshot_date: today, net_worth_base: totalValue },
-          { onConflict: 'user_id,snapshot_date' }
-        );
-        if (snapshotError) throw snapshotError;
-        await saveCategorySnapshots(converted, user.id, today);
+        stage = '更新今日快照';
+        try {
+          const { error: snapshotError } = await supabase.from('daily_snapshots').upsert(
+            { user_id: user.id, snapshot_date: today, net_worth_base: totalValue },
+            { onConflict: 'user_id,snapshot_date' }
+          );
+          if (snapshotError) throw snapshotError;
+          await saveCategorySnapshots(converted, user.id, today);
+        } catch (snapshotError) {
+          const message = [snapshotError?.message, snapshotError?.details].filter(Boolean).join(' ');
+          if (!/fetch failed|network connection|network request failed|failed to fetch|timed? out|offline/i.test(message)) throw snapshotError;
+          snapshotWarning = '網路中斷，今日快照尚未更新；下方顯示已保存的歷史資料。連線恢復後請重試。';
+        }
 
       }
 
       const filterToLoad = filterOverride !== undefined ? filterOverride : selectedFilter;
       if (performanceModeRef.current === 'market') {
+        stage = '讀取每月資料';
         await loadMonthlyBreakdown(user.id, filterToLoad);
       }
+      stage = '讀取圖表歷史';
       await loadSnapshots(user.id, selectedPeriod.days, customRange, filterToLoad);
+      setChartLoadError(snapshotWarning);
     } catch (e) {
-      console.error('Error loading charts:', e);
+      const message = [e?.message, e?.details, String(e || '')].filter(Boolean).join(' ');
+      const networkFailure = /fetch failed|network connection|network request failed|failed to fetch|timed? out|offline/i.test(message);
+      setChartLoadError(networkFailure
+        ? `${stage}時網路中斷，現有圖表資料未更新。請確認連線後重試。`
+        : `${stage}失敗：${e?.message || '請稍後重試'}`);
+      if (!networkFailure) console.error('Error loading charts:', e);
     } finally {
       setLoading(false);
     }
@@ -1687,6 +957,16 @@ export default function TrendsScreen() {
     return { diff: totalDiff, realizedDiff, unrealizedDiff, pct, realizedPct, unrealizedPct };
   })();
 
+  const selectedDayTradeSummary = useMemo(() => (
+    dayDetailVisible && performanceMode === 'trade' && dayDetailMode === 'pnl'
+      && dayDetailDate && tradePnlDetailSource
+      ? calculateTradePerformance(tradePnlDetailSource.context, tradePnlDetailSource.market, { start: dayDetailDate, end: dayDetailDate })
+      : null
+  ), [dayDetailVisible, performanceMode, dayDetailMode, dayDetailDate, tradePnlDetailSource]);
+  const selectedDaySellRows = (selectedDayTradeSummary?.assetRows || [])
+    .filter(row => row.matchedSellCount > 0)
+    .sort((a, b) => Math.abs(b.realizedPnl) - Math.abs(a.realizedPnl));
+
   if (loading) {
     return <View style={[styles.loading, { backgroundColor: colors.bg }]}><ActivityIndicator size="large" color={PRIMARY} /></View>;
   }
@@ -1871,24 +1151,8 @@ export default function TrendsScreen() {
 
   const selectedFilterLabel = FILTER_OPTIONS.find(o => o.key === selectedFilter)?.label || '全部';
   const assetRanking = buildHoldingRanking(detailedAssets, selectedFilter);
-  const visibleTradePnlSeries = filterTradePnlSeries(tradePnlSeries, selectedPeriod, customRange);
-  const showPnlChart = performanceMode === 'trade' && trendChartMode === 'pnl';
+  const selectedTradePoint = dayDetailDate && tradePnlSeries.find(point => point.date === dayDetailDate);
   const selectedPnlMetricConfig = PNL_METRICS.find(metric => metric.key === selectedPnlMetric) || PNL_METRICS[2];
-  const scopeExcludedCount = performanceScopeAssets.filter(asset => asset.exclude_from_performance).length;
-  const scopeIncludedCount = Math.max(0, performanceScopeAssets.length - scopeExcludedCount);
-  const selectedTradeReturn = selectedPnlMetric === 'realized'
-    ? tradePnlSummary?.realizedReturn
-    : selectedPnlMetric === 'unrealized'
-      ? tradePnlSummary?.unrealizedReturn
-      : tradePnlSummary?.totalReturn;
-  const selectedTradePnl = selectedPnlMetric === 'realized'
-    ? tradePnlSummary?.realizedPnl
-    : selectedPnlMetric === 'unrealized'
-      ? tradePnlSummary?.unrealizedPnl
-      : tradePnlSummary?.totalPnl;
-  const tradeReturnText = tradePnlSummary && Number.isFinite(Number(selectedTradeReturn))
-    ? signedPnlPercent(Number(selectedTradeReturn) * 100, 1)
-    : null;
   const performanceMarket = {
     all: 'ALL',
     TW: 'TW',
@@ -1896,20 +1160,6 @@ export default function TrendsScreen() {
     Crypto: 'CRYPTO',
     other: 'OTHER',
   }[selectedFilter];
-  const selectPerformanceMode = nextMode => {
-    if (nextMode === performanceMode) return;
-    setPerformanceMode(nextMode);
-    setPerformanceDataError('');
-    setTradePnlSummary(null);
-    setTradePnlSeries([]);
-    setPerformanceScopeAssets([]);
-    setMonthlyBreakdown([]);
-    setDailyPnlMap({});
-  };
-  const selectTrendChartMode = mode => {
-    setTrendChartMode(mode);
-    selectPerformanceMode(mode === 'pnl' ? 'trade' : 'market');
-  };
   const applySharedExclusion = (assetIds, excluded) => {
     const ids = (Array.isArray(assetIds) ? assetIds : [assetIds]).filter(Boolean);
     setDetailedAssets(current => current.map(item => (
@@ -1940,6 +1190,12 @@ export default function TrendsScreen() {
         contentContainerStyle={{ paddingBottom: 120 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#10b981" />}
       >
+        {!!chartLoadError && <View style={[styles.chartErrorBanner, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Text style={[styles.chartErrorText, { color: colors.text }]}>{chartLoadError}</Text>
+          <TouchableOpacity accessibilityRole="button" onPress={onRefresh} style={[styles.chartErrorRetry, { backgroundColor: colors.accentSoft }]}>
+            <Text style={[styles.chartErrorRetryText, { color: colors.accent }]}>重試</Text>
+          </TouchableOpacity>
+        </View>}
 
         {/* Category filter chips */}
         <ScrollView
@@ -1998,100 +1254,14 @@ export default function TrendsScreen() {
         <View style={[styles.card, { backgroundColor: colors.card }]}>
           <View style={styles.cardHeader}>
             <Text style={[styles.cardTitle, { color: colors.text }]}>
-              {showPnlChart
-                ? `交易損益走勢（${currency}）`
-                : selectedFilter === 'all' ? `總淨資產趨勢（${currency}）` : `${selectedFilterLabel} 趨勢`}
+              {selectedFilter === 'all' ? `總淨資產趨勢（${currency}）` : `${selectedFilterLabel} 趨勢`}
             </Text>
-            {showPnlChart && tradeReturnText ? (
-              <Text style={[
-                styles.changeBadge,
-                {
-                  color: pnlColor(selectedTradeReturn, colors.textMuted),
-                  backgroundColor: pnlSoftColor(selectedTradeReturn, colors.cardAlt),
-                },
-              ]}>
-                {tradeReturnText}
-              </Text>
-            ) : changeText && (
+            {changeText && (
               <Text style={[styles.changeBadge, changeText.positive ? styles.pos : styles.neg]}>
                 {changeText.positive ? '+' : ''}{changeText.pct}%
               </Text>
             )}
           </View>
-
-          <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
-            {[
-              ['assets', '資產淨值'],
-              ['pnl', '損益拆分'],
-            ].map(([mode, label]) => {
-              const active = trendChartMode === mode;
-              return (
-                <TouchableOpacity
-                  key={mode}
-                  onPress={() => selectTrendChartMode(mode)}
-                  style={{
-                    flex: 1,
-                    paddingVertical: 8,
-                    borderRadius: 10,
-                    alignItems: 'center',
-                    backgroundColor: active ? PRIMARY : colors.cardAlt,
-                    borderWidth: 1,
-                    borderColor: active ? PRIMARY : colors.border,
-                  }}
-                  activeOpacity={0.75}
-                >
-                  <Text style={{ color: active ? colors.accentContrast : colors.textSub, fontSize: 12, fontWeight: active ? '700' : '500' }}>
-                    {label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-
-          {showPnlChart && (
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10, gap: 8 }}>
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: colors.textSub, fontSize: 12, fontWeight: '700' }}>損益計算標的</Text>
-                <Text style={{ color: colors.textMuted, fontSize: 10, marginTop: 2 }}>
-                  已納入 {scopeIncludedCount} 檔{scopeExcludedCount > 0 ? ` · 手動排除 ${scopeExcludedCount} 檔` : ''}
-                </Text>
-              </View>
-              <TouchableOpacity
-                onPress={() => setScopeModalVisible(true)}
-                disabled={!performanceScopeAssets.length || performanceDataLoading}
-                style={{
-                  paddingHorizontal: 12,
-                  paddingVertical: 8,
-                  borderRadius: 10,
-                  backgroundColor: colors.cardAlt,
-                  borderWidth: 1,
-                  borderColor: colors.border,
-                  opacity: !performanceScopeAssets.length || performanceDataLoading ? 0.55 : 1,
-                }}
-                activeOpacity={0.75}
-              >
-                <Text style={{ color: colors.accent, fontSize: 12, fontWeight: '800' }}>選擇標的</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {showPnlChart && (
-            <View style={{ flexDirection: 'row', gap: 6, marginBottom: 10 }} accessibilityRole="tablist">
-              {PNL_METRICS.map(metric => {
-                const active = selectedPnlMetric === metric.key;
-                return <TouchableOpacity
-                  key={metric.key}
-                  onPress={() => setSelectedPnlMetric(metric.key)}
-                  activeOpacity={0.75}
-                  accessibilityRole="tab"
-                  accessibilityState={{ selected: active }}
-                  style={{ flex: 1, minHeight: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: active ? PRIMARY : colors.cardAlt, borderWidth: 1, borderColor: active ? PRIMARY : colors.border }}
-                >
-                  <Text style={{ color: active ? colors.accentContrast : colors.textSub, fontSize: 11, fontWeight: active ? '800' : '600' }}>{metric.label}</Text>
-                </TouchableOpacity>;
-              })}
-            </View>
-          )}
 
           {/* ── Liquid Glass period selector ── */}
           <View style={[styles.glassContainer, { backgroundColor: colors.card }]}>
@@ -2120,19 +1290,7 @@ export default function TrendsScreen() {
           </View>
 
           {/* Chart */}
-          {showPnlChart ? (
-            performanceDataLoading && visibleTradePnlSeries.length < 2 ? (
-              <View style={styles.chartLoading}>
-                <ActivityIndicator size="small" color={PRIMARY} />
-              </View>
-            ) : visibleTradePnlSeries.length >= 2 ? (
-              <Animated.View style={{ opacity: chartOpacity }}>
-                <PnlBreakdownChart series={visibleTradePnlSeries} currency={currency} metric={selectedPnlMetric} />
-              </Animated.View>
-            ) : (
-              <Text style={[styles.emptyText, { color: colors.textMuted }]}>所選期間尚無足夠的歷史損益資料</Text>
-            )
-          ) : snapshotLoading ? (
+          {snapshotLoading ? (
             <View style={styles.chartLoading}>
               <ActivityIndicator size="small" color={PRIMARY} />
             </View>
@@ -2146,55 +1304,12 @@ export default function TrendsScreen() {
             </Text>
           )}
 
-          {showPnlChart && performanceDataError ? (
-            <Text style={{ color: colors.textMuted, fontSize: 11, lineHeight: 16, marginTop: 8 }}>
-              {performanceDataError}
-            </Text>
-          ) : showPnlChart && tradePnlSummary ? (
-            <Text style={[styles.changeDetail, { color: pnlColor(selectedTradePnl, colors.textMuted) }]}>
-              目前累計{selectedPnlMetricConfig.label}：{signedPnlAmount(selectedTradePnl, fmt)} {currency}
-            </Text>
-          ) : changeText && (
+          {changeText && (
             <Text style={[styles.changeDetail, changeText.positive ? styles.posText : styles.negText]}>
               {periodLabel}變化：{changeText.positive ? '+' : ''}{fmt(changeText.diff)}
             </Text>
           )}
 
-          {showPnlChart && (
-            <View style={{ marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: colors.borderLight }}>
-              <Text style={[styles.sectionLabel, { color: colors.textSub, marginBottom: 10 }]}>月度績效 · {selectedPnlMetricConfig.label}</Text>
-              {performanceDataLoading && !monthlyBreakdown.length ? (
-                <ActivityIndicator size="small" color={PRIMARY} style={{ marginVertical: 12 }} />
-              ) : monthlyBreakdown.length ? (
-                [...monthlyBreakdown].reverse().map((m, i) => {
-                  const change = Number(m[selectedPnlMetricConfig.changeKey]) || 0;
-                  const changePct = Number(m[selectedPnlMetricConfig.pctKey]) || 0;
-                  const trendColor = pnlColor(change, colors.textMuted);
-                  const barPct = Math.min(Math.abs(changePct) / 15, 1);
-                  return (
-                    <View key={i} style={{ marginBottom: 12 }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 3 }}>
-                        <Text style={{ fontSize: 13, color: colors.textSub, width: 66 }} numberOfLines={1}>
-                          {String(m.label).replace(/月$/, '')}
-                        </Text>
-                        <View style={{ flex: 1, height: 6, backgroundColor: colors.borderLight, borderRadius: 3, overflow: 'hidden' }}>
-                          <View style={{ width: `${barPct * 100}%`, height: '100%', borderRadius: 3, backgroundColor: trendColor }} />
-                        </View>
-                        <Text style={{ fontSize: 13, fontWeight: '700', color: trendColor, minWidth: 70, textAlign: 'right' }}>
-                          {signedPnlPercent(changePct, 2)}
-                        </Text>
-                      </View>
-                      <Text style={{ fontSize: 11, color: trendColor, paddingLeft: 66 }}>
-                        {signedPnlAmount(change, fmt)} {currency}
-                      </Text>
-                    </View>
-                  );
-                })
-              ) : (
-                <Text style={{ color: colors.textMuted, fontSize: 12 }}>尚無足夠資料</Text>
-              )}
-            </View>
-          )}
         </View>
 
         {/* Asset allocation */}
@@ -2318,446 +1433,11 @@ export default function TrendsScreen() {
           </View>
         )}
 
-        {/* ── DAILY P&L CALENDAR ──────────────────────────────────────────── */}
-        {performanceMode === 'trade' && <View
-          style={[styles.card, { marginHorizontal: 16, marginTop: 16, marginBottom: 8, backgroundColor: colors.card }]}
-        >
-          {/* Card header */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-            <Text style={[styles.cardTitle, { color: colors.text }]}>
-              {calendarEarningsOnly ? '財報日曆' : `每日損益日曆 · ${selectedPnlMetricConfig.label}`}{selectedFilter !== 'all' ? `（${selectedFilterLabel}）` : ''}
-            </Text>
-            {(calendarLoading || performanceDataLoading || earningsCalendarLoading) && <ActivityIndicator size="small" color={PRIMARY} />}
-          </View>
-          <View style={{ flexDirection: 'row', gap: 6, marginBottom: 10 }} accessibilityRole="tablist">
-            {PNL_METRICS.map(metric => {
-              const active = !calendarEarningsOnly && selectedPnlMetric === metric.key;
-              return <TouchableOpacity
-                key={metric.key}
-                onPress={() => {
-                  setSelectedPnlMetric(metric.key);
-                  setCalendarEarningsOnly(false);
-                }}
-                activeOpacity={0.75}
-                accessibilityRole="tab"
-                accessibilityState={{ selected: active }}
-                style={{ flex: 1, minHeight: 32, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: active ? PRIMARY : colors.cardAlt, borderWidth: 1, borderColor: active ? PRIMARY : colors.border }}
-              >
-                <Text style={{ color: active ? colors.accentContrast : colors.textSub, fontSize: 10, fontWeight: active ? '800' : '600' }}>{metric.label}</Text>
-              </TouchableOpacity>;
-            })}
-            <TouchableOpacity
-              onPress={() => setCalendarEarningsOnly(true)}
-              activeOpacity={0.75}
-              accessibilityRole="tab"
-              accessibilityLabel="財報日曆"
-              accessibilityState={{ selected: calendarEarningsOnly }}
-              style={{ flex: 1, minHeight: 32, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: calendarEarningsOnly ? PRIMARY : colors.cardAlt, borderWidth: 1, borderColor: calendarEarningsOnly ? PRIMARY : colors.border }}
-            >
-              <Text style={{ color: calendarEarningsOnly ? colors.accentContrast : colors.textSub, fontSize: 10, fontWeight: calendarEarningsOnly ? '800' : '600' }}>
-                財報
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Month navigator */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 6 }}>
-            <TouchableOpacity onPress={prevMonth} style={{ padding: 8 }} activeOpacity={0.7}>
-              <ChevronLeft size={20} color={colors.textSub} />
-            </TouchableOpacity>
-            <Text style={{ fontSize: 16, fontWeight: '700', color: colors.text, minWidth: 130, textAlign: 'center' }}>
-              {calendarMonth.year}年 {calendarMonth.month}月
-            </Text>
-            <TouchableOpacity onPress={nextMonth} style={{ padding: 8 }} activeOpacity={0.7}>
-              <ChevronRight size={20} color={colors.textSub} />
-            </TouchableOpacity>
-          </View>
-
-          {/* Monthly P&L summary */}
-          {!calendarEarningsOnly && (calendarMonthSummary ? (
-            <View style={{ alignItems: 'center', marginBottom: 14 }}>
-              {(() => {
-                const summaryValue = selectedPnlMetric === 'realized'
-                  ? calendarMonthSummary.realizedDiff
-                  : selectedPnlMetric === 'unrealized'
-                    ? calendarMonthSummary.unrealizedDiff
-                    : calendarMonthSummary.diff;
-                const summaryPct = selectedPnlMetric === 'realized'
-                  ? calendarMonthSummary.realizedPct
-                  : selectedPnlMetric === 'unrealized'
-                    ? calendarMonthSummary.unrealizedPct
-                    : calendarMonthSummary.pct;
-                return <Text style={{ fontSize: 14, fontWeight: '700', color: pnlColor(summaryValue, colors.textMuted) }}>
-                  {selectedPnlMetricConfig.label} {signedPnlAmount(summaryValue, fmt)} {currency}
-                  {'  '}({signedPnlPercent(summaryPct, 2)})
-                </Text>;
-              })()}
-            </View>
-          ) : performanceDataLoading ? (
-            <Text style={{ color: colors.textMuted, fontSize: 12, textAlign: 'center', marginBottom: 12 }}>
-              正在重算每日 FIFO 損益…
-            </Text>
-          ) : !calendarLoading && (
-            <Text style={{ color: colors.textMuted, fontSize: 12, textAlign: 'center', marginBottom: 12 }}>
-              {performanceDataError ? '本月每日損益暫時無法計算' : '本月尚無損益紀錄'}
-            </Text>
-          ))}
-          {!calendarEarningsOnly && performanceMode === 'trade' && !!performanceDataError && (
-            <View style={{ alignItems: 'center', marginBottom: 10 }}>
-              <Text style={{ color: colors.warning, fontSize: 10, lineHeight: 15, textAlign: 'center' }}>
-                {performanceDataError}{Object.keys(dailyPnlMap).length ? '；目前顯示上次成功計算的資料' : ''}
-              </Text>
-              {!performanceDataLoading && <TouchableOpacity onPress={() => loadTradePerformance(selectedFilter)} style={{ padding: 5 }}>
-                <Text style={{ color: colors.accent, fontSize: 11, fontWeight: '700' }}>重試計算</Text>
-              </TouchableOpacity>}
-            </View>
-          )}
-
-          <Text style={{ color: colors.textMuted, fontSize: 11, textAlign: 'center', marginBottom: 10 }}>
-            {calendarEarningsOnly
-              ? '只顯示持有或收藏標的的財報日期；Q 代表財報季度，預估日期可能調整'
-              : '點選有損益的日期查看明細'}
-          </Text>
-
-          {/* Day-of-week headers: Sun → Sat */}
-          <View style={{ flexDirection: 'row', marginBottom: 6 }}>
-            {['日', '一', '二', '三', '四', '五', '六'].map(d => (
-              <Text key={d} style={{
-                flex: 1, textAlign: 'center',
-                fontSize: 11, fontWeight: '600',
-                color: colors.textMuted,
-              }}>
-                {d}
-              </Text>
-            ))}
-          </View>
-
-          {/* Calendar grid */}
-          {(() => {
-            const todayStr = getTaipeiDateString();
-            return calendarRows.map((week, wi) => (
-            <View key={wi} style={{ flexDirection: 'row', marginBottom: 3 }}>
-              {week.map((day, di) => {
-                if (!day) return <View key={di} style={{ flex: 1 }} />;
-                const dateStr = `${calendarMonth.year}-${pad2(calendarMonth.month)}-${pad2(day)}`;
-                const dayEarnings = earningsByDate[dateStr] || [];
-                const pnl     = dailyPnlMap[dateStr];
-                const hasPnl  = pnl != null;
-                const totalDiff = Number(pnl?.totalDiff ?? pnl?.diff) || 0;
-                const realizedDiff = Number(pnl?.realizedDiff) || 0;
-                const unrealizedDiff = Number(pnl?.unrealizedDiff) || 0;
-                const selectedDiff = selectedPnlMetric === 'realized'
-                  ? realizedDiff
-                  : selectedPnlMetric === 'unrealized'
-                    ? unrealizedDiff
-                    : totalDiff;
-                const selectedPct = selectedPnlMetric === 'realized'
-                  ? Number(pnl?.realizedPct)
-                  : selectedPnlMetric === 'unrealized'
-                    ? Number(pnl?.unrealizedPct)
-                    : Number(pnl?.totalPct);
-                const showPnl = hasPnl && !calendarEarningsOnly;
-                const isPositive = showPnl && selectedDiff > 0;
-                const isNegative = showPnl && selectedDiff < 0;
-                const dayTone = pnlColor(selectedDiff, colors.textMuted);
-                const pct     = showPnl && Number.isFinite(selectedPct)
-                  ? selectedPct : (hasPnl && pnl.prevValue > 0 ? (selectedDiff / pnl.prevValue) * 100 : 0);
-                const isToday = dateStr === todayStr;
-                const canOpenDetail = calendarEarningsOnly ? dayEarnings.length > 0 : showPnl;
-                const Cell    = canOpenDetail ? TouchableOpacity : View;
-                return (
-                  <Cell
-                    key={di}
-                    onPress={canOpenDetail
-                      ? () => openDayDetail(dateStr, calendarEarningsOnly ? 'earnings' : 'pnl', dayEarnings)
-                      : undefined}
-                    activeOpacity={0.7}
-                    accessibilityRole={canOpenDetail ? 'button' : undefined}
-                    accessibilityLabel={canOpenDetail
-                      ? calendarEarningsOnly
-                        ? `${dateStr} 財報事件 ${dayEarnings.length} 檔`
-                        : `${dateStr} ${selectedPnlMetricConfig.label} ${signedPnlAmount(selectedDiff, fmt)} ${currency}`
-                      : dateStr}
-                    style={{
-                      flex: 1,
-                      marginHorizontal: 2,
-                      borderRadius: 8,
-                      paddingVertical: 5,
-                      paddingHorizontal: 1,
-                      backgroundColor: isPositive
-                        ? PNL_GAIN_SOFT
-                        : isNegative
-                          ? PNL_LOSS_SOFT
-                          : (isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)'),
-                      alignItems: 'center',
-                      minHeight: 70,
-                      borderWidth: isToday ? 1.5 : 0,
-                      borderColor: isToday ? PRIMARY : 'transparent',
-                    }}
-                  >
-                    <Text style={{
-                      fontSize: 11,
-                      color: isToday ? PRIMARY
-                        : showPnl ? colors.textSub : colors.textMuted,
-                      fontWeight: isToday ? '800' : '600',
-                      marginBottom: 3,
-                    }}>
-                      {day}
-                    </Text>
-                    {showPnl && (
-                      <>
-                        <Text style={{
-                          fontSize: 10, fontWeight: '700',
-                          color: dayTone,
-                          textAlign: 'center',
-                        }} numberOfLines={1}>
-                          {signedPnlPercent(pct, 1)}
-                        </Text>
-                        <Text style={{
-                          fontSize: 9, fontWeight: '700',
-                          color: dayTone,
-                          textAlign: 'center', opacity: 0.9,
-                        }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72}>
-                          {signedPnlAmount(selectedDiff, fmtCompact)}
-                        </Text>
-                      </>
-                    )}
-                    {calendarEarningsOnly && dayEarnings.slice(0, 2).map((event, eventIndex) => (
-                      <Text key={`${event.key}:${eventIndex}`} style={{ fontSize: 7, lineHeight: 9, fontWeight: '800', color: colors.accent, maxWidth: '100%' }} numberOfLines={1}>
-                        {event.symbol}{event.quarter ? ` ${event.quarter.match(/Q[1-4]/)?.[0] || ''}` : ''}
-                      </Text>
-                    ))}
-                    {calendarEarningsOnly && dayEarnings.length > 2 && <Text style={{ fontSize: 7, lineHeight: 9, color: colors.accent }}>+{dayEarnings.length - 2}</Text>}
-                  </Cell>
-                );
-              })}
-            </View>
-          ));
-          })()}
-
-          {calendarEarningsOnly && <View style={{ marginTop: 10, borderRadius: 12, padding: 11, backgroundColor: colors.cardAlt }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-              <Text style={{ color: colors.text, fontSize: 12, fontWeight: '800' }}>本月財報事件</Text>
-              <Text style={{ color: colors.accent, fontSize: 10, fontWeight: '800' }}>{displayedMonthEarnings.length} 檔</Text>
-            </View>
-            {displayedMonthEarnings.map((event, eventIndex) => (
-              <TouchableOpacity key={`${event.key}:${eventIndex}`} accessibilityRole="button" accessibilityLabel={`開啟 ${event.symbol} 財報分析`} activeOpacity={0.75} onPress={() => openEarningsAnalysis(event)} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 7, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, gap: 8 }}>
-                <Text style={{ width: 42, color: colors.textSub, fontSize: 10, fontWeight: '800' }}>{event.date.slice(8)}日</Text>
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={{ color: colors.text, fontSize: 11, fontWeight: '800' }} numberOfLines={1}>
-                    {event.symbol}{event.quarter ? ` · ${event.quarter}` : ''} · {event.name || event.symbol}
-                  </Text>
-                  <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }} numberOfLines={1}>
-                    {[
-                      event.isHolding && '持有',
-                      event.isWatchlist && '收藏',
-                      event.status === 'released' ? '已公告'
-                        : event.status === 'recent' ? '最近一次'
-                          : event.isFilingDeadline || event.status === 'filing_deadline' ? '法定申報期限' : '預估',
-                      event.isFilingDeadline && event.status === 'released' && '同日申報期限',
-                      String(event.source || '第三方資料').split(/[・＋]/)[0],
-                      event.sourceDate && event.sourceDate !== event.date && `美國 ${event.sourceDate.slice(5)} ${event.time || ''}`,
-                    ].filter(Boolean).join(' · ')}
-                  </Text>
-                </View>
-              </TouchableOpacity>
-            ))}
-            {!displayedMonthEarnings.length && (
-              <Text style={{ color: colors.textMuted, fontSize: 10, lineHeight: 15, paddingVertical: 5 }}>
-                {earningsCalendarLoading ? '正在查詢持倉與收藏標的…' : '本月尚未取得財報日期；部分公司可能尚未提供日期。'}
-              </Text>
-            )}
-            {!!earningsCalendarError && <Text style={{ color: colors.warning, fontSize: 9, lineHeight: 14, marginTop: 4 }}>{earningsCalendarError}</Text>}
-            {!!marketCalendarError && <Text style={{ color: colors.warning, fontSize: 9, lineHeight: 14, marginTop: 4 }}>{marketCalendarError}</Text>}
-            <Text style={{ color: colors.textMuted, fontSize: 9, lineHeight: 14, marginTop: 5 }}>
-              美股預估日可能調整；台股日期是一般曆年制公司的法定申報期限提醒，不代表公司預告日，金控等特殊產業期限可能不同。實際公告請以公開資訊觀測站及公司公告為準。
-            </Text>
-          </View>}
-        </View>}
+        <PerformanceCalendar {...{ performanceMode, calendarEarningsOnly, setCalendarEarningsOnly, selectedPnlMetricConfig, selectedFilter, selectedFilterLabel, calendarLoading, performanceDataLoading, earningsCalendarLoading, selectedPnlMetric, setSelectedPnlMetric, calendarMonth, prevMonth, nextMonth, calendarMonthSummary, performanceDataError, dailyPnlMap, loadTradePerformance, calendarRows, earningsByDate, openDayDetail, isDark, fmt, fmtCompact, currency, displayedMonthEarnings, openEarningsAnalysis, earningsCalendarError, marketCalendarError, colors, styles, PRIMARY }} />
 
       </ScrollView>
 
-      {/* ── Day-detail modal ─────────────────────────────────────────── */}
-      <Modal
-        visible={dayDetailVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setDayDetailVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalSheet, { backgroundColor: colors.card }]}>
-            <View style={styles.modalContent}>
-              <View style={styles.modalHeader}>
-                <Text style={[styles.modalTitle, { color: colors.text }]}>{dayDetailDate}</Text>
-                <TouchableOpacity onPress={() => setDayDetailVisible(false)}>
-                  <X size={20} color={colors.textSub} />
-                </TouchableOpacity>
-              </View>
-
-              {dayDetailMode === 'earnings' ? (
-                dayDetailEarnings.length ? (
-                  <>
-                    <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 12 }}>
-                      當日財報事件 · {dayDetailEarnings.length} 檔
-                    </Text>
-                    {dayDetailEarnings.map((event, eventIndex) => {
-                      const statusLabel = event.status === 'released'
-                        ? '已公告'
-                        : event.status === 'recent' ? '最近公布'
-                          : event.isFilingDeadline || event.status === 'filing_deadline' ? '法定申報期限' : '預估日期';
-                      const tags = [
-                        event.isHolding && '持有中',
-                        event.isWatchlist && '已收藏',
-                        (event.isFilingDeadline || event.status === 'filing_deadline') && '一般期限推算',
-                        String(event.source || '第三方資料').split(/[・＋]/)[0],
-                        event.sourceDate && event.sourceDate !== event.date
-                          && `美國日期 ${event.sourceDate}${event.time ? ` ${event.time}` : ''}`,
-                      ].filter(Boolean);
-                      return (
-                        <TouchableOpacity
-                          key={`${event.key}:${eventIndex}`}
-                          accessibilityRole="button"
-                          accessibilityLabel={`開啟 ${event.symbol} 財報分析`}
-                          activeOpacity={0.78}
-                          onPress={() => openEarningsAnalysis(event)}
-                          style={{
-                            backgroundColor: colors.cardAlt,
-                            borderWidth: 1,
-                            borderColor: colors.borderLight,
-                            borderRadius: 12,
-                            paddingHorizontal: 14,
-                            paddingVertical: 12,
-                            marginBottom: 10,
-                          }}
-                        >
-                          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 5 }}>
-                            <Text style={{ flex: 1, color: colors.text, fontSize: 15, fontWeight: '800' }} numberOfLines={1}>
-                              {event.symbol}{event.quarter ? ` · ${event.quarter}` : ''}
-                            </Text>
-                            <Text style={{ color: event.status === 'released' ? PNL_GAIN_COLOR : colors.accent, fontSize: 12, fontWeight: '800' }}>
-                              {statusLabel}
-                            </Text>
-                          </View>
-                          <Text style={{ color: colors.textSub, fontSize: 12, marginBottom: 5 }} numberOfLines={2}>
-                            {event.name || event.symbol}
-                          </Text>
-                          {!!tags.length && (
-                            <Text style={{ color: colors.textMuted, fontSize: 10, lineHeight: 15 }}>
-                              {tags.join(' · ')}
-                            </Text>
-                          )}
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </>
-                ) : (
-                  <Text style={{ color: colors.textMuted, fontSize: 13, textAlign: 'center', marginTop: 8 }}>
-                    此日沒有財報事件
-                  </Text>
-                )
-              ) : performanceMode === 'trade' ? (
-                dayDetailDate && dailyPnlMap[dayDetailDate] ? (() => {
-                  const pnl = dailyPnlMap[dayDetailDate];
-                  const detailRows = [
-                    { label: '已實現', value: Number(pnl.realizedDiff) || 0, pct: Number(pnl.realizedPct) || 0, cumulative: Number(pnl.realizedPnl) || 0 },
-                    { label: '未實現', value: Number(pnl.unrealizedDiff) || 0, pct: Number(pnl.unrealizedPct) || 0, cumulative: Number(pnl.unrealizedPnl) || 0 },
-                    { label: '總損益', value: Number(pnl.totalDiff ?? pnl.diff) || 0, pct: Number(pnl.totalPct) || 0, cumulative: Number(pnl.totalPnl) || 0 },
-                  ];
-                  return (
-                    <>
-                      <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 12 }}>
-                        當日變化（相較前一個交易日）
-                      </Text>
-                      {detailRows.map(row => (
-                        <View
-                          key={row.label}
-                          style={{
-                            backgroundColor: colors.cardAlt,
-                            borderWidth: 1,
-                            borderColor: colors.borderLight,
-                            borderRadius: 12,
-                            paddingHorizontal: 14,
-                            paddingVertical: 12,
-                            marginBottom: 10,
-                          }}
-                        >
-                          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 5 }}>
-                            <Text style={{ flex: 1, color: colors.textSub, fontSize: 13, fontWeight: '700' }}>{row.label}</Text>
-                            <Text style={{ color: pnlColor(row.value, colors.textMuted), fontSize: 16, fontWeight: '800' }}>
-                              {signedPnlAmount(row.value, fmt)} {currency}
-                            </Text>
-                          </View>
-                          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                            <Text style={{ flex: 1, color: colors.textMuted, fontSize: 11 }}>
-                              截至當日累計 {signedPnlAmount(row.cumulative, fmt)} {currency}
-                            </Text>
-                            <Text style={{ color: pnlColor(row.pct, colors.textMuted), fontSize: 12, fontWeight: '700' }}>
-                              {signedPnlPercent(row.pct, 2)}
-                            </Text>
-                          </View>
-                        </View>
-                      ))}
-                    </>
-                  );
-                })() : (
-                  <Text style={{ color: colors.textMuted, fontSize: 13, textAlign: 'center', marginTop: 8 }}>
-                    此日無交易損益資料
-                  </Text>
-                )
-              ) : (
-                <>
-                  {/* Net worth + daily change */}
-                  {dayDetailDate && dailyPnlMap[dayDetailDate] && (() => {
-                    const pnl = dailyPnlMap[dayDetailDate];
-                    const pct = pnl.prevValue > 0 ? (pnl.diff / pnl.prevValue) * 100 : 0;
-                    return (
-                      <View style={{ marginBottom: 16, paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: colors.borderLight }}>
-                        {dayDetailNetWorth != null && (
-                          <Text style={{ fontSize: 22, fontWeight: '800', color: colors.text, marginBottom: 4 }}>
-                            {fmt(dayDetailNetWorth)} {currency}
-                          </Text>
-                        )}
-                        <Text style={{ fontSize: 15, fontWeight: '700', color: pnlColor(pnl.diff, colors.textMuted) }}>
-                          {signedPnlAmount(pnl.diff, fmt)} {currency} ({signedPnlPercent(pct, 2)})
-                        </Text>
-                      </View>
-                    );
-                  })()}
-
-                  {/* Category breakdown */}
-                  {dayDetailLoading ? (
-                    <ActivityIndicator size="small" color={PRIMARY} style={{ marginTop: 16 }} />
-                  ) : dayDetailData.length > 0 ? (
-                    <>
-                      <Text style={{ fontSize: 13, fontWeight: '600', color: colors.textSub, marginBottom: 10 }}>資產類別</Text>
-                      {dayDetailData
-                        .filter(d => d.value > 0)
-                        .sort((a, b) => b.value - a.value)
-                        .map((d, i) => {
-                          const cfg   = { ...CATEGORY_CONFIG, ...MARKET_TYPE_CONFIG }[d.category];
-                          const label = cfg?.label || d.category;
-                          const color = cfg?.color || '#94a3b8';
-                          return (
-                            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
-                              <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: color, marginRight: 10 }} />
-                              <Text style={{ flex: 1, fontSize: 14, color: colors.textSub }}>{label}</Text>
-                              <Text style={{ fontSize: 14, fontWeight: '700', color: colors.text }}>{fmt(d.value)}</Text>
-                            </View>
-                          );
-                        })
-                      }
-                    </>
-                  ) : (
-                    <Text style={{ color: colors.textMuted, fontSize: 13, textAlign: 'center', marginTop: 8 }}>
-                      此日無類別快照資料
-                    </Text>
-                  )}
-                </>
-              )}
-            </View>
-          </View>
-        </View>
-      </Modal>
+      <DayDetailModal {...{ dayDetailVisible, setDayDetailVisible, dayDetailDate, dayDetailMode, dayDetailEarnings, openEarningsAnalysis, performanceMode, dailyPnlMap, selectedTradePoint, selectedDaySellRows, selectedDayTradeSummary, dayDetailNetWorth, dayDetailLoading, dayDetailData, fmt, currency, colors, styles, CATEGORY_CONFIG, MARKET_TYPE_CONFIG, PRIMARY }} />
 
       {/* Custom date range modal */}
       <Modal
@@ -2926,6 +1606,10 @@ export default function TrendsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  chartErrorBanner: { marginHorizontal: 16, marginTop: 12, paddingHorizontal: 10, paddingVertical: 8, borderWidth: 1, borderRadius: 12, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  chartErrorText: { flex: 1, fontSize: 11, lineHeight: 16 },
+  chartErrorRetry: { minHeight: 44, minWidth: 52, paddingHorizontal: 10, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  chartErrorRetryText: { fontSize: 11, fontWeight: '800' },
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   chartLoading: { height: 200, justifyContent: 'center', alignItems: 'center' },
 

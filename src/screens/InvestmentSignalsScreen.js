@@ -128,6 +128,7 @@ export default function InvestmentSignalsScreen({ navigation }) {
     <ScrollView
       style={{ backgroundColor: colors.bg }}
       contentContainerStyle={styles.content}
+      contentInsetAdjustmentBehavior="automatic"
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={PRIMARY} />}
     >
       <View style={[styles.hero, { backgroundColor: colors.card, borderColor: colors.border }]}>

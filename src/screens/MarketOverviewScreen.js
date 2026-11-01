@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  FlatList,
   Linking,
   Modal,
   PanResponder,
@@ -17,9 +16,11 @@ import { useFocusEffect } from '@react-navigation/native';
 import { ExternalLink, Landmark, TrendingUp } from 'lucide-react-native';
 import Svg, { Circle, Line, Polyline, Rect, Text as SvgText } from 'react-native-svg';
 import { useTheme } from '../lib/ThemeContext';
-import { cacheTaiwanMarginHistory, cacheTaiwanMarginHistoryPages, calculateYearOverYear, clearCachedTaiwanMarginHistory, fetchCachedMarketPulse, fetchMarketOverview, fetchTaiwanForeignHistory, fetchTaiwanMarginHistory, fetchTaiwanMarginHistoryCacheRange, fetchTwseTaiexCandles, findHistoryPointAtOrBefore, foreignHistoryCoverage, formatMarketPulsePrice, isTaiwanMarginHistoryCacheFresh, marginHistoryCoverage, mergeInstitutionalHistoryRows, mergeMarketPulseQuotes, readCachedTaiwanMarginHistoryPages } from '../services/marketOverview';
+import { cacheTaiwanForeignHistoryPage, cacheTaiwanMarginHistory, cacheTaiwanMarginHistoryPages, calculateYearOverYear, clearCachedTaiwanForeignHistory, clearCachedTaiwanMarginHistory, fetchCachedMarketPulse, fetchMarketOverview, fetchTaiwanForeignHistory, fetchTaiwanMarginHistory, fetchTaiwanMarginHistoryCacheRange, fetchTwseTaiexCandles, findHistoryPointAtOrBefore, foreignHistoryCoverage, formatMarketPulsePrice, isTaiwanForeignHistoryCacheFresh, isTaiwanMarginHistoryCacheFresh, marginHistoryCoverage, mergeInstitutionalHistoryRows, mergeMarketPulseQuotes, readCachedTaiwanForeignHistoryPages, readCachedTaiwanMarginHistoryPages } from '../services/marketOverview';
 import MarketPulseChart from '../components/MarketPulseChart';
+import CompactDataTable from '../components/CompactDataTable';
 import { calculateInstitutionalFlowTotals } from '../utils/institutionalTotals';
+import { marginIndexRelativePoints } from '../utils/marginIndexComparison';
 
 const numberText = (value, digits = 2) => Number.isFinite(Number(value))
   ? Number(value).toLocaleString('zh-TW', { minimumFractionDigits: digits, maximumFractionDigits: digits })
@@ -323,13 +324,6 @@ function YieldAnalysisModal({ visible, onClose, tenor, periodLabel, series, colo
     return { ...point, changeBps: previous ? (point.value - previous.value) * 100 : null };
   });
   const formatBasisPoints = value => Number.isFinite(value) ? `${value > 0 ? '+' : ''}${value.toFixed(1)} bp` : '—';
-  const renderRow = ({ item }) => (
-    <View style={[styles.yieldAnalysisRow, { borderBottomColor: colors.borderLight }]}>
-      <Text style={[styles.yieldAnalysisDate, { color: colors.text }]}>{item.date}</Text>
-      <Text style={[styles.yieldAnalysisValue, { color: colors.text }]}>{numberText(item.value)}%</Text>
-      <Text style={[styles.yieldAnalysisChange, { color: item.changeBps > 0 ? colors.positive : item.changeBps < 0 ? colors.negative : colors.textSub }]}>{formatBasisPoints(item.changeBps)}</Text>
-    </View>
-  );
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
@@ -356,12 +350,7 @@ function YieldAnalysisModal({ visible, onClose, tenor, periodLabel, series, colo
         </View>
         <Text style={[styles.marginAnalysisSection, { color: colors.text, marginTop: 18 }]}>逐日資料</Text>
         <Text style={[styles.marginAnalysisSub, { color: colors.textSub, marginBottom: 8 }]}>由新到舊；較前一個有資料日以殖利率百分點換算基點（bp）。</Text>
-        <View style={[styles.yieldAnalysisRow, styles.yieldAnalysisHeader, { borderBottomColor: colors.border }]}>
-          <Text style={[styles.yieldAnalysisDate, { color: colors.textSub }]}>日期</Text>
-          <Text style={[styles.yieldAnalysisValue, { color: colors.textSub }]}>殖利率</Text>
-          <Text style={[styles.yieldAnalysisChange, { color: colors.textSub }]}>較前筆</Text>
-        </View>
-        {rows.length ? <FlatList style={{ flex: 1 }} data={rows} keyExtractor={item => item.date} renderItem={renderRow} initialNumToRender={24} contentContainerStyle={{ paddingBottom: 20 }} /> : <Text style={[styles.marginAnalysisSub, { color: colors.textMuted, paddingVertical: 18 }]}>這段期間沒有可用的殖利率資料。</Text>}
+        {rows.length ? <CompactDataTable style={{ flex: 1 }} maxHeight={520} rows={rows} rowKey={item => item.date} colors={colors} fixedColumn={{ header: '日期', width: 88, render: item => item.date }} columns={[{ key: 'yield', header: '殖利率', width: 92, render: item => `${numberText(item.value)}%` }, { key: 'change', header: '較前筆', width: 92, render: item => formatBasisPoints(item.changeBps), color: item => item.changeBps > 0 ? colors.positive : item.changeBps < 0 ? colors.negative : colors.textSub }]} /> : <Text style={[styles.marginAnalysisSub, { color: colors.textMuted, paddingVertical: 18 }]}>這段期間沒有可用的殖利率資料。</Text>}
         <Text style={[styles.marginAnalysisSub, { color: colors.textMuted, marginTop: 8, marginBottom: 12 }]}>資料來源：FRED 每日殖利率觀測；K 線的週內高低為收盤值極值，非盤中價格。</Text>
       </View>
     </Modal>
@@ -498,22 +487,6 @@ function MarginDailyAnalysisModal({ visible, onClose, points, selectedDate, mark
   const last = points.at(-1);
   const periodChange = first && last ? (last.balance - first.balance) / 1e8 : null;
   const marketLabel = market === 'combined' ? '兩市' : market === 'twse' ? '上市' : '上櫃';
-  const renderRow = ({ item }) => {
-    const changeYi = item.change == null ? null : item.change / 1e8;
-    const changePercent = changeFromPreviousPercent(item.balance, item.previous);
-    return (
-      <TouchableOpacity accessibilityRole="button" accessibilityLabel={`${item.date} 融資餘額 ${amountYi(item.balance / 1e8)}，較前日 ${changeYi == null ? '無資料' : amountYi(changeYi)}，點選回到圖表`}
-        onPress={() => { onSelectDate(item.date); onClose(); }}
-        style={[styles.marginAnalysisRow, { borderBottomColor: colors.borderLight, backgroundColor: item.date === selected?.date ? colors.accentSoft : 'transparent' }]}>
-        <View style={styles.marginAnalysisColumns}>
-          <Text style={[styles.marginAnalysisDate, { color: colors.text }]}>{item.date.slice(5).replace('-', '/')}</Text>
-          <Text style={[styles.marginDailyCell, { color: colors.text }]}>{numberText(item.balance / 1e8, 1)}</Text>
-          <Text style={[styles.marginDailyCell, { color: changeYi == null ? colors.textMuted : changeYi > 0 ? colors.negative : changeYi < 0 ? colors.positive : colors.textSub }]}>{changeYi == null ? '—' : `${changeYi > 0 ? '+' : ''}${numberText(changeYi, 1)}`}</Text>
-          <Text style={[styles.marginDailyCell, { color: changePercent == null ? colors.textMuted : changePercent > 0 ? colors.negative : changePercent < 0 ? colors.positive : colors.textSub }]}>{analysisPercentText(changePercent)}</Text>
-        </View>
-      </TouchableOpacity>
-    );
-  };
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <View style={[styles.marginAnalysisModal, { backgroundColor: colors.bg }]}>
@@ -531,17 +504,10 @@ function MarginDailyAnalysisModal({ visible, onClose, points, selectedDate, mark
         </View>
         <Text style={[styles.marginAnalysisSection, { color: colors.text, marginTop: 18 }]}>逐日資料</Text>
         <Text style={[styles.marginAnalysisSub, { color: colors.textSub, marginBottom: 8 }]}>單位：億元；由新到舊，點選一列回到圖表。</Text>
-        <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator style={styles.marginAnalysisTableScroll} contentContainerStyle={{ flexGrow: 1 }}>
-          <View style={[styles.marginAnalysisTable, { width: 58 + 94 * 3 + 12 }]}>
-            <View style={[styles.marginAnalysisColumns, styles.marginAnalysisTableHeader, { borderBottomColor: colors.border }]}>
-              <Text style={[styles.marginAnalysisDate, { color: colors.textSub }]}>日期</Text>
-              <Text style={[styles.marginDailyCell, { color: colors.textSub }]}>融資餘額</Text>
-              <Text style={[styles.marginDailyCell, { color: colors.textSub }]}>較前日(億)</Text>
-              <Text style={[styles.marginDailyCell, { color: colors.textSub }]}>較前日(%)</Text>
-            </View>
-            <FlatList style={{ flex: 1 }} data={points.slice().reverse()} keyExtractor={item => item.date} renderItem={renderRow} initialNumToRender={20} contentContainerStyle={{ paddingBottom: 20 }} />
-          </View>
-        </ScrollView>
+        <CompactDataTable style={{ flex: 1 }} maxHeight={520} rows={points.slice().reverse().map(item => ({ ...item, selected: item.date === selected?.date }))} rowKey={item => item.date} colors={colors}
+          fixedColumn={{ header: '日期', width: 72, render: item => item.date.slice(5).replace('-', '/') }}
+          columns={[{ key: 'balance', header: '融資餘額', width: 94, render: item => numberText(item.balance / 1e8, 1) }, { key: 'change', header: '較前日(億)', width: 94, render: item => item.change == null ? '—' : `${item.change > 0 ? '+' : ''}${numberText(item.change / 1e8, 1)}`, color: item => item.change == null ? colors.textMuted : item.change > 0 ? colors.negative : item.change < 0 ? colors.positive : colors.textSub }, { key: 'percent', header: '較前日(%)', width: 94, render: item => analysisPercentText(changeFromPreviousPercent(item.balance, item.previous)), color: item => { const value = changeFromPreviousPercent(item.balance, item.previous); return value == null ? colors.textMuted : value > 0 ? colors.negative : value < 0 ? colors.positive : colors.textSub; } }]}
+          onRowPress={item => { onSelectDate(item.date); onClose(); }} rowAccessibilityLabel={item => `${item.date} 融資餘額 ${amountYi(item.balance / 1e8)}，點選回到圖表`} />
         <Text style={[styles.marginAnalysisSub, { color: colors.textMuted, marginTop: 8, marginBottom: 12 }]}>較前日依官方前日餘額計算；紅色為融資增加、綠色為減少。僅列實際取得資料的日期；兩市合計須同日齊備。</Text>
       </View>
     </Modal>
@@ -573,24 +539,6 @@ function ForeignAnalysisModal({ visible, onClose, points, selectedDate, market, 
       changePercent: previous && previous.net !== 0 ? (change / Math.abs(previous.net)) * 100 : null,
     });
   });
-  const rowWidth = 92;
-  const renderRow = ({ item }) => {
-    const comparison = dailyChanges.get(item.date);
-    return (
-      <TouchableOpacity accessibilityRole="button" accessibilityLabel={`${item.date} ${institutionalLabel(category)}買進 ${amountYi(item.buy)}，賣出 ${amountYi(item.sell)}，買賣超 ${amountYi(item.net)}，較前筆 ${comparison?.change == null ? '無資料' : amountYi(comparison.change)}，變化率 ${analysisPercentText(comparison?.changePercent)}，點選回到圖表`}
-        onPress={() => { onSelectDate(item.date); onClose(); }}
-        style={[styles.marginAnalysisRow, { borderBottomColor: colors.borderLight, backgroundColor: item.date === selected?.date ? colors.accentSoft : 'transparent' }]}>
-        <View style={styles.marginAnalysisColumns}>
-          <Text style={[styles.marginAnalysisDate, { color: colors.text }]}>{item.date.slice(5).replace('-', '/')}</Text>
-          <Text style={[styles.foreignAnalysisCell, { color: colors.text }]}>{numberText(item.buy, 1)}</Text>
-          <Text style={[styles.foreignAnalysisCell, { color: colors.text }]}>{numberText(item.sell, 1)}</Text>
-          <Text style={[styles.foreignAnalysisCell, { color: analysisChangeColor(item.net, colors) }]}>{item.net > 0 ? '+' : ''}{numberText(item.net, 1)}</Text>
-          <Text style={[styles.foreignAnalysisCell, { color: comparison?.change == null ? colors.textMuted : analysisChangeColor(comparison.change, colors) }]}>{comparison?.change == null ? '—' : `${comparison.change > 0 ? '+' : ''}${numberText(comparison.change, 1)}`}</Text>
-          <Text style={[styles.foreignAnalysisCell, { color: comparison?.changePercent == null ? colors.textMuted : analysisChangeColor(comparison.changePercent, colors) }]}>{analysisPercentText(comparison?.changePercent)}</Text>
-        </View>
-      </TouchableOpacity>
-    );
-  };
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <View style={[styles.marginAnalysisModal, { backgroundColor: colors.bg }]}>
@@ -622,19 +570,10 @@ function ForeignAnalysisModal({ visible, onClose, points, selectedDate, market, 
         <Text style={[styles.marginAnalysisSub, { color: colors.textSub }]}>依最新已取得交易日計算；不足 5／10／20／30 日時不顯示合計。</Text>
         <Text style={[styles.marginAnalysisSection, { color: colors.text, marginTop: 18 }]}>逐日資料</Text>
         <Text style={[styles.marginAnalysisSub, { color: colors.textSub, marginBottom: 8 }]}>單位：億元；日期由新到舊。點選一列回到圖表，表格可左右滑動。</Text>
-        <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator style={styles.marginAnalysisTableScroll} contentContainerStyle={{ flexGrow: 1 }}>
-          <View style={[styles.marginAnalysisTable, { width: 58 + rowWidth * 5 + 12 }]}>
-            <View style={[styles.marginAnalysisColumns, styles.marginAnalysisTableHeader, { borderBottomColor: colors.border }]}>
-              <Text style={[styles.marginAnalysisDate, { color: colors.textSub }]}>日期</Text>
-              <Text style={[styles.foreignAnalysisCell, { color: colors.textSub }]}>買進</Text>
-              <Text style={[styles.foreignAnalysisCell, { color: colors.textSub }]}>賣出</Text>
-              <Text style={[styles.foreignAnalysisCell, { color: colors.textSub }]}>買賣超</Text>
-              <Text style={[styles.foreignAnalysisCell, { color: colors.textSub }]}>較前日(億)</Text>
-              <Text style={[styles.foreignAnalysisCell, { color: colors.textSub }]}>較前日(%)</Text>
-            </View>
-            <FlatList style={{ flex: 1 }} data={points.slice().reverse()} keyExtractor={item => item.date} renderItem={renderRow} initialNumToRender={20} contentContainerStyle={{ paddingBottom: 20 }} />
-          </View>
-        </ScrollView>
+        <CompactDataTable style={{ flex: 1 }} maxHeight={520} rows={points.slice().reverse().map(item => ({ ...item, selected: item.date === selected?.date }))} rowKey={item => item.date} colors={colors}
+          fixedColumn={{ header: '日期', width: 72, render: item => item.date.slice(5).replace('-', '/') }}
+          columns={[{ key: 'buy', header: '買進', width: 92, render: item => numberText(item.buy, 1) }, { key: 'sell', header: '賣出', width: 92, render: item => numberText(item.sell, 1) }, { key: 'net', header: '買賣超', width: 92, render: item => `${item.net > 0 ? '+' : ''}${numberText(item.net, 1)}`, color: item => analysisChangeColor(item.net, colors) }, { key: 'change', header: '較前日(億)', width: 92, render: item => { const value = dailyChanges.get(item.date)?.change; return value == null ? '—' : `${value > 0 ? '+' : ''}${numberText(value, 1)}`; }, color: item => analysisChangeColor(dailyChanges.get(item.date)?.change, colors) }, { key: 'percent', header: '較前日(%)', width: 92, render: item => analysisPercentText(dailyChanges.get(item.date)?.changePercent), color: item => analysisChangeColor(dailyChanges.get(item.date)?.changePercent, colors) }]}
+          onRowPress={item => { onSelectDate(item.date); onClose(); }} rowAccessibilityLabel={item => `${item.date} ${institutionalLabel(category)}買賣超 ${amountYi(item.net)}，點選回到圖表`} />
         <Text style={[styles.marginAnalysisSub, { color: colors.textMuted, marginTop: 8, marginBottom: 12 }]}>較前日為前一個有資料的交易日；買賣超變化率＝淨額變化 ÷ 前筆淨額絕對值，前筆為 0 則顯示 —。綠色代表淨買賣超改善、紅色代表轉弱，不代表股價漲跌。外資不含外資自營商；自營商含自行買賣與避險。三大法人＝外資＋投信＋自營商；兩市合計僅採同日齊備資料。</Text>
       </View>
     </Modal>
@@ -776,14 +715,6 @@ function InstitutionalIndexChart({ history, market, category, colors }) {
 }
 
 function MarginAnalysisModal({ visible, onClose, points, selectedDate, market, colors, onSelectDate }) {
-  const { width: screenWidth } = useWindowDimensions();
-  const tableContentWidth = Math.max(screenWidth - 44, 300);
-  const dateWidth = Math.round(tableContentWidth * 0.125);
-  const indexWidth = Math.round(tableContentWidth * 0.17);
-  const balanceWidth = Math.round(tableContentWidth * 0.18);
-  const changeWidth = Math.round(tableContentWidth * 0.155);
-  const peakChangeWidth = tableContentWidth - dateWidth - indexWidth - balanceWidth - changeWidth * 2;
-  const tableWidth = tableContentWidth + 12;
   const peakIndex = points.reduce((best, point, index) => point.index > points[best].index ? index : best, 0);
   const peak = points[peakIndex];
   const lowAfterPeak = points.slice(peakIndex).reduce((lowest, point) => point.index < lowest.index ? point : lowest, peak);
@@ -794,30 +725,12 @@ function MarginAnalysisModal({ visible, onClose, points, selectedDate, market, c
     { label: '最新', point: points[points.length - 1] },
   ];
   const selected = points.find(point => point.date === selectedDate) || points[points.length - 1];
-  const renderRow = ({ item }) => {
-    const index = points.findIndex(point => point.date === item.date);
-    const previous = points[index - 1];
-    const indexChange = changeFromPreviousPercent(item.index, previous?.index);
-    const marginChange = changeFromPreviousPercent(item.margin, previous?.margin);
-    const fromPeak = changeFromPreviousPercent(item.margin, peak.margin);
-    return (
-      <TouchableOpacity
-        accessibilityRole="button"
-        accessibilityLabel={`${item.date} 指數收盤 ${numberText(item.index, 0)}，融資 ${numberText(item.margin, 1)} 億，指數較前筆 ${analysisPercentText(indexChange)}，融資較前筆 ${analysisPercentText(marginChange)}，融資相對高點日 ${analysisPercentText(fromPeak)}，點選回到圖表`}
-        onPress={() => { onSelectDate(item.date); onClose(); }}
-        style={[styles.marginAnalysisRow, { borderBottomColor: colors.borderLight, backgroundColor: item.date === selected.date ? colors.accentSoft : 'transparent' }]}
-      >
-        <View style={styles.marginAnalysisColumns}>
-          <Text style={[styles.marginAnalysisDate, { width: dateWidth, color: colors.text }]} numberOfLines={1}>{item.date.slice(5).replace('-', '/')}</Text>
-          <Text style={[styles.marginAnalysisIndex, { width: indexWidth, color: colors.accent, fontWeight: '700' }]} numberOfLines={1}>{numberText(item.index, 0)}</Text>
-          <Text style={[styles.marginAnalysisBalance, { width: balanceWidth, color: colors.warning, fontWeight: '700' }]} numberOfLines={1}>{numberText(item.margin, 1)}</Text>
-          <Text style={[styles.marginAnalysisChange, { width: changeWidth, color: analysisChangeColor(indexChange, colors) }]} numberOfLines={1}>{analysisPercentText(indexChange)}</Text>
-          <Text style={[styles.marginAnalysisChange, { width: changeWidth, color: marginBalanceChangeColor(marginChange, colors) }]} numberOfLines={1}>{analysisPercentText(marginChange)}</Text>
-          <Text style={[styles.marginAnalysisPeakChange, { width: peakChangeWidth, color: marginBalanceChangeColor(fromPeak, colors) }]} numberOfLines={1}>{analysisPercentText(fromPeak)}</Text>
-        </View>
-      </TouchableOpacity>
-    );
-  };
+  const tableRows = points.map((item, index) => ({
+    ...item,
+    selected: item.date === selected?.date,
+    indexChange: changeFromPreviousPercent(item.index, points[index - 1]?.index),
+    marginChange: changeFromPreviousPercent(item.margin, points[index - 1]?.margin),
+  })).reverse();
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <View style={[styles.marginAnalysisModal, { backgroundColor: colors.bg }]}>
@@ -842,26 +755,10 @@ function MarginAnalysisModal({ visible, onClose, points, selectedDate, market, c
         </View>
         <Text style={[styles.marginAnalysisSection, { color: colors.text, marginTop: 18 }]}>逐日資料</Text>
         <Text style={[styles.marginAnalysisSub, { color: colors.textSub, marginBottom: 8 }]}>日期由新到舊，點選一列回到圖表；表格可左右滑動。</Text>
-        <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator style={styles.marginAnalysisTableScroll} contentContainerStyle={{ flexGrow: 1 }}>
-          <View style={[styles.marginAnalysisTable, { width: tableWidth, flex: 0 }]}>
-            <View style={[styles.marginAnalysisColumns, styles.marginAnalysisTableHeader, { borderBottomColor: colors.border }]}>
-              <Text style={[styles.marginAnalysisDate, { width: dateWidth, color: colors.textSub, fontSize: 10 }]}>日期</Text>
-              <Text style={[styles.marginAnalysisIndex, { width: indexWidth, color: colors.accent, fontSize: 10 }]}>收盤指數</Text>
-              <Text style={[styles.marginAnalysisBalance, { width: balanceWidth, color: colors.warning, fontSize: 10 }]}>融資(億)</Text>
-              <Text style={[styles.marginAnalysisChange, { width: changeWidth, color: colors.textSub, fontSize: 9 }]}>指數日變</Text>
-              <Text style={[styles.marginAnalysisChange, { width: changeWidth, color: colors.textSub, fontSize: 9 }]}>融資日變</Text>
-              <Text style={[styles.marginAnalysisPeakChange, { width: peakChangeWidth, color: colors.textSub, fontSize: 9 }]}>距融資高點</Text>
-            </View>
-            <FlatList
-              style={{ flex: 1 }}
-              data={points.slice().reverse()}
-              keyExtractor={item => item.date}
-              renderItem={renderRow}
-              initialNumToRender={20}
-              contentContainerStyle={{ paddingBottom: 20 }}
-            />
-          </View>
-        </ScrollView>
+        <CompactDataTable style={{ flex: 1 }} maxHeight={520} rows={tableRows} rowKey={item => item.date} colors={colors}
+          fixedColumn={{ header: '日期', width: 72, render: item => item.date.slice(5).replace('-', '/') }}
+          columns={[{ key: 'index', header: '收盤指數', width: 95, render: item => numberText(item.index, 0), color: () => colors.accent }, { key: 'margin', header: '融資(億)', width: 95, render: item => numberText(item.margin, 1), color: () => colors.warning }, { key: 'indexChange', header: '指數日變', width: 90, render: item => analysisPercentText(item.indexChange), color: item => analysisChangeColor(item.indexChange, colors) }, { key: 'marginChange', header: '融資日變', width: 90, render: item => analysisPercentText(item.marginChange), color: item => marginBalanceChangeColor(item.marginChange, colors) }, { key: 'peak', header: '距融資高點', width: 94, render: item => analysisPercentText(changeFromPreviousPercent(item.margin, peak.margin)), color: item => marginBalanceChangeColor(changeFromPreviousPercent(item.margin, peak.margin), colors) }]}
+          onRowPress={item => { onSelectDate(item.date); onClose(); }} rowAccessibilityLabel={item => `${item.date} 指數收盤 ${numberText(item.index, 0)}，融資 ${numberText(item.margin, 1)} 億，點選回到圖表`} />
         <Text style={[styles.marginAnalysisSub, { color: colors.textMuted, marginTop: 8, marginBottom: 12 }]}>僅列指數收盤與融資餘額同日齊備的交易日；日變對照前一共同資料日。高／低為區間收盤指數，較高點日以 {peak.date} 為固定基準。</Text>
       </View>
     </Modal>
@@ -870,6 +767,7 @@ function MarginAnalysisModal({ visible, onClose, points, selectedDate, market, c
 
 function MarginIndexComparisonChart({ history, market, colors, period, onPeriodChange }) {
   const { width } = useWindowDimensions();
+  const [chartMode, setChartMode] = useState('relative');
   const [selectedDate, setSelectedDate] = useState(null);
   const [analysisOpen, setAnalysisOpen] = useState(false);
   const [indexCandles, setIndexCandles] = useState(null);
@@ -896,10 +794,11 @@ function MarginIndexComparisonChart({ history, market, colors, period, onPeriodC
   const points = useMemo(() => (history || []).flatMap(row => {
     const balance = row?.[market]?.balance;
     const candle = candlesByDate.get(row.date);
-    return Number(balance) > 0 && candle
+    return Number(balance) > 0 && Number(candle?.close) > 0
       ? [{ ...candle, index: candle.close, margin: Number(balance) / 1e8 }]
       : [];
   }), [history, market, candlesByDate]);
+  const relativePoints = useMemo(() => marginIndexRelativePoints(points), [points]);
   useEffect(() => {
     setZoomWindow(null);
     setSelectedDate(null);
@@ -911,8 +810,8 @@ function MarginIndexComparisonChart({ history, market, colors, period, onPeriodC
   const safePoints = hasChart ? points : [{ date: '', index: 0, margin: 0 }];
   const chosen = safePoints.find(point => point.date === selectedDate) || safePoints[safePoints.length - 1];
   const chartWidth = Math.max(width - 64, 220);
-  const plotLeft = 40;
-  const plotRight = chartWidth - 40;
+  const plotLeft = chartMode === 'relative' ? 48 : 40;
+  const plotRight = chartWidth - (chartMode === 'relative' ? 16 : 40);
   const plotWidth = plotRight - plotLeft;
   const plotTop = 23;
   const plotBottom = 183;
@@ -922,6 +821,7 @@ function MarginIndexComparisonChart({ history, market, colors, period, onPeriodC
   const visibleCount = viewEnd - viewStart + 1;
   const isZoomed = visibleCount < totalPoints;
   const visiblePoints = safePoints.slice(viewStart, viewEnd + 1);
+  const visibleRelativePoints = relativePoints.slice(viewStart, viewEnd + 1);
   const setWindow = (start, count, selectedIndex = null) => {
     const boundedCount = Math.max(Math.min(6, totalPoints), Math.min(totalPoints, Math.round(count)));
     const boundedStart = Math.max(0, Math.min(totalPoints - boundedCount, Math.round(start)));
@@ -1074,44 +974,64 @@ function MarginIndexComparisonChart({ history, market, colors, period, onPeriodC
   };
   const [indexMin, indexMax] = minMax('index');
   const [marginMin, marginMax] = minMax('margin');
+  const relativeValues = relativePoints.flatMap(point => [point.indexPercent, point.marginPercent, point.ma20Percent, point.ma60Percent].filter(Number.isFinite));
+  const relativeMinValue = Math.min(0, ...relativeValues);
+  const relativeMaxValue = Math.max(0, ...relativeValues);
+  const relativePadding = Math.max((relativeMaxValue - relativeMinValue) * 0.12, 0.1);
+  const relativeMin = relativeMinValue - relativePadding;
+  const relativeMax = relativeMaxValue + relativePadding;
   const xAt = index => plotLeft + (index - viewStart) * plotWidth / Math.max(1, visibleCount - 1);
   const yAt = (value, min, max) => plotBottom - (value - min) / (max - min) * (plotBottom - plotTop);
-  const maLine = key => visiblePoints.flatMap((point, offset) => Number.isFinite(point[key]) ? [`${xAt(viewStart + offset)},${yAt(point[key], indexMin, indexMax)}`] : []).join(' ');
-  const indexLine = visiblePoints.map((point, offset) => `${xAt(viewStart + offset)},${yAt(point.index, indexMin, indexMax)}`).join(' ');
-  const marginLine = visiblePoints.map((point, offset) => `${xAt(viewStart + offset)},${yAt(point.margin, marginMin, marginMax)}`).join(' ');
+  const relativeMode = chartMode === 'relative';
+  const maLine = key => visiblePoints.flatMap((point, offset) => {
+    const value = relativeMode ? visibleRelativePoints[offset]?.[`${key}Percent`] : point[key];
+    return Number.isFinite(value) ? [`${xAt(viewStart + offset)},${yAt(value, relativeMode ? relativeMin : indexMin, relativeMode ? relativeMax : indexMax)}`] : [];
+  }).join(' ');
+  const indexLine = visiblePoints.map((point, offset) => `${xAt(viewStart + offset)},${yAt(relativeMode ? visibleRelativePoints[offset].indexPercent : point.index, relativeMode ? relativeMin : indexMin, relativeMode ? relativeMax : indexMax)}`).join(' ');
+  const marginLine = visiblePoints.map((point, offset) => `${xAt(viewStart + offset)},${yAt(relativeMode ? visibleRelativePoints[offset].marginPercent : point.margin, relativeMode ? relativeMin : marginMin, relativeMode ? relativeMax : marginMax)}`).join(' ');
   const chosenIndex = points.findIndex(point => point.date === chosen.date);
+  const chosenRelative = relativePoints[chosenIndex];
   const previous = points[chosenIndex - 1];
   const selectedX = xAt(chosenIndex);
   return (
     <View style={[styles.flowChartPanel, styles.flowComparePanel, { backgroundColor: colors.cardAlt, borderColor: colors.accent }]}>
       <Text style={[styles.flowChartTitle, { color: colors.text, paddingHorizontal: 11, fontSize: 15 }]}>{market === 'combined' ? '兩市融資餘額' : '上市融資餘額'} × 加權指數</Text>
-      <View style={styles.flowCompareReadout}>
-        <Text style={[styles.flowCompareValue, { color: colors.accent }]}>指數 {numberText(chosen.index, 0)} <Text style={{ color: colors.textSub }}>較前 {percentText(changeFromPreviousPercent(chosen.index, previous?.index))}</Text></Text>
-        <Text style={[styles.flowCompareValue, { color: '#D5B260' }]}>融資 {numberText(chosen.margin, 1)} 億 <Text style={{ color: colors.textSub }}>較前 {percentText(changeFromPreviousPercent(chosen.margin, previous?.margin))}</Text></Text>
+      <View style={styles.flowCompareModeRow}>
+        {[{ key: 'relative', label: '漲跌幅比較' }, { key: 'raw', label: '原始數值' }].map(option => <TouchableOpacity
+          key={option.key}
+          accessibilityRole="button"
+          accessibilityState={{ selected: chartMode === option.key }}
+          onPress={() => setChartMode(option.key)}
+          style={[styles.flowCompareModeButton, { backgroundColor: chartMode === option.key ? colors.accentSoft : colors.card, borderColor: chartMode === option.key ? colors.accent : colors.border }]}
+        ><Text style={[styles.flowCompareModeText, { color: chartMode === option.key ? colors.accent : colors.textSub }]}>{option.label}</Text></TouchableOpacity>)}
       </View>
-      <Text style={[styles.flowChartHint, { color: colors.textSub }]}>加權指數收盤 {numberText(chosen.close, 0)}</Text>
+      <View style={styles.flowCompareReadout}>
+        <Text style={[styles.flowCompareValue, { color: colors.accent }]}>指數 {numberText(chosen.index, 0)} <Text style={{ color: colors.textSub }}>{relativeMode ? `區間 ${percentText(chosenRelative?.indexPercent)}` : `較前 ${percentText(changeFromPreviousPercent(chosen.index, previous?.index))}`}</Text></Text>
+        <Text style={[styles.flowCompareValue, { color: '#D5B260' }]}>融資 {numberText(chosen.margin, 1)} 億 <Text style={{ color: colors.textSub }}>{relativeMode ? `區間 ${percentText(chosenRelative?.marginPercent)}` : `較前 ${percentText(changeFromPreviousPercent(chosen.margin, previous?.margin))}`}</Text></Text>
+      </View>
       <View style={[styles.flowChartModeRow, { flexWrap: 'wrap', paddingHorizontal: 11, marginTop: 4 }]}>
         <Text style={{ color: '#EF8D52', fontSize: 11, fontWeight: '700' }}>月線 MA20 {chosen.ma20 == null ? '—' : numberText(chosen.ma20, 0)}</Text>
         <Text style={{ color: '#B69AF4', fontSize: 11, fontWeight: '700' }}>季線 MA60 {chosen.ma60 == null ? '—' : numberText(chosen.ma60, 0)}</Text>
       </View>
-      <Text style={[styles.flowChartHint, { color: colors.textMuted }]}>{chosen.date} · 前一共同資料日 {previous?.date || '無資料'}</Text>
+      <Text style={[styles.flowChartHint, { color: colors.textMuted }]}>{chosen.date} · {relativeMode ? `基準 ${points[0].date}（同日 0%）` : `前一共同資料日 ${previous?.date || '無資料'}`}</Text>
       <View style={styles.flowChartScroll}>
         <View style={{ width: chartWidth, height: 220 }}>
         <Svg width={chartWidth} height={220}>
           {[plotTop, (plotTop + plotBottom) / 2, plotBottom].map((y, index) => (
             <React.Fragment key={y}>
               <Line x1={plotLeft} y1={y} x2={plotRight} y2={y} stroke={colors.border} strokeWidth="1" />
-              <SvgText x={plotLeft - 5} y={y + 3} textAnchor="end" fill={colors.accent} fontSize="9">{numberText(indexMax - index * (indexMax - indexMin) / 2, 0)}</SvgText>
-              <SvgText x={plotRight + 5} y={y + 3} fill="#D5B260" fontSize="9">{numberText(marginMax - index * (marginMax - marginMin) / 2, 0)}</SvgText>
+              <SvgText x={plotLeft - 5} y={y + 3} textAnchor="end" fill={relativeMode ? colors.textSub : colors.accent} fontSize="9">{relativeMode ? percentText(relativeMax - index * (relativeMax - relativeMin) / 2) : numberText(indexMax - index * (indexMax - indexMin) / 2, 0)}</SvgText>
+              {!relativeMode && <SvgText x={plotRight + 5} y={y + 3} fill="#D5B260" fontSize="9">{numberText(marginMax - index * (marginMax - marginMin) / 2, 0)}</SvgText>}
             </React.Fragment>
           ))}
+          {relativeMode && <Line x1={plotLeft} y1={yAt(0, relativeMin, relativeMax)} x2={plotRight} y2={yAt(0, relativeMin, relativeMax)} stroke={colors.textMuted} strokeWidth="1" strokeDasharray="4 4" />}
           <Polyline points={marginLine} fill="none" stroke="#D5B260" strokeWidth="2.8" strokeLinejoin="round" strokeLinecap="round" />
           <Polyline points={indexLine} fill="none" stroke={colors.accent} strokeWidth="2.8" strokeLinejoin="round" strokeLinecap="round" />
           {maLine('ma20') && <Polyline points={maLine('ma20')} fill="none" stroke="#EF8D52" strokeWidth="2.4" strokeLinejoin="round" strokeLinecap="round" />}
           {maLine('ma60') && <Polyline points={maLine('ma60')} fill="none" stroke="#B69AF4" strokeWidth="2.4" strokeLinejoin="round" strokeLinecap="round" />}
           <Line x1={selectedX} y1={plotTop} x2={selectedX} y2={plotBottom} stroke={colors.textMuted} strokeWidth="1" strokeDasharray="3 4" />
-          <Circle cx={selectedX} cy={yAt(chosen.index, indexMin, indexMax)} r="4.5" fill={colors.cardAlt} stroke={colors.accent} strokeWidth="2.5" />
-          <Circle cx={selectedX} cy={yAt(chosen.margin, marginMin, marginMax)} r="4.5" fill={colors.cardAlt} stroke="#D5B260" strokeWidth="2.5" />
+          <Circle cx={selectedX} cy={yAt(relativeMode ? chosenRelative.indexPercent : chosen.index, relativeMode ? relativeMin : indexMin, relativeMode ? relativeMax : indexMax)} r="4.5" fill={colors.cardAlt} stroke={colors.accent} strokeWidth="2.5" />
+          <Circle cx={selectedX} cy={yAt(relativeMode ? chosenRelative.marginPercent : chosen.margin, relativeMode ? relativeMin : marginMin, relativeMode ? relativeMax : marginMax)} r="4.5" fill={colors.cardAlt} stroke="#D5B260" strokeWidth="2.5" />
           <SvgText x={plotLeft} y={211} fill={colors.textMuted} fontSize="9">{visiblePoints[0].date}</SvgText>
           <SvgText x={plotRight} y={211} textAnchor="end" fill={colors.textMuted} fontSize="9">{visiblePoints.at(-1).date}</SvgText>
         </Svg>
@@ -1142,7 +1062,9 @@ function MarginIndexComparisonChart({ history, market, colors, period, onPeriodC
         <Text style={[styles.flowChartHint, styles.flowChartZoomHint, { color: colors.textMuted }]}>雙指捏合縮放；放大後單指左右滑動日期，點按查看數值。</Text>
         {isZoomed && <TouchableOpacity accessibilityRole="button" onPress={resetZoom} style={[styles.flowChartZoomReset, { borderColor: colors.border }]}><Text style={{ color: colors.accent, fontSize: 11, fontWeight: '700' }}>重設縮放</Text></TouchableOpacity>}
       </View>
-      <Text style={[styles.flowChartHint, { color: colors.textMuted }]}>藍線／左軸：加權指數收盤；橘線 MA20（月線）、紫線 MA60（季線）；金線／右軸：融資餘額。兩組縱軸會依目前顯示區間自動調整。</Text>
+      <Text style={[styles.flowChartHint, { color: colors.textMuted }]}>{relativeMode
+        ? '藍線：加權指數；金線：融資餘額。兩者以本期間首個共同交易日為 0%，共用百分比軸；橘／紫均線也依首日指數換算。縮放不改變基準。'
+        : '藍線／左軸：加權指數收盤；橘線 MA20（月線）、紫線 MA60（季線）；金線／右軸：融資餘額。兩組縱軸會依目前顯示區間自動調整，線條交會不代表數值相等。'}</Text>
       <MarginPeriodSelector period={period} onSelect={onPeriodChange} colors={colors} />
       <TouchableOpacity accessibilityRole="button" onPress={() => setAnalysisOpen(true)} style={[styles.marginAnalysisButton, { borderColor: colors.accent, backgroundColor: colors.accentSoft }]}>
         <Text style={{ color: colors.accent, fontSize: 13, fontWeight: '800' }}>完整分析 · 查看每日資料 ›</Text>
@@ -1298,7 +1220,6 @@ export default function MarketOverviewScreen({ navigation }) {
   const [foreignHistoryError, setForeignHistoryError] = useState(null);
   const [foreignPeriod, setForeignPeriod] = useState('1M');
   const [foreignLoadProgress, setForeignLoadProgress] = useState(null);
-  const foreignHistoryCache = useRef(new Map());
   const foreignLoadId = useRef(0);
   const [selectedSymbol, setSelectedSymbol] = useState('^TWII');
   const [chartExpanded, setChartExpanded] = useState(false);
@@ -1355,7 +1276,7 @@ export default function MarketOverviewScreen({ navigation }) {
         setForeignHistoryLoading(false);
         setForeignHistoryError(null);
         setForeignLoadProgress(null);
-        foreignHistoryCache.current.clear();
+        await clearCachedTaiwanForeignHistory();
       }
     } finally {
       forceRefresh ? setRefreshing(false) : setLoading(false);
@@ -1627,7 +1548,7 @@ export default function MarketOverviewScreen({ navigation }) {
     if (!latestMarginDate) { setMarginHistoryError('尚無可用的融資資料'); return; }
     await loadMarginPeriod(marginPeriod);
   };
-  const loadForeignPeriod = async period => {
+  const loadForeignPeriod = async (period, retryIncomplete = false) => {
     if (!latestForeignDate) { setForeignHistoryError('尚無可用的法人資料'); return; }
     const loadId = ++foreignLoadId.current;
     const firstDate = new Date(`${latestForeignDate}T00:00:00Z`);
@@ -1644,36 +1565,78 @@ export default function MarketOverviewScreen({ navigation }) {
     setForeignHistoryError(null);
     setForeignHistoryLoading(true);
     setForeignLoadProgress({ loaded: 0, total: pageCount });
-    try {
-      const pages = [];
-      for (let offset = 0; offset < pageCount; offset++) {
-        const end = new Date(`${latestForeignDate}T00:00:00Z`);
-        end.setUTCDate(end.getUTCDate() - offset * 31);
-        const endDate = end.toISOString().slice(0, 10);
-        let result = foreignHistoryCache.current.get(endDate);
-        if (!result || !foreignHistoryCoverage(result.history, endDate, institutionalCategory, flowMarket).complete) {
-          for (let attempt = 0; attempt < 3; attempt++) {
-            try {
-              const fresh = await fetchTaiwanForeignHistory(endDate, institutionalCategory, flowMarket);
-              result = result ? { ...fresh, history: mergeInstitutionalHistoryRows([...result.history, ...fresh.history]) } : fresh;
-              break;
-            }
-            catch (error) {
-              if (attempt === 2) break;
-              await new Promise(resolve => setTimeout(resolve, 1200 * (attempt + 1)));
-            }
-          }
-          if (result?.history?.length) foreignHistoryCache.current.set(endDate, result);
-        }
-        if (loadId !== foreignLoadId.current) return;
-        pages.push({ endDate, result: result?.history?.length ? result : null });
-        setForeignLoadProgress({ loaded: pages.length, total: pageCount });
-        if (offset < pageCount - 1) await new Promise(resolve => setTimeout(resolve, 350));
-      }
+    const pageSpecs = Array.from({ length: pageCount }, (_, offset) => {
+      const end = new Date(`${latestForeignDate}T00:00:00Z`);
+      end.setUTCDate(end.getUTCDate() - offset * 31);
+      return { endDate: end.toISOString().slice(0, 10) };
+    });
+    const pageResults = new Map();
+    const readyPages = new Set();
+    const completedPages = new Set();
+    const attemptedPages = new Set();
+    const publishHistory = () => {
+      if (loadId !== foreignLoadId.current) return [];
+      const pages = pageSpecs.map(page => ({ endDate: page.endDate, result: pageResults.get(page.endDate) || null }));
       const history = mergeInstitutionalHistoryRows(pages.flatMap(page => page.result?.history || [])
         .filter(row => row.date >= startDate && row.date <= latestForeignDate));
+      if (history.length) setForeignHistory({ history, pages });
+      return history;
+    };
+    const updateProgress = () => setForeignLoadProgress({ loaded: completedPages.size, total: pageCount });
+    const refreshPage = async page => {
+      attemptedPages.add(page.endDate);
+      let result = pageResults.get(page.endDate);
+      let fetched = false;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (loadId !== foreignLoadId.current) return;
+        try {
+          const fresh = await fetchTaiwanForeignHistory(page.endDate, institutionalCategory, flowMarket);
+          result = result
+            ? { ...fresh, history: mergeInstitutionalHistoryRows([...result.history, ...fresh.history]) }
+            : fresh;
+          fetched = true;
+          break;
+        } catch {
+          if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 600));
+        }
+      }
+      if (loadId !== foreignLoadId.current) return;
+      if (result?.history?.length) {
+        pageResults.set(page.endDate, result);
+        if (fetched) void cacheTaiwanForeignHistoryPage(page.endDate, result);
+      }
+      completedPages.add(page.endDate);
+      publishHistory();
+      updateProgress();
+    };
+    try {
+      const cachedPages = await readCachedTaiwanForeignHistoryPages(pageSpecs.map(page => page.endDate));
+      if (loadId !== foreignLoadId.current) return;
+      for (const page of pageSpecs) {
+        const cached = cachedPages.get(page.endDate);
+        if (!cached?.data?.history?.length) continue;
+        pageResults.set(page.endDate, cached.data);
+        const complete = foreignHistoryCoverage(cached.data.history, page.endDate, institutionalCategory, flowMarket).complete;
+        if (isTaiwanForeignHistoryCacheFresh(cached) && (complete || !retryIncomplete)) {
+          readyPages.add(page.endDate);
+          completedPages.add(page.endDate);
+        }
+      }
+      publishHistory();
+      updateProgress();
+      if (readyPages.size < pageCount && !readyPages.has(pageSpecs[0].endDate)) await refreshPage(pageSpecs[0]);
+      if (loadId !== foreignLoadId.current) return;
+      const remainingPages = pageSpecs.filter(page => !readyPages.has(page.endDate) && !attemptedPages.has(page.endDate));
+      let cursor = 0;
+      await Promise.all(Array.from({ length: Math.min(3, remainingPages.length) }, async () => {
+        while (cursor < remainingPages.length) {
+          if (loadId !== foreignLoadId.current) return;
+          await refreshPage(remainingPages[cursor++]);
+        }
+      }));
+      if (loadId !== foreignLoadId.current) return;
+      const history = publishHistory();
       if (!history.length) throw new Error('這段期間沒有可用的法人資料');
-      setForeignHistory({ history, pages });
     } catch (error) {
       if (loadId === foreignLoadId.current) setForeignHistoryError(error?.message || '法人走勢載入失敗');
     } finally {
@@ -1695,6 +1658,7 @@ export default function MarketOverviewScreen({ navigation }) {
     <ScrollView
       style={[styles.screen, { backgroundColor: colors.bg }]}
       contentContainerStyle={styles.content}
+      contentInsetAdjustmentBehavior="automatic"
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={colors.accent} />}
     >
       {loading && (
@@ -1859,22 +1823,21 @@ export default function MarketOverviewScreen({ navigation }) {
                 </TouchableOpacity>
               ))}
             </View>
-            <Text style={[styles.flowChartPageRange, { color: colors.textSub, marginTop: 12 }]}>{foreignHistoryLoading ? '載入中…' : foreignHistoryError ? '此段資料暫缺' : `${foreignHistory?.history?.[0]?.date || '—'} ～ ${foreignHistory?.history?.at(-1)?.date || '—'}`}</Text>
-            {foreignHistoryLoading ? (
-              <View style={styles.flowChartLoading}><ActivityIndicator size="small" color={colors.accent} /><Text style={{ color: colors.textMuted }}>正在載入逐日法人資料… {foreignLoadProgress?.loaded || 0}/{foreignLoadProgress?.total || 1}</Text></View>
-            ) : foreignHistoryError ? (
+            <Text style={[styles.flowChartPageRange, { color: colors.textSub, marginTop: 12 }]}>{foreignHistory?.history?.length ? `${foreignHistory.history[0].date} ～ ${foreignHistory.history.at(-1).date}${foreignHistoryLoading ? ' · 更新中' : ''}` : foreignHistoryLoading ? '載入中…' : foreignHistoryError ? '此段資料暫缺' : '尚無逐日資料'}</Text>
+            {foreignHistoryLoading && <View style={[styles.flowChartLoading, foreignHistory?.history?.length && styles.flowChartLoadingCompact]}><ActivityIndicator size="small" color={colors.accent} /><Text style={{ color: colors.textMuted }}>{foreignHistory?.history?.length ? '已顯示目前取得資料，背景補齊中' : '正在載入逐日法人資料'}… {foreignLoadProgress?.loaded || 0}/{foreignLoadProgress?.total || 1}</Text></View>}
+            {foreignHistoryError && !foreignHistory?.history?.length ? (
               <View style={styles.flowChartRetry}>
                 <Text style={[styles.flowChartEmpty, { color: colors.negative }]}>{foreignHistoryError}</Text>
-                <TouchableOpacity accessibilityRole="button" onPress={() => loadForeignPeriod(foreignPeriod)}><Text style={{ color: colors.accent }}>重試</Text></TouchableOpacity>
+                <TouchableOpacity accessibilityRole="button" onPress={() => loadForeignPeriod(foreignPeriod, true)}><Text style={{ color: colors.accent }}>重試</Text></TouchableOpacity>
               </View>
             ) : <>
-              {incompleteForeignPages.length > 0 && <View style={styles.flowChartRetry}>
+              {!foreignHistoryLoading && incompleteForeignPages.length > 0 && <View style={styles.flowChartRetry}>
                 <Text style={[styles.flowChartEmpty, { color: colors.negative, flex: 1 }]}>目前僅有 {foreignHistory.pages.length - incompleteForeignPages.length}/{foreignHistory.pages.length} 段{institutionalLabel(institutionalCategory)}資料達可用門檻；圖表僅顯示已取得的交易日，並非完整的{foreignPeriod === '1Y' ? '近一年' : foreignPeriod === '3M' ? '近三月' : '近一月'}。</Text>
-                <TouchableOpacity accessibilityRole="button" onPress={() => loadForeignPeriod(foreignPeriod)} style={{ minHeight: 44, paddingHorizontal: 8, justifyContent: 'center' }}><Text style={{ color: colors.accent }}>重試缺漏</Text></TouchableOpacity>
+                <TouchableOpacity accessibilityRole="button" onPress={() => loadForeignPeriod(foreignPeriod, true)} style={{ minHeight: 44, paddingHorizontal: 8, justifyContent: 'center' }}><Text style={{ color: colors.accent }}>重試缺漏</Text></TouchableOpacity>
               </View>}
-              {institutionalChartMode === 'compare'
+              {foreignHistory?.history?.length > 0 && (institutionalChartMode === 'compare'
                 ? <InstitutionalIndexChart history={foreignHistory?.history} market={flowMarket} category={institutionalCategory} colors={colors} />
-                : <ForeignNetChart history={foreignHistory?.history} market={flowMarket} category={institutionalCategory} colors={colors} />}
+                : <ForeignNetChart history={foreignHistory?.history} market={flowMarket} category={institutionalCategory} colors={colors} />)}
             </>}
             <MarginPeriodSelector period={foreignPeriod} onSelect={loadForeignPeriod} colors={colors} />
           </>
@@ -2075,6 +2038,9 @@ const styles = StyleSheet.create({
   flowPeriodButton: { minHeight: 40, paddingHorizontal: 14, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   flowCompareReadout: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, paddingHorizontal: 11, marginTop: 6 },
   flowCompareValue: { fontSize: 12, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  flowCompareModeRow: { flexDirection: 'row', gap: 6, paddingHorizontal: 11, marginTop: 8 },
+  flowCompareModeButton: { flex: 1, minHeight: 44, borderWidth: 1, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  flowCompareModeText: { fontSize: 12, fontWeight: '800' },
   marginAnalysisButton: { minHeight: 42, marginHorizontal: 11, marginTop: 12, borderWidth: 1, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   marginAnalysisModal: { flex: 1, paddingHorizontal: 16, paddingTop: 18 },
   marginAnalysisHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 16, gap: 10 },
@@ -2116,6 +2082,7 @@ const styles = StyleSheet.create({
   flowChartScroll: { paddingHorizontal: 6, paddingTop: 6 },
   flowChartEmpty: { fontSize: 11, lineHeight: 17, marginTop: 9, paddingHorizontal: 4 },
   flowChartLoading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 22 },
+  flowChartLoadingCompact: { paddingVertical: 7 },
   macroCard: { padding: 10 },
   valuationGrid: { flexDirection: 'row', gap: 6 },
   valuationMetric: { flex: 1, minWidth: 0, borderRadius: 11, padding: 8 },

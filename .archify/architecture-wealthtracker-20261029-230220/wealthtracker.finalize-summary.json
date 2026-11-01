@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "ok": false,
+  "command": "finalize",
+  "status": "fail",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/candidate.json",
+    "sha256": "c7867eb3bf108b9afb18f9d39be81e66d43921598e8689d8dfd55018e74e242f",
+    "bytes": 10883
+  },
+  "artifact": {
+    "path": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/wealthtracker.html",
+    "sha256": "45da07ce15b05ebfb65c67089aaa1b55612d16fccb100c324b258b46cd82e10c",
+    "bytes": 867356
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "fail"
+  },
+  "failedStage": "browser-check",
+  "diagnostics": [
+    {
+      "code": "viewer/browser-check-runtime",
+      "severity": "error",
+      "message": "browser-check could not complete its Chrome inspection.",
+      "subject": {
+        "artifact": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/wealthtracker.html"
+      },
+      "evidence": {
+        "reason": "Chrome DevTools read pipe failed: stream ended\nChrome process: still running.\nChrome transport: Node v24.14.0, libuv 1.51.0, darwin; pid=15995, exitCode=null, signalCode=null.\nChrome read pipe: readable=false, ended=true, destroyed=false, receivedBytes=0, messages=0, bufferedBytes=0.\nChrome write pipe: writable=true, ended=false, destroyed=false, completedWrites=1, writtenBytes=50, bufferedBytes=0."
+      },
+      "supportedFixes": [
+        "resolve the reported Chrome inspection error, then rerun browser-check"
+      ]
+    }
+  ],
+  "diagnosticSummary": {
+    "total": 1,
+    "shown": 1,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/wealthtracker.finalize.json",
+    "summaryReceipt": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/wealthtracker.finalize-summary.json",
+    "browserCheckReceipt": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/wealthtracker.browser-check.json"
+  },
+  "visualReview": "not-requested",
+  "durationMs": 4553,
+  "browserCheck": {
+    "requested": true,
+    "ran": false
+  }
+}

@@ -17,10 +17,27 @@ import {
   setAssetPerformanceExclusion,
 } from '../services/investmentPerformance';
 import { fetchMarketTechnicalContext } from '../services/technicalAnalysis';
+import { nextPerformanceSort, sortPerformanceRows } from '../features/trends/performanceSort';
+import { summarizeVisiblePerformanceRows } from '../features/trends/performanceSummary';
 
 const MARKET_ORDER = ['TW', 'US', 'CRYPTO', 'OTHER'];
 const PERIOD_OPTIONS = [
   ['ALL', '全部'], [7, '7d'], [30, '30d'], [90, '90d'], [180, '180d'], ['CUSTOM', '自定義'],
+];
+const DETAIL_TABLE_HEADER_HEIGHT = 30;
+const DETAIL_TABLE_ROW_HEIGHT = 54;
+const DETAIL_COLUMNS = [
+  ['totalPnl', '總損益', true],
+  ['averageCostPrice', '成本價', false],
+  ['totalReturn', '總報酬率', true],
+  ['realizedReturn', '已實現率', true],
+  ['unrealizedReturn', '未實現率', true],
+  ['realizedPnl', '已實現', true],
+  ['unrealizedPnl', '未實現', true],
+  ['realizedCost', '已售成本', false],
+  ['sellProceeds', '淨賣出', false],
+  ['openCost', '未售成本', false],
+  ['currentValue', '目前市值', false],
 ];
 const ENTRY_TYPES = [];
 const BENCHMARK_OPTIONS = {
@@ -64,6 +81,10 @@ const inferBenchmarkMarket = (symbol, selectedMarket) => {
 const today = () => new Date().toISOString().slice(0, 10);
 const number = value => Number.isFinite(Number(value)) ? Number(value) : 0;
 const amount = (value, currency) => `${currency} ${Math.round(number(value)).toLocaleString('zh-TW')}`;
+const costPrice = row => {
+  if (!(number(row.openShares) > 0) || !(Number(row.averageCostPrice) > 0) || !row.costCurrency) return '—';
+  return `${row.costCurrency} ${Number(row.averageCostPrice).toLocaleString('zh-TW', { maximumFractionDigits: row.market === 'CRYPTO' ? 8 : 2, minimumFractionDigits: row.market === 'CRYPTO' ? 0 : 2 })}`;
+};
 const pct = value => {
   if (!Number.isFinite(value)) return '資料累積中';
   const percentage = value * 100;
@@ -232,6 +253,8 @@ export default function InvestmentPerformanceCard({ valuedAssets, baseCurrency =
   const [exclusionVisible, setExclusionVisible] = useState(false);
   const [customPeriodVisible, setCustomPeriodVisible] = useState(false);
   const [detailVisible, setDetailVisible] = useState(false);
+  const pendingDetailCustom = useRef(false);
+  const returnToDetailAfterCustom = useRef(false);
   // Show a focused recent window by default. "全部" remains available for
   // users who explicitly want to inspect the full recorded history.
   const [periodDays, setPeriodDays] = useState(30);
@@ -517,6 +540,31 @@ export default function InvestmentPerformanceCard({ valuedAssets, baseCurrency =
     setCustomRange(null);
   };
 
+  const openPendingDetailCustom = () => {
+    if (!pendingDetailCustom.current) return;
+    pendingDetailCustom.current = false;
+    selectPeriod('CUSTOM');
+  };
+  const restoreDetailAfterCustom = () => {
+    if (!returnToDetailAfterCustom.current) return;
+    returnToDetailAfterCustom.current = false;
+    setDetailVisible(true);
+  };
+  const closeCustomPeriod = () => {
+    setCustomPeriodVisible(false);
+    if (Platform.OS !== 'ios') setTimeout(restoreDetailAfterCustom, 350);
+  };
+  const selectDetailPeriod = value => {
+    if (value !== 'CUSTOM') {
+      selectPeriod(value);
+      return;
+    }
+    pendingDetailCustom.current = true;
+    returnToDetailAfterCustom.current = true;
+    setDetailVisible(false);
+    if (Platform.OS !== 'ios') setTimeout(openPendingDetailCustom, 350);
+  };
+
   const applyCustomPeriod = () => {
     const start = datePartsToKey(customStart);
     const end = datePartsToKey(customEnd);
@@ -529,7 +577,7 @@ export default function InvestmentPerformanceCard({ valuedAssets, baseCurrency =
     const days = Math.floor((endMs - startMs) / 86_400_000) + 1;
     setCustomRange({ start, end });
     setPeriodDays(days);
-    setCustomPeriodVisible(false);
+    closeCustomPeriod();
   };
 
   if (loading && !data) return <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}><ActivityIndicator color={colors.accent} /></View>;
@@ -647,7 +695,8 @@ export default function InvestmentPerformanceCard({ valuedAssets, baseCurrency =
     <BenchmarkModal visible={benchmarkVisible} onClose={() => setBenchmarkVisible(false)} markets={navSeries.markets || []} selection={benchmarkSelection} onToggle={toggleBenchmark} colors={colors} />
     <CustomPeriodModal
       visible={customPeriodVisible}
-      onClose={() => setCustomPeriodVisible(false)}
+      onClose={closeCustomPeriod}
+      onDismiss={restoreDetailAfterCustom}
       start={customStart}
       end={customEnd}
       activeField={customDateField}
@@ -659,7 +708,7 @@ export default function InvestmentPerformanceCard({ valuedAssets, baseCurrency =
       onApply={applyCustomPeriod}
       colors={colors}
     />
-    <PerformanceDetailsModal visible={detailVisible} onClose={() => setDetailVisible(false)} summary={summary} currency={baseCurrency} colors={colors} />
+    <PerformanceDetailsModal visible={detailVisible} onClose={() => setDetailVisible(false)} onDismiss={openPendingDetailCustom} summary={summary} periodLabel={selectedPeriodLabel} periodDays={periodDays} customRange={customRange} onSelectPeriod={selectDetailPeriod} currency={baseCurrency} colors={colors} />
   </View>;
 }
 
@@ -790,67 +839,198 @@ function BenchmarkModal({ visible, onClose, markets, selection, onToggle, colors
   </Modal>;
 }
 
-function PerformanceDetailsModal({ visible, onClose, summary, currency, colors }) {
+function PerformanceDetailsModal({ visible, onClose, onDismiss, summary, periodLabel, periodDays, customRange, onSelectPeriod, currency, colors }) {
   const rows = summary?.assetRows || [];
   const [searchQuery, setSearchQuery] = useState('');
   const [marketFilter, setMarketFilter] = useState('ALL');
   const [positionFilter, setPositionFilter] = useState('ALL');
+  const [tableSort, setTableSort] = useState(null);
+  const [timelineExpanded, setTimelineExpanded] = useState(false);
+  const [highlightedAssetId, setHighlightedAssetId] = useState(null);
+  const [selectedAssetId, setSelectedAssetId] = useState(null);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [showFormula, setShowFormula] = useState(false);
+  const detailScrollRef = useRef(null);
+  const assetSectionY = useRef(0);
+  const assetTableY = useRef(0);
+  const highlightTimer = useRef(null);
   useEffect(() => {
     if (!visible) return;
     setSearchQuery('');
     setMarketFilter('ALL');
     setPositionFilter('ALL');
+    setTableSort(null);
+    setTimelineExpanded(false);
+    setHighlightedAssetId(null);
+    setSelectedAssetId(null);
+    setHistoryExpanded(false);
+    setShowFormula(false);
+    return () => clearTimeout(highlightTimer.current);
   }, [visible]);
   const availableMarkets = MARKET_ORDER.filter(market => rows.some(row => normalizePerformanceMarket(row.market) === market));
   const marketFilters = [['ALL', '全部'], ...availableMarkets.map(market => [market, marketLabel(market)])];
-  const positionFilters = [
-    ['ALL', `全部 ${rows.length}`],
-    ['OPEN', `持有中 ${rows.filter(row => number(row.openShares) > 0).length}`],
-    ['CLOSED', `已平倉 ${rows.filter(row => number(row.openShares) <= 0).length}`],
-  ];
   const normalizedQuery = searchQuery.trim().toLocaleLowerCase();
-  const filteredRows = rows.filter(row => {
+  const marketRows = rows.filter(row => {
     const matchesSearch = !normalizedQuery || `${row.symbol || ''} ${row.name || ''}`.toLocaleLowerCase().includes(normalizedQuery);
     const matchesMarket = marketFilter === 'ALL' || normalizePerformanceMarket(row.market) === marketFilter;
+    return matchesSearch && matchesMarket;
+  });
+  const positionFilters = [
+    ['ALL', `全部 ${marketRows.length}`],
+    ['OPEN', `持有中 ${marketRows.filter(row => number(row.openShares) > 0).length}`],
+    ['CLOSED', `已平倉 ${marketRows.filter(row => number(row.openShares) <= 0).length}`],
+  ];
+  const filteredRows = sortPerformanceRows(marketRows.filter(row => {
     const hasOpenPosition = number(row.openShares) > 0;
     const matchesPosition = positionFilter === 'ALL' || (positionFilter === 'OPEN' ? hasOpenPosition : !hasOpenPosition);
-    return matchesSearch && matchesMarket && matchesPosition;
-  });
-  return <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+    return matchesPosition;
+  }), tableSort);
+  const visibleSummary = summarizeVisiblePerformanceRows(filteredRows);
+  const selectTableSort = key => {
+    setTableSort(current => nextPerformanceSort(current, key));
+    setSelectedAssetId(null);
+  };
+  const visibleAssetIds = new Set(filteredRows.map(row => row.assetId));
+  const timeline = (summary?.timeline || []).filter(event => visibleAssetIds.has(event.assetId));
+  const visibleTimeline = timelineExpanded ? timeline : timeline.slice(0, 6);
+  const selectedRow = filteredRows.find(row => row.assetId === selectedAssetId);
+  const selectedHistory = selectedRow ? (summary?.tradeHistory || []).filter(event => event.assetId === selectedAssetId) : [];
+  const visibleHistory = historyExpanded ? selectedHistory : selectedHistory.slice(0, 8);
+  const toggleAssetHistory = assetId => {
+    setSelectedAssetId(current => current === assetId ? null : assetId);
+    setHistoryExpanded(false);
+  };
+  const jumpToAsset = assetId => {
+    const rowIndex = filteredRows.findIndex(row => row.assetId === assetId);
+    if (rowIndex < 0) return;
+    const targetY = assetSectionY.current + assetTableY.current + DETAIL_TABLE_HEADER_HEIGHT + rowIndex * DETAIL_TABLE_ROW_HEIGHT;
+    detailScrollRef.current?.scrollTo({ y: Math.max(0, targetY - 10), animated: true });
+    setHighlightedAssetId(assetId);
+    clearTimeout(highlightTimer.current);
+    highlightTimer.current = setTimeout(() => setHighlightedAssetId(null), 1800);
+  };
+  return <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose} onDismiss={onDismiss}>
     <View style={styles.overlay}><View style={[styles.modal, styles.detailModal, { backgroundColor: colors.card }]}>
-      <View style={styles.header}><View style={{ flex: 1 }}><Text style={[styles.title, { color: colors.text }]}>交易報酬明細</Text><Text style={[styles.hint, { color: colors.textMuted }]}>逐檔以 FIFO 配對買賣；未售部位依目前市值</Text></View><TouchableOpacity onPress={onClose}><X color={colors.textSub} /></TouchableOpacity></View>
+      <ScrollView ref={detailScrollRef} style={styles.detailContentScroll} contentContainerStyle={styles.detailContent} showsVerticalScrollIndicator keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
+      <View style={styles.header}><View style={{ flex: 1 }}><Text style={[styles.title, { color: colors.text }]}>交易報酬明細</Text><Text style={[styles.detailHeaderSubtitle, { color: colors.textMuted }]}>FIFO 配對 · {periodLabel}</Text></View><TouchableOpacity onPress={onClose}><X color={colors.textSub} /></TouchableOpacity></View>
+      <ScrollView horizontal style={styles.detailPeriodScroll} contentContainerStyle={styles.detailPeriodRow} showsHorizontalScrollIndicator={false}>
+        {PERIOD_OPTIONS.map(([value, label]) => {
+          const active = value === 'CUSTOM' ? Boolean(customRange) : !customRange && periodDays === value;
+          return <TouchableOpacity key={value} onPress={() => onSelectPeriod(value)} accessibilityRole="button" accessibilityState={{ selected: active }} style={[styles.detailPeriodButton, { borderColor: active ? colors.accent : colors.border, backgroundColor: active ? colors.accentSoft : colors.cardAlt }]}><Text style={[styles.detailPeriodText, { color: active ? colors.accent : colors.textSub }]}>{label}</Text></TouchableOpacity>;
+        })}
+      </ScrollView>
       <View style={[styles.detailSummary, { backgroundColor: colors.cardAlt, borderColor: colors.border }]}>
-        <View style={{ flex: 1 }}><Text style={[styles.metricLabel, { color: colors.textMuted }]}>總損益</Text><Text style={[styles.detailReturn, { color: number(summary?.totalPnl) >= 0 ? '#0DBD8B' : '#F03030' }]}>{number(summary?.totalPnl) >= 0 ? '+' : '−'}{amount(Math.abs(number(summary?.totalPnl)), currency)}</Text></View>
-        <View style={{ flex: 1 }}><Text style={[styles.metricLabel, { color: colors.textMuted }]}>總報酬率</Text><Text style={[styles.detailAnnualized, { color: number(summary?.totalReturn) >= 0 ? '#0DBD8B' : '#F03030' }]}>{pct(summary?.totalReturn)}</Text><Text style={[styles.hint, { color: colors.textMuted }]}>成本 {amount(summary?.totalCost, currency)}</Text></View>
+        <View style={styles.detailSummaryPrimary}>
+          <View style={{ flex: 1.2, minWidth: 0 }}><Text style={[styles.metricLabel, { color: colors.textMuted }]}>總損益</Text><Text numberOfLines={1} adjustsFontSizeToFit style={[styles.detailReturn, { color: number(visibleSummary.totalPnl) >= 0 ? '#0DBD8B' : '#F03030' }]}>{number(visibleSummary.totalPnl) >= 0 ? '+' : '−'}{amount(Math.abs(number(visibleSummary.totalPnl)), currency)}</Text></View>
+          <View style={{ flex: 1, minWidth: 0 }}><Text style={[styles.metricLabel, { color: colors.textMuted }]}>總報酬率</Text><Text numberOfLines={1} style={[styles.detailAnnualized, { color: number(visibleSummary.totalReturn) >= 0 ? '#0DBD8B' : '#F03030' }]}>{pct(visibleSummary.totalReturn)}</Text><Text numberOfLines={1} style={[styles.detailCost, { color: colors.textMuted }]}>成本 {amount(visibleSummary.totalCost, currency)}</Text></View>
+        </View>
+        <View style={[styles.detailSummaryBreakdown, { borderTopColor: colors.border }]}>
+          {[
+            ['已實現', visibleSummary.realizedPnl, visibleSummary.realizedReturn],
+            ['未實現', visibleSummary.unrealizedPnl, visibleSummary.unrealizedReturn],
+          ].map(([label, pnl, rate]) => (
+            <View key={label} style={styles.detailSummaryBreakdownItem}>
+              <Text style={[styles.metricLabel, { color: colors.textMuted }]}>{label}損益</Text>
+              <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.detailBreakdownValue, { color: number(pnl) >= 0 ? '#0DBD8B' : '#F03030' }]}>{number(pnl) >= 0 ? '+' : '−'}{amount(Math.abs(number(pnl)), currency)}</Text>
+              <Text numberOfLines={1} style={[styles.detailBreakdownRate, { color: Number.isFinite(rate) ? (rate >= 0 ? '#0DBD8B' : '#F03030') : colors.textMuted }]}>{Number.isFinite(rate) ? pct(rate) : '—'}</Text>
+            </View>
+          ))}
+        </View>
       </View>
-      <Text style={[styles.formula, { color: colors.textSub, backgroundColor: colors.cardAlt }]}>已實現＝淨賣出－已售成本{`\n`}未實現＝目前市值－未售成本{`\n`}總報酬率＝（已實現＋未實現）÷ 總配對成本</Text>
+      <TouchableOpacity onPress={() => setShowFormula(open => !open)} accessibilityRole="button" accessibilityState={{ expanded: showFormula }} style={styles.detailFormulaToggle}><Text style={[styles.detailFormulaToggleText, { color: colors.accent }]}>計算方式 {showFormula ? '⌃' : '⌄'}</Text></TouchableOpacity>
+      {showFormula && <Text style={[styles.formula, { color: colors.textSub, backgroundColor: colors.cardAlt }]}>已實現＝淨賣出－已售成本；報酬率＝已實現損益 ÷ 已售成本{`\n`}未實現＝目前市值－未售成本；報酬率＝未實現損益 ÷ 未售成本{`\n`}總報酬率＝（已實現＋未實現）÷ 總配對成本；無對應成本時顯示「—」</Text>}
       <View style={[styles.detailSearch, { borderColor: colors.border, backgroundColor: colors.cardAlt }]}>
         <Search size={16} color={colors.textMuted} />
         <TextInput value={searchQuery} onChangeText={setSearchQuery} autoCapitalize="characters" autoCorrect={false} placeholder="搜尋代號或名稱" placeholderTextColor={colors.textMuted} style={[styles.detailSearchInput, { color: colors.text }]} returnKeyType="search" />
         {searchQuery.length > 0 && <TouchableOpacity onPress={() => setSearchQuery('')} accessibilityLabel="清除搜尋"><X size={15} color={colors.textMuted} /></TouchableOpacity>}
       </View>
-      <ScrollView horizontal style={styles.detailFilterScroll} contentContainerStyle={styles.detailFilterRow} showsHorizontalScrollIndicator={false}>
+      <View style={styles.detailFilterRow}>
         {marketFilters.map(([value, label]) => <Chip key={value} label={label} active={marketFilter === value} colors={colors} onPress={() => setMarketFilter(value)} />)}
-      </ScrollView>
-      <ScrollView horizontal style={styles.detailFilterScroll} contentContainerStyle={styles.detailFilterRow} showsHorizontalScrollIndicator={false}>
+      </View>
+      <View style={styles.detailFilterRow}>
         {positionFilters.map(([value, label]) => <Chip key={value} label={label} active={positionFilter === value} colors={colors} onPress={() => setPositionFilter(value)} />)}
-      </ScrollView>
+      </View>
       <Text style={[styles.detailResultCount, { color: colors.textMuted }]}>顯示 {filteredRows.length} / {rows.length} 檔</Text>
-      <ScrollView style={styles.flowList} showsVerticalScrollIndicator={false}>
+      <View style={[styles.timelineSection, { borderTopColor: colors.borderLight }]}>
+        <Text style={[styles.timelineTitle, { color: colors.text }]}>交易時間線</Text>
+        <Text style={[styles.timelineHint, { color: colors.textMuted }]}>{periodLabel} · 左右滑動，點選可跳到逐檔損益；金額非單筆損益</Text>
+        {visibleTimeline.length === 0
+          ? <Text style={[styles.detailEmpty, { color: colors.textMuted }]}>此區間沒有符合條件的買賣紀錄</Text>
+          : <ScrollView horizontal style={styles.timelineHorizontalScroll} contentContainerStyle={styles.timelineHorizontalContent} showsHorizontalScrollIndicator nestedScrollEnabled>
+            {visibleTimeline.map((event, index) => {
+            const isSell = event.type === 'SELL';
+            const eventColor = isSell ? '#0DBD8B' : colors.accent;
+            return <TouchableOpacity key={`${event.id || event.assetId}-${event.date}-${index}`} onPress={() => jumpToAsset(event.assetId)} accessibilityRole="button" accessibilityLabel={`查看 ${event.symbol} 逐檔損益`} activeOpacity={0.7} style={styles.timelineEntry}>
+              <Text style={[styles.timelineDate, { color: colors.textMuted }]}>{event.date.replace(/-/g, '/')}</Text>
+              <View style={styles.timelineTrack}><View style={[styles.timelineDot, { backgroundColor: eventColor }]} /><View style={[styles.timelineTrackLine, { backgroundColor: colors.border }]} /></View>
+              <Text numberOfLines={1} style={[styles.timelineEvent, { color: colors.text }]}>{event.symbol} · {isSell ? '賣出' : '買入'} {number(event.shares).toLocaleString('zh-TW')} 股</Text>
+              <Text numberOfLines={1} style={[styles.timelineAmount, { color: eventColor }]}>{isSell ? '淨收' : '支出'} {amount(event.amount, currency)}</Text>
+            </TouchableOpacity>;
+            })}
+          </ScrollView>}
+        {timeline.length > 6 && <TouchableOpacity accessibilityRole="button" onPress={() => setTimelineExpanded(expanded => !expanded)} style={styles.timelineToggle}><Text style={[styles.timelineToggleText, { color: colors.accent }]}>{timelineExpanded ? '收起時間線' : `顯示全部 ${timeline.length} 筆交易`}</Text></TouchableOpacity>}
+      </View>
+      <View onLayout={event => { assetSectionY.current = event.nativeEvent.layout.y; }} style={[styles.assetDetailsSection, { borderTopColor: colors.borderLight }]}>
+        <Text style={[styles.timelineTitle, { color: colors.text }]}>逐檔損益</Text>
+        <Text style={[styles.timelineHint, { color: colors.textMuted }]}>點欄名排序 · 點標的看交易歷史 · 左右滑動查看金額（{currency}）與報酬率；成本價為持有股 FIFO 平均含費用原幣價</Text>
         {filteredRows.length === 0
           ? <Text style={[styles.detailEmpty, { color: colors.textMuted }]}>沒有符合條件的標的</Text>
-          : filteredRows.map(row => <View key={row.assetId} style={[styles.assetDetailRow, { borderBottomColor: colors.borderLight }]}><View style={styles.assetDetailHeader}><View style={{ flex: 1 }}><Text style={[styles.entryTitle, { color: colors.text }]}>{row.symbol}</Text><Text style={[styles.hint, { color: colors.textMuted }]}>{row.name}{row.openShares > 0 ? ` · 持有 ${row.openShares.toLocaleString()} 股` : ' · 已平倉'}</Text></View><Text style={[styles.flowAmount, { color: number(row.totalPnl) >= 0 ? '#0DBD8B' : '#F03030' }]}>{number(row.totalPnl) >= 0 ? '+' : '−'}{amount(Math.abs(number(row.totalPnl)), currency)}</Text></View><View style={styles.assetDetailMetrics}><SmallMetric label="已售成本" value={amount(row.realizedCost, currency)} colors={colors} /><SmallMetric label="淨賣出" value={amount(row.sellProceeds, currency)} colors={colors} /><SmallMetric label="已實現" value={`${number(row.realizedPnl) >= 0 ? '+' : '−'}${amount(Math.abs(number(row.realizedPnl)), currency)}`} colored={row.realizedPnl} colors={colors} /><SmallMetric label="未售成本" value={amount(row.openCost, currency)} colors={colors} /><SmallMetric label="目前市值" value={amount(row.currentValue, currency)} colors={colors} /><SmallMetric label="未實現" value={`${number(row.unrealizedPnl) >= 0 ? '+' : '−'}${amount(Math.abs(number(row.unrealizedPnl)), currency)}`} colored={row.unrealizedPnl} colors={colors} /></View></View>)}
+          : <View onLayout={event => { assetTableY.current = event.nativeEvent.layout.y; }} style={[styles.detailTable, { borderColor: colors.border }]}>
+            <View style={[styles.detailSymbolColumn, { borderRightColor: colors.border }]}>
+              <TouchableOpacity onPress={() => selectTableSort('symbol')} accessibilityRole="button" accessibilityLabel={`依標的代號排序${tableSort?.key === 'symbol' ? `，目前${tableSort.direction === 'asc' ? '升序' : '降序'}` : ''}`} activeOpacity={0.7} style={[styles.detailTableHeader, { backgroundColor: colors.cardAlt }]}><Text style={[styles.detailTableHeaderText, { color: tableSort?.key === 'symbol' ? colors.accent : colors.textMuted }]}>標的{tableSort?.key === 'symbol' ? (tableSort.direction === 'asc' ? ' ↑' : ' ↓') : ''}</Text></TouchableOpacity>
+              {filteredRows.map(row => <TouchableOpacity key={row.assetId} onPress={() => toggleAssetHistory(row.assetId)} accessibilityRole="button" accessibilityState={{ expanded: selectedAssetId === row.assetId }} accessibilityLabel={`${row.symbol}，${row.name || '名稱未提供'}，查看交易歷史`} activeOpacity={0.7} style={[styles.detailTableRow, styles.detailSymbolRow, { borderTopColor: colors.borderLight }, (highlightedAssetId === row.assetId || selectedAssetId === row.assetId) && styles.assetDetailHighlighted]}><Text numberOfLines={1} style={[styles.detailSymbol, { color: colors.text }]}>{row.symbol}</Text>{Boolean(row.name && row.name !== row.symbol) && <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.detailSymbolName, { color: colors.textSub }]}>{row.name}</Text>}<Text numberOfLines={1} style={[styles.detailSymbolSub, { color: selectedAssetId === row.assetId ? colors.accent : colors.textMuted }]}>{selectedAssetId === row.assetId ? '交易歷史 ↑' : number(row.openShares) > 0 ? `${number(row.openShares).toLocaleString('zh-TW')} 股 ›` : '已平倉 ›'}</Text></TouchableOpacity>)}
+            </View>
+            <ScrollView horizontal style={styles.detailTableHorizontalScroll} showsHorizontalScrollIndicator contentContainerStyle={styles.detailTableScrollContent} nestedScrollEnabled>
+              <View>
+                <View style={[styles.detailTableHeader, styles.detailTableDataRow, { backgroundColor: colors.cardAlt }]}>
+                  {DETAIL_COLUMNS.map(([key, label]) => <TouchableOpacity key={key} onPress={() => selectTableSort(key)} accessibilityRole="button" accessibilityLabel={`依${label}排序${tableSort?.key === key ? `，目前${tableSort.direction === 'asc' ? '升序' : '降序'}` : ''}`} activeOpacity={0.7} style={[styles.detailSortableHeader, key === 'averageCostPrice' && styles.detailCostPriceCell]}><Text numberOfLines={1} style={[styles.detailTableHeaderText, { color: tableSort?.key === key ? colors.accent : colors.textMuted }]}>{label}{tableSort?.key === key ? (tableSort.direction === 'asc' ? ' ↑' : ' ↓') : ''}</Text></TouchableOpacity>)}
+                </View>
+                {filteredRows.map(row => <TouchableOpacity key={row.assetId} onPress={() => toggleAssetHistory(row.assetId)} accessibilityRole="button" accessibilityState={{ expanded: selectedAssetId === row.assetId }} accessibilityLabel={`${row.symbol}，查看交易歷史`} activeOpacity={0.7} style={[styles.detailTableRow, styles.detailTableDataRow, { borderTopColor: colors.borderLight }, (highlightedAssetId === row.assetId || selectedAssetId === row.assetId) && styles.assetDetailHighlighted]}>
+                  {DETAIL_COLUMNS.map(([key, , signed]) => {
+                    const isReturn = key.endsWith('Return');
+                    const validReturn = isReturn && Number.isFinite(row[key]);
+                    const value = number(row[key]);
+                    const displayValue = key === 'averageCostPrice' ? costPrice(row) : isReturn
+                      ? (validReturn ? pct(value) : '—')
+                      : `${signed ? (value >= 0 ? '+' : '−') : ''}${Math.round(Math.abs(value)).toLocaleString('zh-TW')}`;
+                    const valueColor = signed && (!isReturn || validReturn) ? (value >= 0 ? '#0DBD8B' : '#F03030') : colors.text;
+                    return <Text key={key} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} style={[styles.detailTableValue, styles.detailTableCell, key === 'averageCostPrice' && styles.detailCostPriceCell, { color: valueColor }]}>{displayValue}</Text>;
+                  })}
+                </TouchableOpacity>)}
+              </View>
+            </ScrollView>
+          </View>}
+        {selectedRow && <View key={selectedRow.assetId} onLayout={event => {
+          const y = assetSectionY.current + event.nativeEvent.layout.y;
+          requestAnimationFrame(() => detailScrollRef.current?.scrollTo({ y: Math.max(0, y - 12), animated: true }));
+        }} style={[styles.tradeHistoryPanel, { borderColor: colors.border, backgroundColor: colors.cardAlt }]}>
+          <View style={styles.tradeHistoryHeader}><View style={{ flex: 1 }}><Text style={[styles.timelineTitle, { color: colors.text }]}>{selectedRow.symbol} 交易歷史</Text>{Boolean(selectedRow.name && selectedRow.name !== selectedRow.symbol) && <Text style={[styles.timelineHint, { color: colors.textSub, marginBottom: 2 }]}>{selectedRow.name}</Text>}<Text style={[styles.timelineHint, { color: colors.textMuted, marginBottom: 0 }]}>完整買賣紀錄 · 共 {selectedHistory.length} 筆（含所選期間之前）</Text></View><TouchableOpacity onPress={() => setSelectedAssetId(null)} accessibilityRole="button" accessibilityLabel="關閉交易歷史"><X size={18} color={colors.textMuted} /></TouchableOpacity></View>
+          {visibleHistory.length === 0
+            ? <Text style={[styles.detailEmpty, { color: colors.textMuted }]}>沒有可顯示的交易紀錄</Text>
+            : visibleHistory.map((event, index) => {
+              const isSell = event.type === 'SELL';
+              const eventColor = isSell ? '#0DBD8B' : colors.accent;
+              return <View key={`${event.id || event.assetId}-${event.date}-${index}`} style={[styles.tradeHistoryRow, { borderTopColor: colors.borderLight }]}>
+                <Text style={[styles.tradeHistoryDate, { color: colors.textMuted }]}>{event.date.replace(/-/g, '/')}</Text>
+                <Text style={[styles.tradeHistoryType, { color: eventColor }]}>{isSell ? '賣出' : '買入'}</Text>
+                <Text numberOfLines={1} style={[styles.tradeHistoryShares, { color: colors.text }]}>{number(event.shares).toLocaleString('zh-TW')} 股</Text>
+                <Text numberOfLines={1} style={[styles.tradeHistoryAmount, { color: eventColor }]}>{isSell ? '+' : '−'}{Math.round(number(event.amount)).toLocaleString('zh-TW')}</Text>
+              </View>;
+            })}
+          {selectedHistory.length > 8 && <TouchableOpacity onPress={() => setHistoryExpanded(expanded => !expanded)} accessibilityRole="button" style={styles.timelineToggle}><Text style={[styles.timelineToggleText, { color: colors.accent }]}>{historyExpanded ? '收起交易' : `顯示全部 ${selectedHistory.length} 筆`}</Text></TouchableOpacity>}
+          <Text style={[styles.tradeHistoryFootnote, { color: colors.textMuted }]}>金額為 {currency} 換算後的支出／淨收，並非單筆損益。</Text>
+        </View>}
+      </View>
       </ScrollView>
       <TouchableOpacity onPress={onClose} style={[styles.primaryButton, { backgroundColor: colors.accent }]}><Text style={[styles.primaryText, { color: colors.accentContrast }]}>完成</Text></TouchableOpacity>
     </View></View>
   </Modal>;
 }
 
-function SmallMetric({ label, value, colored, colors }) { return <View style={styles.smallMetric}><Text style={[styles.metricLabel, { color: colors.textMuted }]}>{label}</Text><Text style={[styles.smallMetricValue, { color: Number.isFinite(colored) ? (colored >= 0 ? '#0DBD8B' : '#F03030') : colors.text }]}>{value}</Text></View>; }
-
 function CustomPeriodModal({
   visible,
   onClose,
+  onDismiss,
   start,
   end,
   activeField,
@@ -878,7 +1058,7 @@ function CustomPeriodModal({
     day: Math.min(previous.day, daysInMonth(previous.year, value)),
   }));
   const dayValues = Array.from({ length: daysInMonth(selected.year, selected.month) }, (_, index) => index + 1);
-  return <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+  return <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose} onDismiss={onDismiss}>
     <View style={styles.overlay}>
       <View style={[styles.dateRangeModal, { backgroundColor: colors.card }]}>
         <View style={styles.dateRangeHeader}>
@@ -998,20 +1178,62 @@ const styles = StyleSheet.create({
   secondaryButton: { minHeight: 40, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 7, marginTop: 14 },
   detailButton: { minHeight: 48, borderRadius: 13, borderWidth: 1, paddingHorizontal: 13, marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 10 },
   detailButtonTitle: { fontSize: 12, fontWeight: '900' }, detailButtonSub: { fontSize: 9, marginTop: 2 },
-  detailSummary: { borderWidth: 1, borderRadius: 14, padding: 14, flexDirection: 'row', gap: 16, marginTop: 16 },
-  detailReturn: { fontSize: 24, fontWeight: '900', marginTop: 3 },
-  detailAnnualized: { fontSize: 17, fontWeight: '900', marginTop: 5 },
-  formula: { fontSize: 11, lineHeight: 17, borderRadius: 11, padding: 11, marginTop: 12 },
-  detailSearch: { height: 42, borderWidth: 1, borderRadius: 12, paddingHorizontal: 11, marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  detailSearchInput: { flex: 1, minWidth: 0, height: 40, paddingVertical: 0, fontSize: 12 },
-  detailModal: { height: '88%' },
-  detailFilterScroll: { height: 40, flexGrow: 0, marginTop: 8 }, detailFilterRow: { alignItems: 'center', gap: 7, paddingVertical: 3, paddingRight: 3 },
+  detailHeaderSubtitle: { fontSize: 10, marginTop: 2 },
+  detailPeriodScroll: { flexGrow: 0, marginTop: 10 }, detailPeriodRow: { gap: 5, paddingRight: 2 },
+  detailPeriodButton: { minWidth: 44, minHeight: 30, borderWidth: 1, borderRadius: 9, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center' },
+  detailPeriodText: { fontSize: 10, fontWeight: '800' },
+  detailSummary: { borderWidth: 1, borderRadius: 12, padding: 10, marginTop: 10 },
+  detailSummaryPrimary: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  detailSummaryBreakdown: { flexDirection: 'row', borderTopWidth: 1, paddingTop: 9, marginTop: 7, gap: 10 },
+  detailSummaryBreakdownItem: { flex: 1, minWidth: 0 },
+  detailBreakdownValue: { fontSize: 13, fontWeight: '800', marginTop: 2 },
+  detailBreakdownRate: { fontSize: 11, fontWeight: '700', marginTop: 2 },
+  detailReturn: { fontSize: 18, fontWeight: '900', marginTop: 2 },
+  detailAnnualized: { fontSize: 15, fontWeight: '900', marginTop: 2 }, detailCost: { fontSize: 9, marginTop: 2 },
+  detailFormulaToggle: { alignSelf: 'flex-start', minHeight: 28, justifyContent: 'center' }, detailFormulaToggleText: { fontSize: 10, fontWeight: '800' },
+  formula: { fontSize: 10, lineHeight: 15, borderRadius: 9, padding: 9, marginBottom: 4 },
+  detailSearch: { height: 40, borderWidth: 1, borderRadius: 10, paddingHorizontal: 10, marginTop: 4, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  detailSearchInput: { flex: 1, minWidth: 0, height: 38, paddingVertical: 0, fontSize: 12, textAlignVertical: 'center', includeFontPadding: false },
+  detailModal: { height: '88%', paddingHorizontal: 14, paddingTop: 14, paddingBottom: 20 },
+  detailContentScroll: { flex: 1, minHeight: 0 }, detailContent: { paddingBottom: 14 },
+  detailFilterRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 5, marginTop: 6 },
   detailResultCount: { fontSize: 9, marginTop: 7 }, detailEmpty: { fontSize: 12, textAlign: 'center', paddingVertical: 26 },
+  timelineSection: { borderTopWidth: StyleSheet.hairlineWidth, marginTop: 15, paddingTop: 14 },
+  timelineTitle: { fontSize: 13, fontWeight: '900' }, timelineHint: { fontSize: 10, lineHeight: 15, marginTop: 4, marginBottom: 12 },
+  timelineHorizontalScroll: { flexGrow: 0 }, timelineHorizontalContent: { paddingRight: 2 },
+  timelineEntry: { width: 145, minHeight: 74, paddingVertical: 3, justifyContent: 'space-between' },
+  timelineTrack: { height: 12, flexDirection: 'row', alignItems: 'center' },
+  timelineDot: { width: 8, height: 8, borderRadius: 4 }, timelineTrackLine: { flex: 1, height: 1, marginLeft: 5, marginRight: 8 },
+  timelineDate: { fontSize: 9 }, timelineEvent: { fontSize: 10, fontWeight: '800' }, timelineAmount: { fontSize: 10, fontWeight: '800' },
+  timelineToggle: { alignSelf: 'flex-start', paddingVertical: 8 }, timelineToggleText: { fontSize: 11, fontWeight: '800' },
+  assetDetailsSection: { borderTopWidth: StyleSheet.hairlineWidth, marginTop: 12, paddingTop: 14 },
+  assetDetailHighlighted: { backgroundColor: 'rgba(83, 157, 255, 0.14)', borderRadius: 10 },
+  detailTable: { flexDirection: 'row', borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, overflow: 'hidden' },
+  detailSymbolColumn: { width: 86, borderRightWidth: StyleSheet.hairlineWidth },
+  detailTableHorizontalScroll: { flex: 1, minWidth: 0 },
+  detailTableScrollContent: { flexGrow: 1 },
+  detailTableHeader: { height: DETAIL_TABLE_HEADER_HEIGHT, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 8 },
+  detailTableHeaderText: { fontSize: 10, lineHeight: 14, fontWeight: '700', textAlign: 'center', includeFontPadding: false },
+  detailTableRow: { height: DETAIL_TABLE_ROW_HEIGHT, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 8, borderTopWidth: StyleSheet.hairlineWidth },
+  detailSymbolRow: { paddingHorizontal: 3 },
+  detailTableDataRow: { flexDirection: 'row', paddingHorizontal: 0 },
+  detailTableCell: { width: 108, paddingHorizontal: 6, textAlign: 'center' },
+  detailCostPriceCell: { width: 124 },
+  detailSortableHeader: { width: 108, height: DETAIL_TABLE_HEADER_HEIGHT, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 4 },
+  detailTableValue: { fontSize: 11, lineHeight: 16, fontWeight: '800', includeFontPadding: false },
+  detailSymbol: { fontSize: 10, lineHeight: 14, fontWeight: '800', textAlign: 'center', includeFontPadding: false },
+  detailSymbolName: { fontSize: 9, lineHeight: 13, marginTop: 1, textAlign: 'center', includeFontPadding: false },
+  detailSymbolSub: { fontSize: 9, lineHeight: 13, marginTop: 1, textAlign: 'center', includeFontPadding: false },
+  tradeHistoryPanel: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, marginTop: 12, paddingHorizontal: 12, paddingTop: 12, paddingBottom: 8 },
+  tradeHistoryHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 10 },
+  tradeHistoryRow: { minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: 5, borderTopWidth: StyleSheet.hairlineWidth },
+  tradeHistoryDate: { width: 76, fontSize: 9 }, tradeHistoryType: { width: 28, fontSize: 9, fontWeight: '800' },
+  tradeHistoryShares: { flex: 1, fontSize: 9 }, tradeHistoryAmount: { minWidth: 72, fontSize: 10, fontWeight: '800', textAlign: 'right' },
+  tradeHistoryFootnote: { fontSize: 9, lineHeight: 13, marginTop: 8 },
   flowLegend: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, marginTop: 9 },
   flowList: { flex: 1, minHeight: 0, marginTop: 8 },
   flowRow: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 12, borderBottomWidth: StyleSheet.hairlineWidth, paddingVertical: 9 },
   flowAmount: { fontSize: 12, fontWeight: '900' },
-  assetDetailRow: { borderBottomWidth: StyleSheet.hairlineWidth, paddingVertical: 12 }, assetDetailHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 }, assetDetailMetrics: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 8 }, smallMetric: { width: '33.333%', paddingVertical: 5 }, smallMetricValue: { fontSize: 11, fontWeight: '800', marginTop: 2 },
   entryRow: { flexDirection: 'row', alignItems: 'center', gap: 8, borderTopWidth: StyleSheet.hairlineWidth, paddingVertical: 10 }, entryTitle: { fontSize: 12, fontWeight: '800' }, entryAmount: { fontSize: 11, fontWeight: '800' },
   keyboardAvoider: { flex: 1 }, overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' }, modal: { maxHeight: '88%', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 34 },
   centerModal: { borderRadius: 20, padding: 20 },

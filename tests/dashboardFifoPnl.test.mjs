@@ -74,7 +74,68 @@ test('dashboard FIFO P&L includes matched open lots and fees, not assets with no
   assert.ok(Math.abs(summary.unrealizedPnl - 13.8) < 1e-8);
   assert.equal(summary.assetRows.length, 1);
   assert.equal(summary.assetRows[0].symbol, 'XYZ');
+  assert.equal(summary.assetRows[0].averageCostPrice, 10.4);
+  assert.equal(summary.assetRows[0].costCurrency, 'USD');
+  assert.ok(Math.abs(summary.assetRows[0].totalReturn - summary.totalReturn) < 1e-8);
+  assert.ok(Math.abs(summary.assetRows[0].realizedReturn - summary.realizedReturn) < 1e-8);
+  assert.ok(Math.abs(summary.assetRows[0].unrealizedReturn - summary.unrealizedReturn) < 1e-8);
+  assert.deepEqual(summary.timeline.map(event => [event.date, event.type, event.symbol, event.amount]), [
+    ['2026-10-02', 'SELL', 'XYZ', 29],
+    ['2026-10-01', 'BUY', 'XYZ', 52],
+  ]);
+  assert.deepEqual(summary.tradeHistory.map(event => event.id), ['sell-1', 'buy-1']);
   assert.equal(context.assetValuations['US:NOHIST'].currentValue, 200);
+});
+
+test('trade timeline follows the selected window while FIFO keeps earlier buy cost', () => {
+  const context = buildCurrentFifoPerformanceContext([
+    { id: 'xyz', category: 'investment', symbol: 'XYZ', market_type: 'US', current_shares: 3, converted_amount: 45 },
+  ], [
+    { id: 'buy', assetId: 'xyz', symbol: 'XYZ', market: 'US', type: 'BUY', shares: 5, amount: -50, date: '2026-10-01' },
+    { id: 'sell', assetId: 'xyz', symbol: 'XYZ', market: 'US', type: 'SELL', shares: 2, amount: 30, date: '2026-10-20' },
+  ], '2026-10-22T12:00:00.000Z');
+
+  const summary = calculateTradePerformance(context, 'US', 7);
+
+  assert.equal(summary.realizedCost, 20);
+  assert.equal(summary.realizedPnl, 10);
+  assert.equal(summary.assetRows[0].totalReturn, 0.5);
+  assert.equal(summary.assetRows[0].realizedReturn, 0.5);
+  assert.equal(summary.assetRows[0].unrealizedReturn, null);
+  assert.equal(summary.assetRows[0].averageCostPrice, null);
+  assert.deepEqual(summary.timeline.map(event => event.id), ['sell']);
+  assert.deepEqual(summary.tradeHistory.map(event => event.id), ['sell', 'buy']);
+});
+
+test('holding cost price follows remaining FIFO lots in original currency', () => {
+  const context = buildCurrentFifoPerformanceContext([
+    { id: 'tw', category: 'investment', symbol: '2330', market_type: 'TW', current_shares: 3, converted_amount: 390 },
+  ], [
+    { id: 'buy-a', assetId: 'tw', symbol: '2330', market: 'TW', currency: 'TWD', type: 'BUY', shares: 2, amount: -200, amountNative: 202, date: '2026-10-01' },
+    { id: 'buy-b', assetId: 'tw', symbol: '2330', market: 'TW', currency: 'TWD', type: 'BUY', shares: 3, amount: -360, amountNative: 363, date: '2026-10-02' },
+    { id: 'sell', assetId: 'tw', symbol: '2330', market: 'TW', currency: 'TWD', type: 'SELL', shares: 2, amount: 250, amountNative: 250, date: '2026-10-03' },
+  ], '2026-10-22T12:00:00.000Z');
+
+  const row = calculateTradePerformance(context, 'TW', 'ALL').assetRows[0];
+  assert.equal(row.openShares, 3);
+  assert.equal(row.averageCostPrice, 121);
+  assert.equal(row.costCurrency, 'TWD');
+
+  const closedContext = buildCurrentFifoPerformanceContext([], context.transactionFlows, '2026-10-22T12:00:00.000Z');
+  assert.equal(calculateTradePerformance(closedContext, 'TW', 'ALL').assetRows[0].averageCostPrice, null);
+});
+
+test('USD holding cost price is not mistaken for TWD converted cost', () => {
+  const context = buildCurrentFifoPerformanceContext([
+    { id: 'us', category: 'investment', symbol: 'GOOGL', market_type: 'US', current_shares: 2, converted_amount: 6800 },
+  ], [
+    { id: 'buy', assetId: 'us', symbol: 'GOOGL', market: 'US', currency: 'USD', type: 'BUY', shares: 2, amount: -6400, amountNative: 202, date: '2026-10-01' },
+  ], '2026-10-22T12:00:00.000Z');
+
+  const row = calculateTradePerformance(context, 'US', 'ALL').assetRows[0];
+  assert.equal(row.openCost, 6400);
+  assert.equal(row.averageCostPrice, 101);
+  assert.equal(row.costCurrency, 'USD');
 });
 
 test('dashboard FIFO P&L excludes identities opted out of performance', () => {

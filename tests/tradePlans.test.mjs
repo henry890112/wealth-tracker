@@ -154,10 +154,10 @@ test('單純均價變動不影響依停損計算出的正常狀態', () => {
   assert.deepEqual(getTradePlanDisplayStatus(calculation), { state: 'normal', label: '正常' });
 });
 
-test('舊版失效後收復狀態統一顯示為失效', () => {
+test('舊版失效後收復狀態顯示為已收復', () => {
   assert.deepEqual(
     getTradePlanDisplayStatus({ state: 'recovered', rebaseRequired: true }),
-    { state: 'invalid', label: '失效' },
+    { state: 'recovered', label: '已收復' },
   );
 });
 
@@ -358,7 +358,7 @@ test('盤中剛好觸及停損時標示觸及並維持警戒', () => {
   assert.match(result.stateReason, /盤中價格已觸及.*收盤確認前維持警戒/);
 });
 
-test('盤中行情以前一根日 K 確認失效，最新價收復時改列待重建', () => {
+test('盤中行情以前一根日 K 確認失效，最新價收復時另列已收復', () => {
   const analysis = {
     rows: [
       { time: '2026-10-09', close: 96 },
@@ -385,9 +385,10 @@ test('盤中行情以前一根日 K 確認失效，最新價收復時改列待�
   assert.equal(result.newlyConfirmedInvalid, true);
   assert.equal(result.invalidationPrice, 96);
   assert.equal(result.invalidationSessionDate, '2026-10-09');
+  assert.deepEqual(getTradePlanDisplayStatus(result), { state: 'recovered', label: '已收復' });
 });
 
-test('已確認失效後價格收復會顯示待重建但保留失效紀錄', () => {
+test('已確認失效後價格收復會顯示已收復但保留失效紀錄', () => {
   const result = calculateTradePlan({
     entryPrice: 100,
     atr: 2,
@@ -405,8 +406,168 @@ test('已確認失效後價格收復會顯示待重建但保留失效紀錄', ()
   assert.equal(result.recoveredAfterInvalidation, true);
   assert.equal(result.invalidationStopPrice, 97);
   assert.equal(result.newlyConfirmedInvalid, false);
+  assert.deepEqual(getTradePlanDisplayStatus(result), { state: 'recovered', label: '已收復' });
   assert.match(result.stateReason, /已收復原停損/);
-  assert.match(result.stateReason, /狀態仍列為失效/);
+  assert.match(result.stateReason, /須待後續正式收盤站上停損才恢復正常/);
+});
+
+test('後續正式收盤站回停損會恢復正常，並保留原失效紀錄', () => {
+  const savedPlan = {
+    entryPrice: 100,
+    atr: 2,
+    initialStop: 97,
+    initialRiskPerShare: 3,
+    effectiveStop: 97,
+    confirmedInvalidAt: '2026-10-10T01:00:00Z',
+    confirmedInvalidPrice: 96,
+    confirmedInvalidSessionDate: '2026-10-09',
+    marketType: 'US',
+  };
+  const recovered = calculateTradePlan({
+    ...savedPlan,
+    currentPrice: 99,
+    analysis: { rows: [{ time: '2026-10-12', close: 99 }] },
+  });
+  assert.deepEqual(getTradePlanDisplayStatus(recovered), { state: 'normal', label: '正常' });
+  assert.equal(recovered.confirmedInvalid, false);
+  assert.equal(recovered.recoveredByClose, true);
+  assert.equal(recovered.invalidatedAt, savedPlan.confirmedInvalidAt);
+  assert.equal(recovered.invalidationPrice, 96);
+  assert.equal(recovered.invalidationSessionDate, '2026-10-09');
+  assert.match(recovered.stateReason, /正式收盤.*計畫恢復正常.*失效紀錄保留/);
+
+  const staleQuote = calculateTradePlan({
+    ...savedPlan,
+    currentPrice: 95,
+    analysis: { rows: [{ time: '2026-10-12', close: 99 }] },
+  });
+  assert.deepEqual(getTradePlanDisplayStatus(staleQuote), { state: 'normal', label: '正常' });
+
+  const intraday = calculateTradePlan({
+    ...savedPlan,
+    currentPrice: 95,
+    isIntraday: true,
+    analysis: { rows: [
+      { time: '2026-10-12', close: 99 },
+      { time: '2026-10-13', close: 95 },
+    ] },
+  });
+  assert.deepEqual(getTradePlanDisplayStatus(intraday), { state: 'warning', label: '警戒' });
+  assert.equal(intraday.confirmedInvalid, false);
+});
+
+test('收盤收復後沿用接近停損警戒門檻，盤中也依現價判斷', () => {
+  const savedPlan = {
+    entryPrice: 100,
+    atr: 2,
+    initialStop: 97,
+    initialRiskPerShare: 3,
+    effectiveStop: 97,
+    confirmedInvalidAt: '2026-10-10T01:00:00Z',
+    confirmedInvalidPrice: 96,
+    confirmedInvalidSessionDate: '2026-10-09',
+  };
+  // 0.5 ATR = 1; 0.25 initial risk = 0.75. Warning ends at 98.
+  const closeNearStop = calculateTradePlan({
+    ...savedPlan,
+    currentPrice: 110,
+    analysis: { rows: [{ time: '2026-10-12', close: 98 }] },
+  });
+  assert.deepEqual(getTradePlanDisplayStatus(closeNearStop), { state: 'warning', label: '警戒' });
+  assert.equal(closeNearStop.confirmedInvalid, false);
+  assert.match(closeNearStop.stateReason, /收盤價接近.*維持警戒/);
+
+  const intradayNearStop = calculateTradePlan({
+    ...savedPlan,
+    currentPrice: 98,
+    isIntraday: true,
+    analysis: { rows: [
+      { time: '2026-10-12', close: 99 },
+      { time: '2026-10-13', close: 98 },
+    ] },
+  });
+  assert.deepEqual(getTradePlanDisplayStatus(intradayNearStop), { state: 'warning', label: '警戒' });
+  assert.match(intradayNearStop.stateReason, /現價接近.*維持警戒/);
+
+  const outsideBuffer = calculateTradePlan({
+    ...savedPlan,
+    currentPrice: 98.01,
+    isIntraday: true,
+    analysis: { rows: [
+      { time: '2026-10-12', close: 99 },
+      { time: '2026-10-13', close: 98.01 },
+    ] },
+  });
+  assert.deepEqual(getTradePlanDisplayStatus(outsideBuffer), { state: 'normal', label: '正常' });
+});
+
+test('停損價相等不算收盤收復，缺少較新收盤也不會解除失效', () => {
+  const savedPlan = {
+    entryPrice: 100,
+    atr: 2,
+    currentPrice: 110,
+    initialStop: 97,
+    initialRiskPerShare: 3,
+    effectiveStop: 97,
+    confirmedInvalidAt: '2026-10-10T01:00:00Z',
+    confirmedInvalidPrice: 96,
+    confirmedInvalidSessionDate: '2026-10-09',
+  };
+  const touched = calculateTradePlan({
+    ...savedPlan,
+    analysis: { rows: [{ time: '2026-10-12', close: 97 }] },
+  });
+  assert.deepEqual(getTradePlanDisplayStatus(touched), { state: 'recovered', label: '已收復' });
+  assert.equal(touched.recoveredByClose, false);
+  const staleClose = calculateTradePlan({
+    ...savedPlan,
+    analysis: { rows: [{ time: '2026-10-09', close: 98 }] },
+  });
+  assert.equal(staleClose.recoveredByClose, false);
+});
+
+test('恢復正常後再次正式收盤跌破，更新失效確認日期與價格', () => {
+  const result = calculateTradePlan({
+    entryPrice: 100,
+    atr: 2,
+    currentPrice: 95,
+    initialStop: 97,
+    initialRiskPerShare: 3,
+    effectiveStop: 97,
+    confirmedInvalidAt: '2026-10-10T01:00:00Z',
+    confirmedInvalidPrice: 96,
+    confirmedInvalidSessionDate: '2026-10-09',
+    analysis: { rows: [
+      { time: '2026-10-12', close: 98 },
+      { time: '2026-10-13', close: 95 },
+    ] },
+  });
+  assert.deepEqual(getTradePlanDisplayStatus(result), { state: 'invalid', label: '失效' });
+  assert.equal(result.newlyConfirmedInvalid, true);
+  assert.equal(result.invalidationSessionDate, '2026-10-13');
+  assert.equal(result.invalidationPrice, 95);
+});
+
+test('連續收在停損下方不會每天覆寫首次失效確認', () => {
+  const result = calculateTradePlan({
+    entryPrice: 100,
+    atr: 2,
+    currentPrice: 94,
+    initialStop: 97,
+    initialRiskPerShare: 3,
+    effectiveStop: 97,
+    confirmedInvalidAt: '2026-10-10T01:00:00Z',
+    confirmedInvalidPrice: 96,
+    confirmedInvalidSessionDate: '2026-10-09',
+    analysis: { rows: [
+      { time: '2026-10-12', close: 95 },
+      { time: '2026-10-13', close: 94 },
+    ] },
+  });
+  assert.equal(result.state, 'invalid');
+  assert.equal(result.newlyConfirmedInvalid, false);
+  assert.equal(result.invalidationSessionDate, '2026-10-09');
+  assert.equal(result.invalidationPrice, 96);
 });
 
 test('已確認失效且最新價格仍在停損下方會保持風控失效', () => {
@@ -425,6 +586,7 @@ test('已確認失效且最新價格仍在停損下方會保持風控失效', ()
   assert.equal(result.state, 'invalid');
   assert.equal(result.confirmedInvalid, true);
   assert.equal(result.recoveredAfterInvalidation, false);
+  assert.deepEqual(getTradePlanDisplayStatus(result), { state: 'invalid', label: '失效' });
   assert.match(result.stateReason, /風控失效已確認/);
 });
 

@@ -1,0 +1,1023 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "startedAt": "2026-10-29T15:09:54.455Z",
+  "specification": {
+    "path": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/api-candidate.json",
+    "sha256": "5db25547afd44fa7e988d213e554af72a507bd9917d6c8e831cc979e010924a6",
+    "bytes": 14368
+  },
+  "artifact": {
+    "path": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/api-data-flow.html",
+    "sha256": "c4040de1e8cefc96d95428b36af9af87ff3b5bca372ce67a3f6396f325c8abad",
+    "bytes": 883316
+  },
+  "stages": {
+    "validate": {
+      "status": "pass",
+      "exitCode": 0,
+      "durationMs": null,
+      "execution": "embedded-in-deliver",
+      "command": [
+        "/Users/henry890112/.nvm/versions/node/v24.14.0/bin/node",
+        "/private/tmp/wealthtracker-archify/archify/bin/archify.mjs",
+        "deliver",
+        "architecture",
+        "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/api-candidate.json",
+        "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/api-data-flow.html",
+        "--quality",
+        "showcase",
+        "--repo-root",
+        "/private/tmp/wealthtracker-archify-snapshot.q2UzGk",
+        "--json"
+      ],
+      "receipt": {
+        "schemaVersion": 1,
+        "ok": true,
+        "command": "validate",
+        "specification": {
+          "sha256": "5db25547afd44fa7e988d213e554af72a507bd9917d6c8e831cc979e010924a6",
+          "bytes": 14368
+        },
+        "validation": {
+          "checksPassed": 9,
+          "checkCount": 9,
+          "compositionProfile": "showcase",
+          "compositionStatus": "pass",
+          "errors": 0,
+          "warnings": 0
+        }
+      }
+    },
+    "deliver": {
+      "status": "pass",
+      "exitCode": 0,
+      "durationMs": 204,
+      "command": [
+        "/Users/henry890112/.nvm/versions/node/v24.14.0/bin/node",
+        "/private/tmp/wealthtracker-archify/archify/bin/archify.mjs",
+        "deliver",
+        "architecture",
+        "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/api-candidate.json",
+        "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/api-data-flow.html",
+        "--quality",
+        "showcase",
+        "--repo-root",
+        "/private/tmp/wealthtracker-archify-snapshot.q2UzGk",
+        "--json"
+      ],
+      "receipt": {
+        "schemaVersion": 1,
+        "receiptId": "51ce1dba-7b79-4bed-81b3-6ea83f64e66a",
+        "ok": true,
+        "command": "deliver",
+        "type": "architecture",
+        "input": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/api-candidate.json",
+        "output": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/api-data-flow.html",
+        "specification": {
+          "sha256": "5db25547afd44fa7e988d213e554af72a507bd9917d6c8e831cc979e010924a6",
+          "bytes": 14368
+        },
+        "artifact": {
+          "sha256": "c4040de1e8cefc96d95428b36af9af87ff3b5bca372ce67a3f6396f325c8abad",
+          "bytes": 883316
+        },
+        "validation": {
+          "checksPassed": 9,
+          "checkCount": 9,
+          "compositionProfile": "showcase",
+          "compositionStatus": "pass",
+          "errors": 0,
+          "warnings": 0
+        },
+        "evidence": {
+          "verified": true,
+          "repository": "git@github.com:henry890112/wealth-tracker",
+          "revision": "3ff4d4cc070ea1cc052230fd3ed3cc70812f5324",
+          "references": 47,
+          "linkMode": "local-only"
+        },
+        "update": {
+          "status": "unavailable",
+          "installedVersion": null,
+          "availableVersion": null,
+          "releaseNotes": null,
+          "checkedAt": null,
+          "source": null,
+          "noticeRequired": false,
+          "noticeText": null,
+          "reason": "disabled"
+        }
+      }
+    },
+    "check": {
+      "status": "pass",
+      "exitCode": 0,
+      "durationMs": 78,
+      "command": [
+        "/Users/henry890112/.nvm/versions/node/v24.14.0/bin/node",
+        "/private/tmp/wealthtracker-archify/archify/bin/archify.mjs",
+        "check",
+        "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/api-data-flow.html",
+        "--require-provenance"
+      ],
+      "receipt": {
+        "ok": true,
+        "file": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/api-data-flow.html",
+        "artifact": {
+          "sha256": "c4040de1e8cefc96d95428b36af9af87ff3b5bca372ce67a3f6396f325c8abad",
+          "bytes": 883316
+        },
+        "checks": [
+          {
+            "name": "single_svg",
+            "ok": true,
+            "details": [
+              "found 1 <svg> block(s)"
+            ]
+          },
+          {
+            "name": "finite_svg",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "orthogonal_arrows",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "label_route_clearance",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "relationship_crossings",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "relationship_corridors",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "container_border_runs",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "route_rhythm",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "legend_clearance",
+            "ok": true,
+            "details": []
+          }
+        ],
+        "composition": {
+          "schemaVersion": 1,
+          "profile": "showcase",
+          "status": "pass",
+          "summary": {
+            "errors": 0,
+            "warnings": 0
+          },
+          "metrics": {
+            "properCrossings": 0,
+            "resolvedCrossovers": 0,
+            "ambiguousCorridors": 0,
+            "arrowheadCollisions": 0,
+            "containerBorderRuns": 0,
+            "labelRouteClearanceIssues": 0,
+            "labelCanvasOverflowIssues": 0,
+            "minLabelRouteClearance": 142,
+            "desktopReadabilityIssues": 0,
+            "viewportHeightIssues": 0,
+            "minProjectedNodeTextPx": 8,
+            "maxBends": 0,
+            "routesOverSuggestedBends": 0,
+            "maxStretch": 1,
+            "routesOverSuggestedStretch": 0,
+            "minSegmentPx": 110,
+            "minInteriorSegmentPx": null,
+            "shortSegmentCount": 0,
+            "shortEndpointSegmentCount": 0,
+            "shortInteriorSegmentCount": 0,
+            "microSegmentCount": 0
+          },
+          "suggestedLimits": {
+            "bendsPerRelationship": 2,
+            "stretch": 1.35,
+            "segmentPx": 16,
+            "microSegmentPx": 8
+          },
+          "routeReview": {
+            "crossings": [],
+            "detours": []
+          },
+          "leadingSpace": {
+            "measured": true,
+            "emptyTopPx": 54,
+            "emptyTopRatio": 0.036,
+            "occupiedTop": 54,
+            "viewBoxTop": 0,
+            "canvasHeight": 1494,
+            "typicalNodeHeight": 76,
+            "reviewSuggested": false
+          },
+          "desktopReadability": {
+            "budgetBasis": "legacy-930",
+            "readerContract": "declared-wide-v1",
+            "availableDiagramWidth": 930,
+            "actualBudgetPx": 930,
+            "limit": "legacy",
+            "requestedTargetPx": 7.5,
+            "requestedTargetMet": true,
+            "hardFloorPx": 6,
+            "hardFloorMet": true,
+            "minimumOwner": {
+              "kind": "edge",
+              "id": "quotes-call",
+              "from": "quotes",
+              "to": "market-data"
+            },
+            "minimumSourceTextPx": 8,
+            "minimumProjectedTextPx": 8,
+            "semanticTextCount": 72
+          },
+          "issues": []
+        },
+        "provenance": "current",
+        "deliveryReceiptId": "51ce1dba-7b79-4bed-81b3-6ea83f64e66a"
+      }
+    },
+    "browser-check": {
+      "status": "pass",
+      "exitCode": 0,
+      "durationMs": 1157,
+      "command": [
+        "/Users/henry890112/.nvm/versions/node/v24.14.0/bin/node",
+        "/private/tmp/wealthtracker-archify/archify/bin/archify.mjs",
+        "browser-check",
+        "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/api-data-flow.html",
+        "--json",
+        "--require-provenance",
+        "--out-dir",
+        "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/api-final"
+      ],
+      "execution": "in-process",
+      "receipt": {
+        "schemaVersion": 1,
+        "ok": true,
+        "command": "browser-check",
+        "evidenceKind": "automated-browser",
+        "status": "pass",
+        "visualReview": "not-requested",
+        "provenance": "current",
+        "deliveryReceiptId": "51ce1dba-7b79-4bed-81b3-6ea83f64e66a",
+        "artifact": {
+          "path": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/api-data-flow.html",
+          "sha256": "c4040de1e8cefc96d95428b36af9af87ff3b5bca372ce67a3f6396f325c8abad",
+          "bytes": 883316
+        },
+        "state": {
+          "detail": "read",
+          "motion": "still"
+        },
+        "chrome": {
+          "status": "available",
+          "executable": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        },
+        "diagnostics": [],
+        "containment": {
+          "status": "pass",
+          "policy": "fit-or-reader-declared-readable-vertical-scroll",
+          "viewports": [
+            {
+              "width": 1440,
+              "height": 900,
+              "theme": "light",
+              "innerWidth": 1440,
+              "innerHeight": 900,
+              "scrollWidth": 1440,
+              "scrollHeight": 1389,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 755,
+              "pageComposition": {
+                "bodyPaddingPx": 12,
+                "headerPx": 52,
+                "diagramChromePx": 78,
+                "svgPx": 1246,
+                "cardsPx": 0,
+                "viewBoxHeight": 1494
+              },
+              "viewBoxWidth": 905,
+              "minimumProjectedNodeTextPx": 6.6740331491712706,
+              "minimumProjectedNonEdgeTextPx": 7.50828729281768,
+              "minimumProjectedEdgeTextPx": 6.6740331491712706,
+              "minimumProjectedNodeText": "invoke",
+              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "edge",
+                "id": "quotes-call",
+                "from": "quotes",
+                "to": "market-data"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 54,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            },
+            {
+              "width": 1600,
+              "height": 1000,
+              "theme": "light",
+              "innerWidth": 1600,
+              "innerHeight": 1000,
+              "scrollWidth": 1600,
+              "scrollHeight": 1455,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 755,
+              "pageComposition": {
+                "bodyPaddingPx": 64,
+                "headerPx": 60,
+                "diagramChromePx": 84,
+                "svgPx": 1246,
+                "cardsPx": 0,
+                "viewBoxHeight": 1494
+              },
+              "viewBoxWidth": 905,
+              "minimumProjectedNodeTextPx": 6.6740331491712706,
+              "minimumProjectedNonEdgeTextPx": 7.50828729281768,
+              "minimumProjectedEdgeTextPx": 6.6740331491712706,
+              "minimumProjectedNodeText": "invoke",
+              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "edge",
+                "id": "quotes-call",
+                "from": "quotes",
+                "to": "market-data"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 54,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            },
+            {
+              "width": 1920,
+              "height": 1080,
+              "theme": "light",
+              "innerWidth": 1920,
+              "innerHeight": 1080,
+              "scrollWidth": 1920,
+              "scrollHeight": 1455,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 755,
+              "pageComposition": {
+                "bodyPaddingPx": 64,
+                "headerPx": 60,
+                "diagramChromePx": 84,
+                "svgPx": 1246,
+                "cardsPx": 0,
+                "viewBoxHeight": 1494
+              },
+              "viewBoxWidth": 905,
+              "minimumProjectedNodeTextPx": 6.6740331491712706,
+              "minimumProjectedNonEdgeTextPx": 7.50828729281768,
+              "minimumProjectedEdgeTextPx": 6.6740331491712706,
+              "minimumProjectedNodeText": "invoke",
+              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "edge",
+                "id": "quotes-call",
+                "from": "quotes",
+                "to": "market-data"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 54,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            },
+            {
+              "width": 2048,
+              "height": 1320,
+              "theme": "light",
+              "innerWidth": 2048,
+              "innerHeight": 1320,
+              "scrollWidth": 2048,
+              "scrollHeight": 1473,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 755,
+              "pageComposition": {
+                "bodyPaddingPx": 64,
+                "headerPx": 68,
+                "diagramChromePx": 94,
+                "svgPx": 1246,
+                "cardsPx": 0,
+                "viewBoxHeight": 1494
+              },
+              "viewBoxWidth": 905,
+              "minimumProjectedNodeTextPx": 6.6740331491712706,
+              "minimumProjectedNonEdgeTextPx": 7.50828729281768,
+              "minimumProjectedEdgeTextPx": 6.6740331491712706,
+              "minimumProjectedNodeText": "invoke",
+              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "edge",
+                "id": "quotes-call",
+                "from": "quotes",
+                "to": "market-data"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 44,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            }
+          ]
+        },
+        "themeStates": {
+          "status": "pass",
+          "viewports": [
+            {
+              "width": 1440,
+              "height": 900,
+              "requestedTheme": "light",
+              "resolvedTheme": "light",
+              "ok": true
+            },
+            {
+              "width": 1600,
+              "height": 1000,
+              "requestedTheme": "light",
+              "resolvedTheme": "light",
+              "ok": true
+            },
+            {
+              "width": 1920,
+              "height": 1080,
+              "requestedTheme": "light",
+              "resolvedTheme": "light",
+              "ok": true
+            },
+            {
+              "width": 2048,
+              "height": 1320,
+              "requestedTheme": "light",
+              "resolvedTheme": "light",
+              "ok": true
+            },
+            {
+              "width": 1440,
+              "height": 900,
+              "requestedTheme": "dark",
+              "resolvedTheme": "dark",
+              "ok": true
+            },
+            {
+              "width": 2048,
+              "height": 1320,
+              "requestedTheme": "dark",
+              "resolvedTheme": "dark",
+              "ok": true
+            }
+          ]
+        },
+        "readability": {
+          "status": "pass",
+          "minimumProjectedNodeTextPx": 6,
+          "viewports": [
+            {
+              "width": 1440,
+              "height": 900,
+              "theme": "light",
+              "innerWidth": 1440,
+              "innerHeight": 900,
+              "scrollWidth": 1440,
+              "scrollHeight": 1389,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 755,
+              "pageComposition": {
+                "bodyPaddingPx": 12,
+                "headerPx": 52,
+                "diagramChromePx": 78,
+                "svgPx": 1246,
+                "cardsPx": 0,
+                "viewBoxHeight": 1494
+              },
+              "viewBoxWidth": 905,
+              "minimumProjectedNodeTextPx": 6.6740331491712706,
+              "minimumProjectedNonEdgeTextPx": 7.50828729281768,
+              "minimumProjectedEdgeTextPx": 6.6740331491712706,
+              "minimumProjectedNodeText": "invoke",
+              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "edge",
+                "id": "quotes-call",
+                "from": "quotes",
+                "to": "market-data"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 54,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            },
+            {
+              "width": 1600,
+              "height": 1000,
+              "theme": "light",
+              "innerWidth": 1600,
+              "innerHeight": 1000,
+              "scrollWidth": 1600,
+              "scrollHeight": 1455,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 755,
+              "pageComposition": {
+                "bodyPaddingPx": 64,
+                "headerPx": 60,
+                "diagramChromePx": 84,
+                "svgPx": 1246,
+                "cardsPx": 0,
+                "viewBoxHeight": 1494
+              },
+              "viewBoxWidth": 905,
+              "minimumProjectedNodeTextPx": 6.6740331491712706,
+              "minimumProjectedNonEdgeTextPx": 7.50828729281768,
+              "minimumProjectedEdgeTextPx": 6.6740331491712706,
+              "minimumProjectedNodeText": "invoke",
+              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "edge",
+                "id": "quotes-call",
+                "from": "quotes",
+                "to": "market-data"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 54,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            },
+            {
+              "width": 1920,
+              "height": 1080,
+              "theme": "light",
+              "innerWidth": 1920,
+              "innerHeight": 1080,
+              "scrollWidth": 1920,
+              "scrollHeight": 1455,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 755,
+              "pageComposition": {
+                "bodyPaddingPx": 64,
+                "headerPx": 60,
+                "diagramChromePx": 84,
+                "svgPx": 1246,
+                "cardsPx": 0,
+                "viewBoxHeight": 1494
+              },
+              "viewBoxWidth": 905,
+              "minimumProjectedNodeTextPx": 6.6740331491712706,
+              "minimumProjectedNonEdgeTextPx": 7.50828729281768,
+              "minimumProjectedEdgeTextPx": 6.6740331491712706,
+              "minimumProjectedNodeText": "invoke",
+              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "edge",
+                "id": "quotes-call",
+                "from": "quotes",
+                "to": "market-data"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 54,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            },
+            {
+              "width": 2048,
+              "height": 1320,
+              "theme": "light",
+              "innerWidth": 2048,
+              "innerHeight": 1320,
+              "scrollWidth": 2048,
+              "scrollHeight": 1473,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 755,
+              "pageComposition": {
+                "bodyPaddingPx": 64,
+                "headerPx": 68,
+                "diagramChromePx": 94,
+                "svgPx": 1246,
+                "cardsPx": 0,
+                "viewBoxHeight": 1494
+              },
+              "viewBoxWidth": 905,
+              "minimumProjectedNodeTextPx": 6.6740331491712706,
+              "minimumProjectedNonEdgeTextPx": 7.50828729281768,
+              "minimumProjectedEdgeTextPx": 6.6740331491712706,
+              "minimumProjectedNodeText": "invoke",
+              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "edge",
+                "id": "quotes-call",
+                "from": "quotes",
+                "to": "market-data"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 44,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            }
+          ]
+        },
+        "viewerChrome": {
+          "status": "pass",
+          "viewports": [
+            {
+              "width": 1440,
+              "height": 900,
+              "theme": "light",
+              "innerWidth": 1440,
+              "innerHeight": 900,
+              "scrollWidth": 1440,
+              "scrollHeight": 1389,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 755,
+              "pageComposition": {
+                "bodyPaddingPx": 12,
+                "headerPx": 52,
+                "diagramChromePx": 78,
+                "svgPx": 1246,
+                "cardsPx": 0,
+                "viewBoxHeight": 1494
+              },
+              "viewBoxWidth": 905,
+              "minimumProjectedNodeTextPx": 6.6740331491712706,
+              "minimumProjectedNonEdgeTextPx": 7.50828729281768,
+              "minimumProjectedEdgeTextPx": 6.6740331491712706,
+              "minimumProjectedNodeText": "invoke",
+              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "edge",
+                "id": "quotes-call",
+                "from": "quotes",
+                "to": "market-data"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 54,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            },
+            {
+              "width": 1600,
+              "height": 1000,
+              "theme": "light",
+              "innerWidth": 1600,
+              "innerHeight": 1000,
+              "scrollWidth": 1600,
+              "scrollHeight": 1455,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 755,
+              "pageComposition": {
+                "bodyPaddingPx": 64,
+                "headerPx": 60,
+                "diagramChromePx": 84,
+                "svgPx": 1246,
+                "cardsPx": 0,
+                "viewBoxHeight": 1494
+              },
+              "viewBoxWidth": 905,
+              "minimumProjectedNodeTextPx": 6.6740331491712706,
+              "minimumProjectedNonEdgeTextPx": 7.50828729281768,
+              "minimumProjectedEdgeTextPx": 6.6740331491712706,
+              "minimumProjectedNodeText": "invoke",
+              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "edge",
+                "id": "quotes-call",
+                "from": "quotes",
+                "to": "market-data"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 54,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            },
+            {
+              "width": 1920,
+              "height": 1080,
+              "theme": "light",
+              "innerWidth": 1920,
+              "innerHeight": 1080,
+              "scrollWidth": 1920,
+              "scrollHeight": 1455,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 755,
+              "pageComposition": {
+                "bodyPaddingPx": 64,
+                "headerPx": 60,
+                "diagramChromePx": 84,
+                "svgPx": 1246,
+                "cardsPx": 0,
+                "viewBoxHeight": 1494
+              },
+              "viewBoxWidth": 905,
+              "minimumProjectedNodeTextPx": 6.6740331491712706,
+              "minimumProjectedNonEdgeTextPx": 7.50828729281768,
+              "minimumProjectedEdgeTextPx": 6.6740331491712706,
+              "minimumProjectedNodeText": "invoke",
+              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "edge",
+                "id": "quotes-call",
+                "from": "quotes",
+                "to": "market-data"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 54,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            },
+            {
+              "width": 2048,
+              "height": 1320,
+              "theme": "light",
+              "innerWidth": 2048,
+              "innerHeight": 1320,
+              "scrollWidth": 2048,
+              "scrollHeight": 1473,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 755,
+              "pageComposition": {
+                "bodyPaddingPx": 64,
+                "headerPx": 68,
+                "diagramChromePx": 94,
+                "svgPx": 1246,
+                "cardsPx": 0,
+                "viewBoxHeight": 1494
+              },
+              "viewBoxWidth": 905,
+              "minimumProjectedNodeTextPx": 6.6740331491712706,
+              "minimumProjectedNonEdgeTextPx": 7.50828729281768,
+              "minimumProjectedEdgeTextPx": 6.6740331491712706,
+              "minimumProjectedNodeText": "invoke",
+              "minimumProjectedNodeTextDetail": "edge",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "edge",
+                "id": "quotes-call",
+                "from": "quotes",
+                "to": "market-data"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 44,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            }
+          ]
+        },
+        "captures": {
+          "status": "not-requested",
+          "screenshots": [],
+          "contactSheet": null
+        },
+        "sidecars": {
+          "directory": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/api-final",
+          "receipt": "api-data-flow.browser-check.json",
+          "files": []
+        }
+      }
+    }
+  },
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  },
+  "diagnostics": [],
+  "evidence": {
+    "receipt": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/api-final/api-data-flow.finalize.json",
+    "summaryReceipt": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/api-final/api-data-flow.finalize-summary.json",
+    "browserCheckReceipt": "/Users/henry890112/WealthTracker/.archify/architecture-wealthtracker-20261029-230220/api-final/api-data-flow.browser-check.json"
+  },
+  "visualReview": "not-requested",
+  "finishedAt": "2026-10-29T15:09:55.990Z",
+  "durationMs": 1535,
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-29T15:09:44.719Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  }
+}

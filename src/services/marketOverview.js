@@ -25,7 +25,21 @@ const TW_MARGIN_HISTORY_RECENT_CACHE_TTL_MS = 15 * 60 * 1000;
 const TW_MARGIN_HISTORY_HISTORICAL_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const twMarginHistoryMemoryCache = new Map();
 let twMarginHistoryCacheWriteQueue = Promise.resolve();
+const TW_FOREIGN_HISTORY_CACHE_KEY = '@wt_tw_foreign_history_pages_v1';
+const TW_FOREIGN_HISTORY_CACHE_MAX_PAGES = 16;
+const twForeignHistoryMemoryCache = new Map();
+let twForeignHistoryCacheWriteQueue = Promise.resolve();
 export const isTaiwanMarginHistoryCacheFresh = entry => {
+  if (!entry?.cachedAt) return false;
+  const asOfTime = Date.parse(`${entry?.data?.asOf || ''}T00:00:00Z`);
+  const ageOfData = Number.isFinite(asOfTime) ? Date.now() - asOfTime : 0;
+  const ttl = ageOfData > 3 * 24 * 60 * 60 * 1000
+    ? TW_MARGIN_HISTORY_HISTORICAL_CACHE_TTL_MS
+    : TW_MARGIN_HISTORY_RECENT_CACHE_TTL_MS;
+  return Date.now() - entry.cachedAt < ttl;
+};
+
+export const isTaiwanForeignHistoryCacheFresh = entry => {
   if (!entry?.cachedAt) return false;
   const asOfTime = Date.parse(`${entry?.data?.asOf || ''}T00:00:00Z`);
   const ageOfData = Number.isFinite(asOfTime) ? Date.now() - asOfTime : 0;
@@ -675,6 +689,55 @@ export const clearCachedTaiwanMarginHistory = async () => {
     await AsyncStorage.removeItem(TW_MARGIN_HISTORY_CACHE_KEY);
   }).catch(() => {});
   await twMarginHistoryCacheWriteQueue;
+};
+
+export const readCachedTaiwanForeignHistoryPages = async endDates => {
+  const dates = [...new Set(endDates)];
+  const result = new Map(dates.flatMap(endDate => {
+    const cached = twForeignHistoryMemoryCache.get(endDate);
+    return cached ? [[endDate, cached]] : [];
+  }));
+  if (dates.every(endDate => result.has(endDate))) return result;
+  try {
+    const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+    const raw = await AsyncStorage.getItem(TW_FOREIGN_HISTORY_CACHE_KEY);
+    const cache = raw ? JSON.parse(raw) : {};
+    for (const endDate of dates) {
+      if (result.has(endDate)) continue;
+      const entry = cache?.[endDate];
+      if (entry?.data?.windowDays !== 31 || !Array.isArray(entry?.data?.history)) continue;
+      const cached = { data: entry.data, cachedAt: Number(entry.cachedAt) || 0 };
+      result.set(endDate, cached);
+      twForeignHistoryMemoryCache.set(endDate, cached);
+    }
+  } catch { /* A missing or invalid device cache must not block live data. */ }
+  return result;
+};
+
+export const cacheTaiwanForeignHistoryPage = async (endDate, data) => {
+  if (!endDate || data?.windowDays !== 31 || !Array.isArray(data?.history)) return;
+  const entry = { data, cachedAt: Date.now() };
+  twForeignHistoryMemoryCache.set(endDate, entry);
+  twForeignHistoryCacheWriteQueue = twForeignHistoryCacheWriteQueue.then(async () => {
+    const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+    const raw = await AsyncStorage.getItem(TW_FOREIGN_HISTORY_CACHE_KEY);
+    const cache = raw ? JSON.parse(raw) : {};
+    cache[endDate] = entry;
+    const retained = Object.entries(cache)
+      .sort((left, right) => Number(right[1]?.cachedAt || 0) - Number(left[1]?.cachedAt || 0))
+      .slice(0, TW_FOREIGN_HISTORY_CACHE_MAX_PAGES);
+    await AsyncStorage.setItem(TW_FOREIGN_HISTORY_CACHE_KEY, JSON.stringify(Object.fromEntries(retained)));
+  }).catch(() => {});
+  await twForeignHistoryCacheWriteQueue;
+};
+
+export const clearCachedTaiwanForeignHistory = async () => {
+  twForeignHistoryMemoryCache.clear();
+  twForeignHistoryCacheWriteQueue = twForeignHistoryCacheWriteQueue.then(async () => {
+    const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+    await AsyncStorage.removeItem(TW_FOREIGN_HISTORY_CACHE_KEY);
+  }).catch(() => {});
+  await twForeignHistoryCacheWriteQueue;
 };
 
 export const fetchTaiwanMarginHistory = async endDate => {
